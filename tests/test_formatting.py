@@ -9,12 +9,10 @@ from sase.notifications.models import Notification
 from sase_chop_telegram.formatting import (
     NOTES_TRUNCATION_THRESHOLD,
     PLAN_CONTENT_MAX,
-    SPOILER_RESPONSE_MAX,
     _convert_inline,
     _escape_code_entity,
     escape_markdown_v2,
     format_notification,
-    format_response_spoiler,
     markdown_to_telegram_v2,
 )
 
@@ -379,40 +377,6 @@ class TestFormatGeneric:
         assert "Something happened" in text
         assert keyboard is None
         assert attachments == []
-
-
-class TestFormatResponseSpoiler:
-    def test_short_response_wrapped_in_spoiler(self):
-        result = format_response_spoiler("Hello world")
-        assert result.startswith("||")
-        assert result.endswith("||")
-        assert "Hello world" in result
-
-    def test_special_chars_escaped(self):
-        result = format_response_spoiler("Use _underscore_ and *star*")
-        # Should be inside spoiler delimiters
-        assert result.startswith("||")
-        assert result.endswith("||")
-        # Special chars should be escaped
-        inner = result[2:-2]
-        assert "\\_" in inner
-        assert "\\*" in inner
-
-    def test_long_response_truncated(self):
-        # Build a response with newlines that exceeds SPOILER_RESPONSE_MAX
-        lines = [f"Line {i}: some content here" for i in range(200)]
-        long_text = "\n".join(lines)
-        result = format_response_spoiler(long_text)
-        assert result.startswith("||")
-        assert result.endswith("||")
-        inner = result[2:-2]
-        assert "see PDF for full response" in inner
-        # The inner content (minus spoiler delimiters) should be bounded
-        assert len(inner) < SPOILER_RESPONSE_MAX + 200  # some room for suffix
-
-    def test_empty_response(self):
-        result = format_response_spoiler("")
-        assert result == "||||"
 
 
 class TestNoteTruncation:

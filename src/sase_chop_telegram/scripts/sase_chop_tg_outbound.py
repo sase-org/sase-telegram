@@ -14,7 +14,7 @@ from sase.chat_history import extract_response_from_chat_file
 from sase.sase_utils import get_sase_directory
 from sase_chop_telegram import pending_actions, rate_limit
 from sase_chop_telegram.credentials import get_chat_id
-from sase_chop_telegram.formatting import format_notification, format_response_spoiler
+from sase_chop_telegram.formatting import format_notification
 from sase_chop_telegram.outbound import get_unsent_notifications, mark_sent
 from sase_chop_telegram.pdf_convert import md_to_pdf
 from sase_chop_telegram.telegram_client import send_document, send_message
@@ -113,11 +113,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Keyboard: {keyboard.inline_keyboard}")
             if attachments:
                 print(f"Attachments: {attachments}")
-                for fp in attachments:
-                    if _is_chat_file(fp):
-                        _, resp = _make_response_only_file(fp)
-                        if resp:
-                            print(f"Spoiler: {format_response_spoiler(resp)}")
             print()
             # Advance high-water mark after each notification to prevent
             # re-sending if a later notification fails.
@@ -142,22 +137,12 @@ def main(argv: list[str] | None = None) -> int:
                 # attaching the entire chat history.
                 actual_path = file_path
                 if _is_chat_file(file_path):
-                    response_file, response_text = _make_response_only_file(
+                    response_file, _ = _make_response_only_file(
                         file_path
                     )
                     if response_file:
                         response_temps.append(response_file)
                         actual_path = str(response_file)
-
-                    # Send the response as a spoiler message before the PDF
-                    if response_text:
-                        spoiler_text = format_response_spoiler(response_text)
-                        send_message(
-                            chat_id,
-                            spoiler_text,
-                            parse_mode="MarkdownV2",
-                        )
-                        rate_limit.record_send()
 
                 pdf_path = md_to_pdf(actual_path)
                 if pdf_path:

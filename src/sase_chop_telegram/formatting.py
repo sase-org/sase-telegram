@@ -18,10 +18,6 @@ MAX_MESSAGE_LENGTH = 4096
 # Max chars of converted plan content before truncation
 PLAN_CONTENT_MAX = 3500
 
-# Max chars of response text inside a spoiler (leaves room for delimiters
-# and truncation text within the 4096 message limit)
-SPOILER_RESPONSE_MAX = 3800
-
 # Truncation threshold for notes content in non-plan messages
 NOTES_TRUNCATION_THRESHOLD = 3500
 
@@ -199,23 +195,6 @@ def markdown_to_telegram_v2(md: str) -> str:
         i += 1
 
     return "\n".join(result)
-
-
-def format_response_spoiler(response_text: str) -> str:
-    """Format agent response text as a MarkdownV2 spoiler message.
-
-    The response is escaped as plain text, truncated if needed, and wrapped
-    in ``||..||`` spoiler syntax for Telegram.
-    """
-    escaped = escape_markdown_v2(response_text)
-    if len(escaped) > SPOILER_RESPONSE_MAX:
-        # Truncate at a newline boundary
-        trunc_pos = escaped.rfind("\n", 0, SPOILER_RESPONSE_MAX)
-        if trunc_pos == -1:
-            trunc_pos = SPOILER_RESPONSE_MAX
-        suffix = escape_markdown_v2("... (see PDF for full response)")
-        escaped = escaped[:trunc_pos] + "\n\n" + suffix
-    return f"||{escaped}||"
 
 
 def _truncate_notes(notes: list[str], threshold: int = NOTES_TRUNCATION_THRESHOLD) -> str:
