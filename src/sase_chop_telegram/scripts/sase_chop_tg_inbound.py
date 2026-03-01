@@ -182,13 +182,13 @@ def _handle_document_image(message: Any) -> None:
     _launch_agent(prompt)
 
 
-def _handle_slash_command(text: str) -> None:
-    """Dispatch a Telegram slash command to the appropriate handler."""
+def _handle_dot_command(text: str) -> None:
+    """Dispatch a Telegram dot command (e.g. '.kill agent') to the appropriate handler."""
     parts = text.split(None, 1)
     command = parts[0].lower()
     args = parts[1] if len(parts) > 1 else ""
 
-    if command == "/kill":
+    if command == ".kill":
         _handle_kill_command(args)
     # Unknown commands are silently ignored (preserves original behavior)
 
@@ -200,7 +200,7 @@ def _handle_kill_command(args: str) -> None:
     chat_id = credentials.get_chat_id()
     name = args.strip()
     if not name:
-        telegram_client.send_message(chat_id, "Usage: /kill <agent_name>")
+        telegram_client.send_message(chat_id, "Usage: .kill <agent_name>")
         return
 
     result = kill_named_agent(name)
@@ -216,9 +216,9 @@ def _handle_text_message(text: str) -> None:
         pending_actions.remove(response.notif_id_prefix)
         return
 
-    # Dispatch Telegram slash commands
-    if text.startswith("/"):
-        _handle_slash_command(text)
+    # Dispatch Telegram dot commands (e.g. ".kill agent")
+    if text.startswith("."):
+        _handle_dot_command(text)
         return
 
     # Launch a new agent with this text as the prompt
