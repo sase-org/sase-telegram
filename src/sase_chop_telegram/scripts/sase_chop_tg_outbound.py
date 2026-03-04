@@ -99,6 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     chat_id = get_chat_id() if not args.dry_run else "DRY_RUN"
 
     for n in notifications:
+        # Re-check idle state before each notification — stop sending
+        # if the user became active while we were processing the batch.
+        if not args.dry_run and not is_idle():
+            break
+
         # Check rate limit before sending
         if not args.dry_run and not rate_limit.check_rate_limit():
             wait = rate_limit.wait_time()
