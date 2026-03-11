@@ -7,11 +7,12 @@ import logging
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from sase.ace.tui_activity import is_idle
 from sase.chat_history import extract_response_from_chat_file
-from sase.sase_utils import get_sase_directory
+from sase.sase_utils import EASTERN_TZ, get_sase_directory
 from sase_chop_telegram import pending_actions, rate_limit
 from sase_chop_telegram.credentials import get_chat_id
 from sase_chop_telegram.formatting import format_notification
@@ -20,6 +21,8 @@ from sase_chop_telegram.pdf_convert import md_to_pdf
 from sase_chop_telegram.telegram_client import send_document, send_message
 
 log = logging.getLogger(__name__)
+
+_DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
 # Actions that should be tracked as pending (user needs to respond)
 _ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "UserQuestion"}
@@ -82,6 +85,49 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _log_send_diagnostics(notifications: list) -> None:
+    """Write diagnostic info to a debug log when notifications are about to be sent."""
+    from sase.ace.tui_activity import (
+        ACTIVITY_FILE,
+        IDLE_STATE_FILE,
+        LAST_KEYPRESS_FILE,
+        PID_FILE,
+    )
+
+    try:
+        now = time.time()
+        now_str = datetime.fromtimestamp(now, tz=EASTERN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        lines = [f"\n=== SEND @ {now_str} ({now:.3f}) ==="]
+
+        # Read raw state files
+        for label, path in [
+            ("idle_state", IDLE_STATE_FILE),
+            ("pid", PID_FILE),
+            ("last_activity", ACTIVITY_FILE),
+            ("last_keypress", LAST_KEYPRESS_FILE),
+        ]:
+            try:
+                val = path.read_text().strip()
+                if label in ("last_activity", "last_keypress"):
+                    age = now - float(val)
+                    lines.append(f"  {label}: {val} (age={age:.1f}s)")
+                else:
+                    lines.append(f"  {label}: {val}")
+            except (FileNotFoundError, ValueError) as e:
+                lines.append(f"  {label}: <{type(e).__name__}>")
+
+        # Notification details
+        lines.append(f"  notifications_count: {len(notifications)}")
+        for n in notifications[:5]:  # cap at 5 for brevity
+            lines.append(f"    {n.id[:8]} sender={n.sender} ts={n.timestamp} action={n.action}")
+
+        _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG, "a") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass  # never let diagnostics crash the outbound
+
+
 def main(argv: list[str] | None = None) -> int:
     """Outbound Telegram chop entry point."""
     args = _parse_args(argv)
@@ -95,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
     notifications = get_unsent_notifications()
     if not notifications:
         return 0
+
+    _log_send_diagnostics(notifications)
 
     chat_id = get_chat_id() if not args.dry_run else "DRY_RUN"
 
