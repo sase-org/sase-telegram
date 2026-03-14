@@ -23,8 +23,8 @@ dev = [
 ]
 
 [project.scripts]
-sase_tg_outbound = "sase_telegram.scripts:outbound_main"
-sase_tg_inbound = "sase_telegram.scripts:inbound_main"
+sase_chop_tg_outbound = "sase_telegram.scripts:outbound_main"
+sase_chop_tg_inbound = "sase_telegram.scripts:inbound_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sase_telegram"]
