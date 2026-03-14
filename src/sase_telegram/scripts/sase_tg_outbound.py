@@ -92,7 +92,7 @@ def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None
 
     with open(response_file, "a", encoding="utf-8") as f:
         f.write("\n\n---\n\n")
-        f.write("## ✏️ Diff\n\n")
+        f.write("## Changes\n\n")
         for section in diff_sections:
             f.write("```diff\n")
             f.write(section)

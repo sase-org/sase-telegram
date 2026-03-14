@@ -204,7 +204,7 @@ class TestAppendDiffToMarkdown:
         _append_diff_to_markdown(Path(resp.name), [diff.name])
 
         result = Path(resp.name).read_text()
-        assert "## ✏️ Diff" in result
+        assert "## Changes" in result
         assert "```diff" in result
         assert "-old" in result
         assert "+new" in result
