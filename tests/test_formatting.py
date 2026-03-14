@@ -333,6 +333,31 @@ class TestFormatWorkflowComplete:
         assert "\\[c\\]" in text
         assert keyboard is None
 
+    def test_diff_icon_when_diff_present(self):
+        with tempfile.NamedTemporaryFile(suffix=".diff", delete=False) as f:
+            f.write(b"diff --git a/foo.py b/foo.py\n")
+            diff_file = f.name
+
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            files=[diff_file],
+        )
+        text, _, _ = format_notification(n)
+        assert "✅✏️" in text
+        assert "Workflow Complete" in text
+
+        Path(diff_file).unlink()
+
+    def test_no_diff_icon_without_diff(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+        )
+        text, _, _ = format_notification(n)
+        assert text.startswith("✅ ")
+        assert "✏️" not in text
+
 
 class TestFormatErrorDigest:
     def test_with_digest_file(self):

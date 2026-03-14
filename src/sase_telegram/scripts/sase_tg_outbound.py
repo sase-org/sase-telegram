@@ -67,6 +67,40 @@ def _make_response_only_file(chat_path: str) -> tuple[Path | None, str | None]:
     return Path(tmp.name), response
 
 
+def _is_diff_file(file_path: str) -> bool:
+    """Check if a file path points to a diff file."""
+    return Path(file_path).suffix.lower() == ".diff"
+
+
+def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None:
+    """Append formatted diff content to a response markdown file.
+
+    Reads each diff file and appends it as a syntax-highlighted code block
+    so that the resulting PDF includes a readable diff section.
+    """
+    diff_sections: list[str] = []
+    for dp in diff_paths:
+        try:
+            content = Path(dp).read_text(encoding="utf-8", errors="replace")
+            if content.strip():
+                diff_sections.append(content)
+        except OSError:
+            continue
+
+    if not diff_sections:
+        return
+
+    with open(response_file, "a", encoding="utf-8") as f:
+        f.write("\n\n---\n\n")
+        f.write("## ✏️ Diff\n\n")
+        for section in diff_sections:
+            f.write("```diff\n")
+            f.write(section)
+            if not section.endswith("\n"):
+                f.write("\n")
+            f.write("```\n")
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="sase_tg_outbound",
@@ -184,7 +218,13 @@ def main(argv: list[str] | None = None) -> int:
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []
-        for file_path in attachments:
+
+        # Separate diff files — they'll be embedded into the response PDF
+        diff_paths = [f for f in attachments if _is_diff_file(f)]
+        non_diff_paths = [f for f in attachments if not _is_diff_file(f)]
+        diff_embedded = False
+
+        for file_path in non_diff_paths:
             try:
                 # For chat files, extract just the response instead of
                 # attaching the entire chat history.
@@ -196,6 +236,13 @@ def main(argv: list[str] | None = None) -> int:
                     if response_file:
                         response_temps.append(response_file)
                         actual_path = str(response_file)
+
+                        # Embed diff content into the response markdown
+                        if diff_paths:
+                            _append_diff_to_markdown(
+                                response_file, diff_paths
+                            )
+                            diff_embedded = True
 
                 pdf_path = md_to_pdf(actual_path)
                 if pdf_path:
@@ -211,6 +258,20 @@ def main(argv: list[str] | None = None) -> int:
                     n.id[:8],
                     exc_info=True,
                 )
+
+        # Fallback: send diff files separately if not embedded
+        if not diff_embedded:
+            for dp in diff_paths:
+                try:
+                    send_document(chat_id, dp)
+                    rate_limit.record_send()
+                except Exception:
+                    log.warning(
+                        "Failed to send diff %s for notification %s",
+                        dp,
+                        n.id[:8],
+                        exc_info=True,
+                    )
 
         for p in pdf_temps + response_temps:
             p.unlink(missing_ok=True)

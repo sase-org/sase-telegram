@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,10 @@ from sase.notifications.models import Notification
 from sase_telegram.outbound import (
     get_unsent_notifications,
     mark_sent,
+)
+from sase_telegram.scripts.sase_tg_outbound import (
+    _append_diff_to_markdown,
+    _is_diff_file,
 )
 
 LAST_SENT_TEST_FILE = Path("/tmp/test_last_sent_ts")
@@ -170,3 +175,71 @@ class TestMarkSent:
         """mark_sent with empty list doesn't create the file."""
         mark_sent([])
         assert not LAST_SENT_TEST_FILE.exists()
+
+
+class TestIsDiffFile:
+    def test_diff_extension(self):
+        assert _is_diff_file("/path/to/changes.diff")
+
+    def test_non_diff_extension(self):
+        assert not _is_diff_file("/path/to/file.md")
+        assert not _is_diff_file("/path/to/file.pdf")
+
+    def test_case_insensitive(self):
+        assert _is_diff_file("/path/to/file.DIFF")
+
+
+class TestAppendDiffToMarkdown:
+    def test_appends_diff_content(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False
+        ) as resp:
+            resp.write("# Response\n\nSome content.")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".diff", delete=False
+        ) as diff:
+            diff.write("diff --git a/foo.py b/foo.py\n-old\n+new\n")
+
+        _append_diff_to_markdown(Path(resp.name), [diff.name])
+
+        result = Path(resp.name).read_text()
+        assert "## ✏️ Diff" in result
+        assert "```diff" in result
+        assert "-old" in result
+        assert "+new" in result
+
+        Path(resp.name).unlink()
+        Path(diff.name).unlink()
+
+    def test_skips_empty_diff(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False
+        ) as resp:
+            resp.write("Response content.")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".diff", delete=False
+        ) as diff:
+            diff.write("")
+
+        _append_diff_to_markdown(Path(resp.name), [diff.name])
+
+        result = Path(resp.name).read_text()
+        assert "Diff" not in result
+
+        Path(resp.name).unlink()
+        Path(diff.name).unlink()
+
+    def test_skips_nonexistent_diff(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False
+        ) as resp:
+            resp.write("Response content.")
+
+        _append_diff_to_markdown(Path(resp.name), ["/nonexistent/file.diff"])
+
+        result = Path(resp.name).read_text()
+        assert result == "Response content."
+
+        Path(resp.name).unlink()

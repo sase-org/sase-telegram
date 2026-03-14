@@ -373,11 +373,13 @@ def _format_workflow_complete(
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     notes_text = escape_markdown_v2(_truncate_notes(n.notes))
     agent_name = n.action_data.get("agent_name")
+    has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
+    icon = "✅✏️" if has_diff else "✅"
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
-        text = f"✅ *Workflow Complete* \\[{escaped_name}\\]\n\n{notes_text}"
+        text = f"{icon} *Workflow Complete* \\[{escaped_name}\\]\n\n{notes_text}"
     else:
-        text = f"✅ *Workflow Complete*\n\n{notes_text}"
+        text = f"{icon} *Workflow Complete*\n\n{notes_text}"
 
     prompt = n.action_data.get("prompt")
     if prompt:
