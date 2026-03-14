@@ -10,7 +10,8 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 
 def reconstruct_code_markers(text: str, entities: Sequence[Any] | None) -> str:

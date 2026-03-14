@@ -18,7 +18,7 @@ from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import format_notification
 from sase_telegram.outbound import get_unsent_notifications, mark_sent
 from sase_telegram.pdf_convert import md_to_pdf
-from sase_telegram.telegram_client import send_document, send_message
+from sase_telegram.telegram_client import send_document, send_message, send_photo
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +70,11 @@ def _make_response_only_file(chat_path: str) -> tuple[Path | None, str | None]:
 def _is_diff_file(file_path: str) -> bool:
     """Check if a file path points to a diff file."""
     return Path(file_path).suffix.lower() == ".diff"
+
+
+def _is_image_file(file_path: str) -> bool:
+    """Check if a file path points to a common image format."""
+    return Path(file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None:
@@ -243,6 +248,11 @@ def main(argv: list[str] | None = None) -> int:
                                 response_file, diff_paths
                             )
                             diff_embedded = True
+
+                if _is_image_file(actual_path):
+                    send_photo(chat_id, actual_path)
+                    rate_limit.record_send()
+                    continue
 
                 pdf_path = md_to_pdf(actual_path)
                 if pdf_path:

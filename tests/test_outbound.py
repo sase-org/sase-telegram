@@ -17,6 +17,7 @@ from sase_telegram.outbound import (
 from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
     _is_diff_file,
+    _is_image_file,
 )
 
 LAST_SENT_TEST_FILE = Path("/tmp/test_last_sent_ts")
@@ -187,6 +188,19 @@ class TestIsDiffFile:
 
     def test_case_insensitive(self):
         assert _is_diff_file("/path/to/file.DIFF")
+
+
+class TestIsImageFile:
+    def test_known_extensions(self):
+        assert _is_image_file("/path/to/file.jpg")
+        assert _is_image_file("/path/to/file.jpeg")
+        assert _is_image_file("/path/to/file.png")
+        assert _is_image_file("/path/to/file.webp")
+        assert _is_image_file("/path/to/file.gif")
+
+    def test_non_image_extension(self):
+        assert not _is_image_file("/path/to/file.md")
+        assert not _is_image_file("/path/to/file.diff")
 
 
 class TestAppendDiffToMarkdown:

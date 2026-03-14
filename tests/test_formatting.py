@@ -405,6 +405,28 @@ class TestFormatErrorDigest:
         assert attachments == []
 
 
+class TestFormatImage:
+    def test_with_existing_image_file(self):
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".png", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\n")
+            image_file = f.name
+
+        n = _make_notification(
+            sender="image",
+            notes=["Generated image with gemini-3-pro-image-preview"],
+            files=[image_file],
+            action_data={"model": "gemini-3-pro-image-preview"},
+        )
+        text, keyboard, attachments = format_notification(n)
+
+        assert "Image Generated" in text
+        assert "gemini\\-3\\-pro\\-image\\-preview" in text
+        assert keyboard is None
+        assert image_file in attachments
+
+        Path(image_file).unlink()
+
+
 class TestFormatGeneric:
     def test_fallback_format(self):
         n = _make_notification(

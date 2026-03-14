@@ -221,6 +221,8 @@ def format_notification(
             return _format_user_question(notification)
         case _:
             # Dispatch by sender for non-action notifications
+            if notification.sender == "image":
+                return _format_image_generated(notification)
             if notification.sender == "axe" and notification.files:
                 return _format_error_digest(notification)
             if notification.sender in (
@@ -405,6 +407,16 @@ def _format_error_digest(
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     notes_text = escape_markdown_v2(_truncate_notes(n.notes))
     text = f"⚠️ *Error Digest*\n\n{notes_text}"
+    attachments = [f for f in n.files if Path(f).exists()]
+    return text, None, attachments
+
+
+def _format_image_generated(
+    n: Notification,
+) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
+    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    model = escape_markdown_v2(n.action_data.get("model", "gemini"))
+    text = f"🖼️ *Image Generated* \\[{model}\\]\n\n{notes_text}"
     attachments = [f for f in n.files if Path(f).exists()]
     return text, None, attachments
 

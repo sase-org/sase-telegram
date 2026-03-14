@@ -6,8 +6,9 @@ import asyncio
 import functools
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from telegram import Bot, InlineKeyboardMarkup, Message, Update
 from telegram.error import NetworkError, RetryAfter, TimedOut
@@ -40,9 +41,13 @@ def _with_retry(fn: Callable[..., Any]) -> Callable[..., Any]:
             except RetryAfter as e:
                 if attempt == _MAX_RETRIES:
                     raise
-                wait = e.retry_after + 1
+                retry_after = e.retry_after
+                if hasattr(retry_after, "total_seconds"):
+                    wait = retry_after.total_seconds() + 1
+                else:
+                    wait = float(retry_after) + 1
                 log.warning(
-                    "Rate limited by Telegram, retrying in %ds (attempt %d/%d)",
+                    "Rate limited by Telegram, retrying in %.1fs (attempt %d/%d)",
                     wait,
                     attempt + 1,
                     _MAX_RETRIES,
@@ -114,6 +119,17 @@ def send_document(
     return _run_async(
         bot.send_document(chat_id=chat_id, document=document, caption=caption)
     )
+
+
+@_with_retry
+def send_photo(
+    chat_id: str,
+    photo: str | bytes,
+    caption: str | None = None,
+) -> Message:
+    """Send a photo to a Telegram chat (renders inline in chat)."""
+    bot = _get_bot()
+    return _run_async(bot.send_photo(chat_id=chat_id, photo=photo, caption=caption))
 
 
 @_with_retry
