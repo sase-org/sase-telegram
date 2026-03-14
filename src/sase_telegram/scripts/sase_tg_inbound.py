@@ -110,24 +110,14 @@ def _handle_callback(
 def _launch_agent(prompt: str) -> None:
     """Launch a background sase agent from a Telegram prompt."""
     from sase.agent_launcher import launch_agent_from_cwd
-    from sase.agent_names import get_next_auto_name
-    from sase.xprompt.directives import extract_prompt_directives
-
-    # Auto-assign a name if the user didn't provide one
-    _, directives = extract_prompt_directives(prompt)
-    auto_name: str | None = None
-    if directives.name is None:
-        auto_name = get_next_auto_name()
-        prompt = f"%n:{auto_name} {prompt}"
 
     chat_id = credentials.get_chat_id()
     try:
         result = launch_agent_from_cwd(prompt)
         display = prompt[:200] + ("..." if len(prompt) > 200 else "")
-        name_label = f" [{auto_name}]" if auto_name else ""
         telegram_client.send_message(
             chat_id,
-            f"Agent launched{name_label} (PID {result.pid}, workspace #{result.workspace_num})\n\n{display}",
+            f"Agent launched (PID {result.pid}, workspace #{result.workspace_num})\n\n{display}",
         )
     except Exception as e:
         telegram_client.send_message(
