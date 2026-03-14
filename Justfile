@@ -1,4 +1,4 @@
-# sase-chop-telegram task runner
+# sase-telegram task runner
 
 venv_dir := ".venv"
 venv_bin := venv_dir / "bin"

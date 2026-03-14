@@ -32,8 +32,8 @@ Installing sase-telegram adds the following commands:
 
 | Command                  | Description                                                  |
 | ------------------------ | ------------------------------------------------------------ |
-| `sase_chop_tg_outbound`  | Send pending notifications to Telegram (supports `--dry-run`) |
-| `sase_chop_tg_inbound`   | Poll Telegram for user responses and process them            |
+| `sase_tg_outbound`  | Send pending notifications to Telegram (supports `--dry-run`) |
+| `sase_tg_inbound`   | Poll Telegram for user responses and process them            |
 
 ### Supported Notification Types
 
@@ -102,7 +102,7 @@ just check      # All checks (lint + test)
 ## Project Structure
 
 ```
-src/sase_chop_telegram/
+src/sase_telegram/
 ├── __init__.py           # Package exports
 ├── callback_data.py      # Encode/decode inline keyboard callback data
 ├── credentials.py        # Bot token, chat ID, username retrieval
@@ -114,8 +114,8 @@ src/sase_chop_telegram/
 ├── telegram_client.py    # Sync wrapper around async python-telegram-bot
 └── scripts/
     ├── __init__.py                  # Script dispatch
-    ├── sase_chop_tg_outbound.py     # Outbound entry point
-    └── sase_chop_tg_inbound.py      # Inbound entry point
+    ├── sase_tg_outbound.py     # Outbound entry point
+    └── sase_tg_inbound.py      # Inbound entry point
 ```
 
 ## License

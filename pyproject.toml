@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sase-chop-telegram"
+name = "sase-telegram"
 version = "0.1.0"
 description = "Telegram integration chop for sase"
 requires-python = ">=3.12"
@@ -23,11 +23,11 @@ dev = [
 ]
 
 [project.scripts]
-sase_chop_tg_outbound = "sase_chop_telegram.scripts:outbound_main"
-sase_chop_tg_inbound = "sase_chop_telegram.scripts:inbound_main"
+sase_tg_outbound = "sase_telegram.scripts:outbound_main"
+sase_tg_inbound = "sase_telegram.scripts:inbound_main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sase_chop_telegram"]
+packages = ["src/sase_telegram"]
 
 [tool.ruff]
 target-version = "py312"

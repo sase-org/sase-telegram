@@ -13,12 +13,12 @@ from pathlib import Path
 from sase.ace.tui_activity import is_idle
 from sase.chat_history import extract_response_from_chat_file
 from sase.sase_utils import EASTERN_TZ, get_sase_directory
-from sase_chop_telegram import pending_actions, rate_limit
-from sase_chop_telegram.credentials import get_chat_id
-from sase_chop_telegram.formatting import format_notification
-from sase_chop_telegram.outbound import get_unsent_notifications, mark_sent
-from sase_chop_telegram.pdf_convert import md_to_pdf
-from sase_chop_telegram.telegram_client import send_document, send_message
+from sase_telegram import pending_actions, rate_limit
+from sase_telegram.credentials import get_chat_id
+from sase_telegram.formatting import format_notification
+from sase_telegram.outbound import get_unsent_notifications, mark_sent
+from sase_telegram.pdf_convert import md_to_pdf
+from sase_telegram.telegram_client import send_document, send_message
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def _make_response_only_file(chat_path: str) -> tuple[Path | None, str | None]:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="sase_chop_tg_outbound",
+        prog="sase_tg_outbound",
         description="Send sase notifications to Telegram",
     )
     parser.add_argument(

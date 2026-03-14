@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from sase_chop_telegram.inbound import (
+from sase_telegram.inbound import (
     build_photo_prompt,
     clear_awaiting_feedback,
     get_last_offset,
@@ -70,7 +70,7 @@ class TestOffsetPersistence:
     def setup_method(self) -> None:
         _cleanup()
         self._patchers = [
-            patch("sase_chop_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_PATH),
+            patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_PATH),
         ]
         for p in self._patchers:
             p.start()
@@ -204,7 +204,7 @@ class TestProcessTextMessage:
     def setup_method(self) -> None:
         _cleanup()
         self._patcher = patch(
-            "sase_chop_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
+            "sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
         )
         self._patcher.start()
 
@@ -256,7 +256,7 @@ class TestHandleTextMessageAgentLaunch:
     def setup_method(self) -> None:
         _cleanup()
         self._patcher = patch(
-            "sase_chop_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
+            "sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
         )
         self._patcher.start()
 
@@ -265,29 +265,29 @@ class TestHandleTextMessageAgentLaunch:
         _cleanup()
 
     def test_launches_agent_for_plain_text(self) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
         )
 
         with patch(
-            "sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent"
+            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
         ) as mock_launch:
             _handle_text_message("List all open beads")
             mock_launch.assert_called_once_with("List all open beads")
 
     def test_slash_command_ignored(self) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
         )
 
         with patch(
-            "sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent"
+            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
         ) as mock_launch:
             _handle_text_message("/start")
             mock_launch.assert_not_called()
 
     def test_feedback_flow_does_not_launch_agent(self, tmp_path: Path) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
         )
 
@@ -297,13 +297,13 @@ class TestHandleTextMessageAgentLaunch:
         )
         with (
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent"
+                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
             ) as mock_launch,
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound._write_response"
+                "sase_telegram.scripts.sase_tg_inbound._write_response"
             ),
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound.pending_actions"
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions"
             ),
         ):
             _handle_text_message("Some feedback text")
@@ -314,17 +314,17 @@ class TestLaunchAgent:
     """Tests for the _launch_agent helper (script module)."""
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_success_sends_confirmation(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
         )
 
@@ -347,17 +347,17 @@ class TestLaunchAgent:
         assert "List all open beads" in call_args[0][1]
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_failure_sends_error(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
         )
 
@@ -375,17 +375,17 @@ class TestLaunchAgent:
         assert "No workspace available" in call_args[0][1]
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_auto_name_prepended_when_no_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
         )
 
@@ -412,17 +412,17 @@ class TestLaunchAgent:
         assert "List all open beads" in launched_prompt
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_no_auto_name_when_name_directive_present(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
         )
 
@@ -447,7 +447,7 @@ class TestAwaitingFeedbackState:
     def setup_method(self) -> None:
         _cleanup()
         self._patcher = patch(
-            "sase_chop_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
+            "sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
         )
         self._patcher.start()
 
@@ -564,10 +564,10 @@ class TestHandlePhotoMessage:
     """Tests for _handle_photo_message (script module)."""
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_downloads_highest_res_and_launches_agent(
         self,
@@ -577,7 +577,7 @@ class TestHandlePhotoMessage:
     ) -> None:
         from types import SimpleNamespace
 
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _handle_photo_message,
         )
 
@@ -594,11 +594,11 @@ class TestHandlePhotoMessage:
 
         with (
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound.IMAGES_DIR",
+                "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
                 tmp_path,
             ),
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent"
+                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
             ) as mock_launch,
         ):
             _handle_photo_message(message)
@@ -614,10 +614,10 @@ class TestHandlePhotoMessage:
         assert "Describe this" in prompt
 
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client"
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
     )
     @patch(
-        "sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials"
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
     )
     def test_download_failure_sends_error(
         self,
@@ -627,7 +627,7 @@ class TestHandlePhotoMessage:
     ) -> None:
         from types import SimpleNamespace
 
-        from sase_chop_telegram.scripts.sase_chop_tg_inbound import (
+        from sase_telegram.scripts.sase_tg_inbound import (
             _handle_photo_message,
         )
 
@@ -639,11 +639,11 @@ class TestHandlePhotoMessage:
 
         with (
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound.IMAGES_DIR",
+                "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
                 tmp_path,
             ),
             patch(
-                "sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent"
+                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
             ) as mock_launch,
         ):
             _handle_photo_message(message)

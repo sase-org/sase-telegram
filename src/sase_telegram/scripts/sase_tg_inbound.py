@@ -7,9 +7,9 @@ import json
 import sys
 from typing import Any
 
-from sase_chop_telegram import credentials, pending_actions, telegram_client
-from sase_chop_telegram.callback_data import decode
-from sase_chop_telegram.inbound import (
+from sase_telegram import credentials, pending_actions, telegram_client
+from sase_telegram.callback_data import decode
+from sase_telegram.inbound import (
     IMAGES_DIR,
     ResponseAction,
     build_photo_prompt,
@@ -27,7 +27,7 @@ from sase_chop_telegram.inbound import (
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="sase_chop_tg_inbound",
+        prog="sase_tg_inbound",
         description="Poll Telegram for user action responses",
     )
     parser.add_argument(

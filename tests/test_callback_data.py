@@ -2,7 +2,7 @@
 
 import pytest
 
-from sase_chop_telegram.callback_data import CallbackData, decode, encode
+from sase_telegram.callback_data import CallbackData, decode, encode
 
 
 class TestEncode:

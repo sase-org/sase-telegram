@@ -6,7 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 from sase.notifications.models import Notification
-from sase_chop_telegram.formatting import (
+from sase_telegram.formatting import (
     NOTES_TRUNCATION_THRESHOLD,
     PLAN_CONTENT_MAX,
     _convert_inline,

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from sase_chop_telegram.credentials import get_bot_token, get_chat_id, get_bot_username
+from sase_telegram.credentials import get_bot_token, get_chat_id, get_bot_username
 
 
 class TestGetBotToken:
@@ -16,7 +16,7 @@ class TestGetBotToken:
             args=[], returncode=0, stdout="my-secret-token\n", stderr=""
         )
         with patch(
-            "sase_chop_telegram.credentials.subprocess.run", return_value=mock_result
+            "sase_telegram.credentials.subprocess.run", return_value=mock_result
         ) as mock_run:
             token = get_bot_token()
             assert token == "my-secret-token"
@@ -34,7 +34,7 @@ class TestGetBotToken:
             args=[], returncode=0, stdout="token\n", stderr=""
         )
         with patch(
-            "sase_chop_telegram.credentials.subprocess.run", return_value=mock_result
+            "sase_telegram.credentials.subprocess.run", return_value=mock_result
         ) as mock_run:
             get_bot_token()
             get_bot_token()

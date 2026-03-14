@@ -10,7 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.notifications.models import Notification
 
-from sase_chop_telegram import callback_data
+from sase_telegram import callback_data
 
 # Telegram message limit
 MAX_MESSAGE_LENGTH = 4096

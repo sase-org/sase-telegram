@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from sase.notifications.models import Notification
-from sase_chop_telegram.outbound import (
+from sase_telegram.outbound import (
     get_unsent_notifications,
     mark_sent,
 )
@@ -20,7 +20,7 @@ LAST_SENT_TEST_FILE = Path("/tmp/test_last_sent_ts")
 @pytest.fixture(autouse=True)
 def _patch_last_sent_file():
     """Use a temp file for tests."""
-    with patch("sase_chop_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE):
+    with patch("sase_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE):
         yield
     if LAST_SENT_TEST_FILE.exists():
         LAST_SENT_TEST_FILE.unlink()
@@ -45,7 +45,7 @@ def _make_notification(
 
 
 class TestGetUnsentNotifications:
-    @patch("sase_chop_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound.load_notifications")
     def test_no_file_returns_empty_and_initializes(self, mock_load):
         """First run: no last_sent file, returns empty and creates file."""
         assert not LAST_SENT_TEST_FILE.exists()
@@ -54,8 +54,8 @@ class TestGetUnsentNotifications:
         assert LAST_SENT_TEST_FILE.exists()
         mock_load.assert_not_called()
 
-    @patch("sase_chop_telegram.outbound.get_tui_last_activity", return_value=None)
-    @patch("sase_chop_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound.get_tui_last_activity", return_value=None)
+    @patch("sase_telegram.outbound.load_notifications")
     def test_filters_correctly(self, mock_load, _mock_activity):
         """Only returns unread, undismissed notifications newer than last sent."""
         old_ts = datetime(2024, 1, 1, tzinfo=UTC).isoformat()
@@ -84,8 +84,8 @@ class TestGetUnsentNotifications:
         assert len(result) == 1
         assert result[0].id == "new00000-0000-0000-0000-000000000000"
 
-    @patch("sase_chop_telegram.outbound.get_tui_last_activity")
-    @patch("sase_chop_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound.get_tui_last_activity")
+    @patch("sase_telegram.outbound.load_notifications")
     def test_advances_hwm_to_last_activity_time(self, mock_load, mock_activity):
         """Advance high-water mark to last TUI activity time.
 
@@ -121,8 +121,8 @@ class TestGetUnsentNotifications:
         written_hwm = float(LAST_SENT_TEST_FILE.read_text().strip())
         assert written_hwm == pytest.approx(activity_time, abs=1.0)
 
-    @patch("sase_chop_telegram.outbound.get_tui_last_activity", return_value=0)
-    @patch("sase_chop_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound.get_tui_last_activity", return_value=0)
+    @patch("sase_telegram.outbound.load_notifications")
     def test_manual_idle_does_not_advance_hwm(self, mock_load, _mock_activity):
         """epoch=0 (manual idle via I key) should NOT advance the HWM.
 

@@ -12,7 +12,7 @@ from typing import Any, Callable
 from telegram import Bot, InlineKeyboardMarkup, Message, Update
 from telegram.error import NetworkError, RetryAfter, TimedOut
 
-from sase_chop_telegram.credentials import get_bot_token
+from sase_telegram.credentials import get_bot_token
 
 log = logging.getLogger(__name__)
 

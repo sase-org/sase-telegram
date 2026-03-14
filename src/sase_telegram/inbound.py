@@ -141,7 +141,7 @@ def process_callback(
 
     Returns None for two-step callbacks (feedback/custom) and unknown actions.
     """
-    from sase_chop_telegram.callback_data import decode
+    from sase_telegram.callback_data import decode
 
     cb = decode(callback_data_str)
     action = pending.get(cb.notif_id_prefix)
@@ -226,7 +226,7 @@ def process_callback_twostep(
     Returns (notif_id_prefix, action_info) for feedback/custom callbacks,
     or None for regular one-shot callbacks.
     """
-    from sase_chop_telegram.callback_data import decode
+    from sase_telegram.callback_data import decode
 
     cb = decode(callback_data_str)
     action = pending.get(cb.notif_id_prefix)

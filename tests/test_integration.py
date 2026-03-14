@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sase.notifications.models import Notification
-from sase_chop_telegram.scripts.sase_chop_tg_outbound import main as outbound_main
-from sase_chop_telegram.scripts.sase_chop_tg_inbound import main as inbound_main
+from sase_telegram.scripts.sase_tg_outbound import main as outbound_main
+from sase_telegram.scripts.sase_tg_inbound import main as inbound_main
 
 
 LAST_SENT_TEST_FILE = Path("/tmp/test_integration_last_sent_ts")
@@ -60,11 +60,11 @@ def _make_notification(
 def _patch_paths():
     """Redirect all file paths to temp locations for isolation."""
     patchers = [
-        patch("sase_chop_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE),
-        patch("sase_chop_telegram.pending_actions.PENDING_ACTIONS_PATH", PENDING_TEST_FILE),
-        patch("sase_chop_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
-        patch("sase_chop_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
-        patch("sase_chop_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
+        patch("sase_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE),
+        patch("sase_telegram.pending_actions.PENDING_ACTIONS_PATH", PENDING_TEST_FILE),
+        patch("sase_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
+        patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
+        patch("sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
     ]
     for p in patchers:
         p.start()
@@ -77,7 +77,7 @@ def _patch_paths():
 class TestOutboundIntegration:
     """Integration tests for the outbound main() entry point."""
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.is_idle", return_value=False)
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=False)
     def test_exits_early_when_user_active(
         self, _mock_idle: MagicMock
     ) -> None:
@@ -85,8 +85,8 @@ class TestOutboundIntegration:
         result = outbound_main(["--dry-run"])
         assert result == 0
 
-    @patch("sase_chop_telegram.outbound.load_notifications")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     def test_first_run_initializes_without_sending(
         self, _mock_idle: MagicMock, mock_load: MagicMock
     ) -> None:
@@ -96,10 +96,10 @@ class TestOutboundIntegration:
         assert LAST_SENT_TEST_FILE.exists()
         mock_load.assert_not_called()
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.send_message")
-    @patch("sase_chop_telegram.outbound.load_notifications")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.is_idle", return_value=True)
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.get_chat_id")
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_sends_notification_when_inactive(
         self,
         mock_chat_id: MagicMock,
@@ -129,10 +129,10 @@ class TestOutboundIntegration:
         # send_message(chat_id, text, reply_markup=keyboard) — text is 2nd positional arg
         assert "Workflow Complete" in call_args[0][1]
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.send_message")
-    @patch("sase_chop_telegram.outbound.load_notifications")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.is_idle", return_value=True)
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.get_chat_id")
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_saves_pending_action_for_plan_approval(
         self,
         mock_chat_id: MagicMock,
@@ -161,7 +161,7 @@ class TestOutboundIntegration:
         assert result == 0
 
         # Verify pending action was saved
-        from sase_chop_telegram import pending_actions
+        from sase_telegram import pending_actions
 
         pending = pending_actions.list_all()
         assert len(pending) == 1
@@ -178,8 +178,8 @@ class TestOutboundIntegration:
         n = _make_notification(sender="crs", notes=["Done!"])
 
         with (
-            patch("sase_chop_telegram.scripts.sase_chop_tg_outbound.is_idle", return_value=True),
-            patch("sase_chop_telegram.outbound.load_notifications", return_value=[n]),
+            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
+            patch("sase_telegram.outbound.load_notifications", return_value=[n]),
         ):
             result = outbound_main(["--dry-run"])
 
@@ -192,14 +192,14 @@ class TestOutboundIntegration:
 class TestInboundIntegration:
     """Integration tests for the inbound main() entry point."""
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_no_updates_exits_cleanly(self, mock_tg: MagicMock) -> None:
         """When there are no Telegram updates, exits with 0."""
         mock_tg.get_updates.return_value = []
         result = inbound_main(["--once"])
         assert result == 0
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_plan_approve_callback(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
@@ -208,7 +208,7 @@ class TestInboundIntegration:
         response_dir.mkdir()
 
         # Set up pending action
-        from sase_chop_telegram import pending_actions
+        from sase_telegram import pending_actions
 
         pending_actions.add(
             "abcd1234",
@@ -248,7 +248,7 @@ class TestInboundIntegration:
         # Verify pending action was cleaned up
         assert pending_actions.get("abcd1234") is None
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_hitl_accept_callback(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
@@ -256,7 +256,7 @@ class TestInboundIntegration:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
 
-        from sase_chop_telegram import pending_actions
+        from sase_telegram import pending_actions
 
         pending_actions.add(
             "hitl0001",
@@ -291,7 +291,7 @@ class TestInboundIntegration:
         data = json.loads(response_file.read_text())
         assert data == {"action": "accept", "approved": True}
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_hitl_feedback_twostep_flow(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
@@ -299,7 +299,7 @@ class TestInboundIntegration:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
 
-        from sase_chop_telegram import pending_actions
+        from sase_telegram import pending_actions
 
         pending_actions.add(
             "hitl0001",
@@ -358,12 +358,12 @@ class TestInboundIntegration:
         assert data["approved"] is False
         assert data["feedback"] == "Please fix the indentation on line 42"
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_expired_action_handled_gracefully(
         self, mock_tg: MagicMock
     ) -> None:
         """Callback for expired action returns 'expired' message."""
-        from sase_chop_telegram import pending_actions
+        from sase_telegram import pending_actions
 
         # Add pending action with a non-existent response dir
         pending_actions.add(
@@ -399,8 +399,8 @@ class TestInboundIntegration:
         # Pending action should be cleaned up
         assert pending_actions.get("gone0001") is None
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_saves_offset_after_processing(
         self, mock_tg: MagicMock, _mock_launch: MagicMock
     ) -> None:
@@ -419,9 +419,9 @@ class TestInboundIntegration:
         offset = int(OFFSET_TEST_FILE.read_text().strip())
         assert offset == 501  # update_id + 1
 
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound._launch_agent")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.credentials")
-    @patch("sase_chop_telegram.scripts.sase_chop_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_photo_message_downloads_and_launches_agent(
         self,
         mock_tg: MagicMock,
@@ -448,7 +448,7 @@ class TestInboundIntegration:
         mock_tg.get_updates.return_value = [update]
 
         with patch(
-            "sase_chop_telegram.scripts.sase_chop_tg_inbound.IMAGES_DIR",
+            "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
             tmp_path,
         ):
             result = inbound_main(["--once"])
