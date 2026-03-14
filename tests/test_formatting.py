@@ -317,7 +317,7 @@ class TestFormatWorkflowComplete:
         )
         text, keyboard, attachments = format_notification(n)
 
-        assert "Workflow Complete" in text
+        assert "Complete" in text
         assert keyboard is None
         assert attachments == []
 
@@ -329,9 +329,24 @@ class TestFormatWorkflowComplete:
         )
         text, keyboard, attachments = format_notification(n)
 
-        assert "Workflow Complete" in text
+        assert "Complete" in text
         assert "\\[c\\]" in text
         assert keyboard is None
+
+    def test_shows_provider_model_label(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["CLAUDE(opus) completed: my-workflow"],
+            action_data={
+                "agent_name": "c",
+                "llm_provider": "claude",
+                "model": "opus",
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert "CLAUDE\\(opus\\) Complete" in text
+        assert "\\[c\\]" in text
 
     def test_diff_icon_when_diff_present(self):
         with tempfile.NamedTemporaryFile(suffix=".diff", delete=False) as f:
@@ -345,7 +360,7 @@ class TestFormatWorkflowComplete:
         )
         text, _, _ = format_notification(n)
         assert "✅✏️" in text
-        assert "Workflow Complete" in text
+        assert "Complete" in text
 
         Path(diff_file).unlink()
 

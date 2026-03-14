@@ -371,15 +371,21 @@ def _format_user_question(
 def _format_workflow_complete(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
+    from sase.llm_provider.registry import format_provider_model_label
+
     notes_text = escape_markdown_v2(_truncate_notes(n.notes))
     agent_name = n.action_data.get("agent_name")
     has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
     icon = "✅✏️" if has_diff else "✅"
+    label = escape_markdown_v2(format_provider_model_label(
+        n.action_data.get("llm_provider"),
+        n.action_data.get("model"),
+    ))
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
-        text = f"{icon} *Workflow Complete* \\[{escaped_name}\\]\n\n{notes_text}"
+        text = f"{icon} *{label} Complete* \\[{escaped_name}\\]\n\n{notes_text}"
     else:
-        text = f"{icon} *Workflow Complete*\n\n{notes_text}"
+        text = f"{icon} *{label} Complete*\n\n{notes_text}"
 
     prompt = n.action_data.get("prompt")
     if prompt:

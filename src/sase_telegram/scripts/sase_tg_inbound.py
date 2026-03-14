@@ -111,14 +111,37 @@ def _launch_agent(prompt: str) -> None:
     """Launch a background sase agent from a Telegram prompt."""
     from sase.agent_launcher import launch_agent_from_cwd
     from sase.agent_names import get_next_auto_name
+    from sase.llm_provider.registry import (
+        format_provider_model_label,
+        get_default_provider_name,
+        get_provider,
+        resolve_model_provider,
+    )
     from sase.xprompt.directives import extract_prompt_directives
 
+    # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
+    try:
+        from sase.xprompt import process_xprompt_references
+
+        expanded = process_xprompt_references(prompt)
+    except Exception:
+        expanded = prompt
+    _, directives = extract_prompt_directives(expanded)
+
     # Auto-assign a name if the user didn't provide one
-    _, directives = extract_prompt_directives(prompt)
     auto_name: str | None = None
     if directives.name is None:
         auto_name = get_next_auto_name()
         prompt = f"%n:{auto_name} {prompt}"
+
+    # Resolve provider/model for the launch label
+    if directives.model:
+        provider, model = resolve_model_provider(directives.model)
+        provider = provider or get_default_provider_name()
+    else:
+        provider = get_default_provider_name()
+        model = get_provider().resolve_model_name()
+    label = format_provider_model_label(provider, model)
 
     chat_id = credentials.get_chat_id()
     try:
@@ -127,7 +150,7 @@ def _launch_agent(prompt: str) -> None:
         name_label = f" [{auto_name}]" if auto_name else ""
         telegram_client.send_message(
             chat_id,
-            f"Agent launched{name_label} (PID {result.pid}, workspace #{result.workspace_num})\n\n{display}",
+            f"{label} launched{name_label} (PID {result.pid}, workspace #{result.workspace_num})\n\n{display}",
         )
     except Exception as e:
         telegram_client.send_message(
