@@ -1,4 +1,4 @@
-# sase-chop-telegram - Agent Instructions
+# sase-telegram - Agent Instructions
 
 ## Overview
 Telegram integration chop for sase. Provides outbound notification delivery

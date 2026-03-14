@@ -1,4 +1,4 @@
-# sase-chop-telegram — Telegram Notification Chop for sase
+# sase-telegram — Telegram Notification Chop for sase
 
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/type_checker-mypy-blue.svg)](https://mypy-lang.org/)
@@ -6,20 +6,20 @@
 
 ## Overview
 
-**sase-chop-telegram** is a plugin for [sase](https://github.com/bbugyi200/sase) that provides two-way Telegram
+**sase-telegram** is a plugin for [sase](https://github.com/bbugyi200/sase) that provides two-way Telegram
 integration. It sends notifications to Telegram when you're away from the TUI, and lets you respond to plan approvals,
 HITL requests, user questions, and even launch new agents — all from Telegram.
 
 ## Installation
 
 ```bash
-pip install sase-chop-telegram
+pip install sase-telegram
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv pip install sase-chop-telegram
+uv pip install sase-telegram
 ```
 
 Requires `sase>=0.1.0` as a dependency (installed automatically).
@@ -28,7 +28,7 @@ Requires `sase>=0.1.0` as a dependency (installed automatically).
 
 ### CLI Scripts
 
-Installing sase-chop-telegram adds the following commands:
+Installing sase-telegram adds the following commands:
 
 | Command                  | Description                                                  |
 | ------------------------ | ------------------------------------------------------------ |
