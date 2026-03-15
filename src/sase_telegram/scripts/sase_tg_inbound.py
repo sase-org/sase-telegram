@@ -298,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:
     if not updates:
         return 0
 
+    # Save offset BEFORE processing to prevent duplicate agent launches when
+    # overlapping invocations race (at-most-once delivery).
+    last_update_id = max(u.update_id for u in updates)
+    save_offset(last_update_id + 1)
+
     for update in updates:
         if update.callback_query:
             _handle_callback(update.callback_query, pending)
@@ -314,9 +319,6 @@ def main(argv: list[str] | None = None) -> int:
             elif msg.text:
                 text = reconstruct_code_markers(msg.text, msg.entities)
                 _handle_text_message(text)
-
-    last_update_id = max(u.update_id for u in updates)
-    save_offset(last_update_id + 1)
 
     return 0
 
