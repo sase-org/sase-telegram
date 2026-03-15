@@ -109,6 +109,27 @@ def _handle_callback(
 
 def _launch_agent(prompt: str) -> None:
     """Launch a background sase agent from a Telegram prompt."""
+    # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
+    try:
+        from sase.xprompt import process_xprompt_references
+
+        expanded = process_xprompt_references(prompt)
+    except Exception:
+        expanded = prompt
+
+    # Check for multi-model directive (e.g. %m(opus,sonnet))
+    from sase.xprompt.directives import split_prompt_for_models
+
+    model_prompts = split_prompt_for_models(expanded)
+    if model_prompts is not None:
+        _launch_multi_model_agents(model_prompts)
+        return
+
+    _launch_single_agent(prompt, expanded)
+
+
+def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
+    """Launch a single background sase agent from a Telegram prompt."""
     from sase.agent_launcher import launch_agent_from_cwd
     from sase.agent_names import get_next_auto_name
     from sase.llm_provider.registry import (
@@ -119,13 +140,13 @@ def _launch_agent(prompt: str) -> None:
     )
     from sase.xprompt.directives import extract_prompt_directives
 
-    # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
-    try:
-        from sase.xprompt import process_xprompt_references
+    if expanded is None:
+        try:
+            from sase.xprompt import process_xprompt_references
 
-        expanded = process_xprompt_references(prompt)
-    except Exception:
-        expanded = prompt
+            expanded = process_xprompt_references(prompt)
+        except Exception:
+            expanded = prompt
     _, directives = extract_prompt_directives(expanded)
 
     # Auto-assign a name if the user didn't provide one
@@ -157,6 +178,21 @@ def _launch_agent(prompt: str) -> None:
             chat_id,
             f"Failed to launch agent: {e}",
         )
+
+
+def _launch_multi_model_agents(model_prompts: list[str]) -> None:
+    """Launch one agent per model for a multi-model directive.
+
+    Each prompt in *model_prompts* has the multi-model directive replaced
+    with a single ``%model:X``.  Each agent gets its own auto-name and
+    a separate Telegram notification.
+    """
+    import time
+
+    for i, model_prompt in enumerate(model_prompts):
+        if i > 0:
+            time.sleep(1)
+        _launch_single_agent(model_prompt)
 
 
 def _handle_photo_message(message: Any) -> None:
