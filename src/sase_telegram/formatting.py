@@ -274,26 +274,32 @@ def _format_plan_approval(
     else:
         text = f"📋 *Plan Review*\n\n{notes_text}"
 
-    keyboard = InlineKeyboardMarkup(
+    rows: list[list[InlineKeyboardButton]] = [
         [
-            [
-                InlineKeyboardButton(
-                    "✅ Approve",
-                    callback_data=callback_data.encode("plan", prefix, "approve"),
-                ),
-                InlineKeyboardButton(
-                    "❌ Reject",
-                    callback_data=callback_data.encode("plan", prefix, "reject"),
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "💬 Feedback",
-                    callback_data=callback_data.encode("plan", prefix, "feedback"),
-                ),
-            ],
-        ]
-    )
+            InlineKeyboardButton(
+                "✅ Approve",
+                callback_data=callback_data.encode("plan", prefix, "approve"),
+            ),
+            InlineKeyboardButton(
+                "❌ Reject",
+                callback_data=callback_data.encode("plan", prefix, "reject"),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 Feedback",
+                callback_data=callback_data.encode("plan", prefix, "feedback"),
+            ),
+        ],
+    ]
+    if n.action_data.get("epic_available") == "true":
+        rows[0].append(
+            InlineKeyboardButton(
+                "🏔️ Epic",
+                callback_data=callback_data.encode("plan", prefix, "epic"),
+            ),
+        )
+    keyboard = InlineKeyboardMarkup(rows)
     return text, keyboard, attachments
 
 
