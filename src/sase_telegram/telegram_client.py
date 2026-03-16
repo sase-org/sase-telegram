@@ -83,10 +83,9 @@ def send_message(
     parse_mode: str | None = None,
 ) -> Message:
     """Send a text message to a Telegram chat."""
-    bot = _get_bot()
     try:
         return _run_async(
-            bot.send_message(
+            _get_bot().send_message(
                 chat_id=chat_id,
                 text=text,
                 reply_markup=reply_markup,
@@ -100,8 +99,11 @@ def send_message(
                 parse_mode,
                 exc_info=True,
             )
+            # Use a fresh Bot instance — the previous asyncio.run() closed
+            # its event loop which can leave the old Bot's internal httpx
+            # client in a broken state (python-telegram-bot v21+).
             return _run_async(
-                bot.send_message(
+                _get_bot().send_message(
                     chat_id=chat_id, text=text, reply_markup=reply_markup
                 )
             )

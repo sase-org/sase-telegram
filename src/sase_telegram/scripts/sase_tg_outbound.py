@@ -230,15 +230,26 @@ def _run_outbound(args: argparse.Namespace) -> int:
             mark_sent([n])
             continue
 
-        msg = send_message(
-            chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
-        )
-        rate_limit.record_send()
+        msg = None
+        try:
+            msg = send_message(
+                chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
+            )
+            rate_limit.record_send()
+        except Exception:
+            log.warning(
+                "Failed to send notification %s to Telegram",
+                n.id[:8],
+                exc_info=True,
+            )
 
-        # Advance high-water mark immediately after the text message is
-        # sent so that a failure in attachment processing won't cause the
-        # text message to be re-sent on the next tick.
+        # Always advance high-water mark — even on send failure — to
+        # prevent an infinite resend loop.  Failed notifications are
+        # still visible in the TUI.
         mark_sent([n])
+
+        if msg is None:
+            continue
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []
