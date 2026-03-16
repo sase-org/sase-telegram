@@ -293,7 +293,7 @@ def _format_plan_approval(
         ],
     ]
     if n.action_data.get("epic_available") == "true":
-        rows[0].append(
+        rows[1].append(
             InlineKeyboardButton(
                 "🏔️ Epic",
                 callback_data=callback_data.encode("plan", prefix, "epic"),
