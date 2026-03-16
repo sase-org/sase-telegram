@@ -177,6 +177,25 @@ def main(argv: list[str] | None = None) -> int:
     if not is_idle():
         return 0
 
+    # Acquire exclusive lock to prevent concurrent outbound runs from
+    # sending the same notification multiple times.  Lumberjack fires
+    # this chop every few seconds; if a run takes longer than the
+    # interval (retries, rate-limit sleeps, PDF conversion), overlapping
+    # runs would read the same high-water mark and duplicate sends.
+    from sase_telegram.outbound import release_outbound_lock, try_acquire_outbound_lock
+
+    lock_fd = try_acquire_outbound_lock()
+    if lock_fd is None:
+        return 0  # Another instance is running
+
+    try:
+        return _run_outbound(args)
+    finally:
+        release_outbound_lock(lock_fd)
+
+
+def _run_outbound(args: argparse.Namespace) -> int:
+    """Core outbound logic, called while holding the exclusive lock."""
     notifications = get_unsent_notifications()
     if not notifications:
         return 0

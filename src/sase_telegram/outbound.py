@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from sase.notifications.models import Notification
 from sase.notifications.store import load_notifications
 
 LAST_SENT_FILE = Path.home() / ".sase" / "telegram" / "last_sent_ts"
+OUTBOUND_LOCK_FILE = Path.home() / ".sase" / "telegram" / "outbound.lock"
 
 
 def get_unsent_notifications() -> list[Notification]:
@@ -63,6 +66,42 @@ def mark_sent(notifications: list[Notification]) -> None:
 
 
 def _write_high_water_mark(ts: float) -> None:
-    """Write a timestamp to the high-water mark file."""
+    """Atomically write a timestamp to the high-water mark file."""
     LAST_SENT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LAST_SENT_FILE.write_text(str(ts))
+    fd, tmp_path = tempfile.mkstemp(dir=LAST_SENT_FILE.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(str(ts))
+        os.replace(tmp_path, LAST_SENT_FILE)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def try_acquire_outbound_lock() -> int | None:
+    """Try to acquire an exclusive lock for the outbound process.
+
+    Returns a file descriptor on success, or None if another instance holds
+    the lock.  The caller must call :func:`release_outbound_lock` when done.
+    """
+    import fcntl
+
+    OUTBOUND_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(OUTBOUND_LOCK_FILE), os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def release_outbound_lock(fd: int) -> None:
+    """Release the outbound lock acquired by :func:`try_acquire_outbound_lock`."""
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
