@@ -60,9 +60,8 @@ class TestGetUnsentNotifications:
         assert LAST_SENT_TEST_FILE.exists()
         mock_load.assert_not_called()
 
-    @patch("sase_telegram.outbound.get_tui_last_activity", return_value=None)
     @patch("sase_telegram.outbound.load_notifications")
-    def test_filters_correctly(self, mock_load, _mock_activity):
+    def test_filters_correctly(self, mock_load):
         """Only returns unread, undismissed notifications newer than last sent."""
         old_ts = datetime(2024, 1, 1, tzinfo=UTC).isoformat()
         new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
@@ -89,68 +88,6 @@ class TestGetUnsentNotifications:
         result = get_unsent_notifications()
         assert len(result) == 1
         assert result[0].id == "new00000-0000-0000-0000-000000000000"
-
-    @patch("sase_telegram.outbound.get_tui_last_activity")
-    @patch("sase_telegram.outbound.load_notifications")
-    def test_advances_hwm_to_last_activity_time(self, mock_load, mock_activity):
-        """Advance high-water mark to last TUI activity time.
-
-        Notifications received before the last activity should not be
-        re-sent, regardless of whether the TUI is still running.
-        """
-        activity_time = datetime(2025, 6, 1, tzinfo=UTC).timestamp()
-        mock_activity.return_value = activity_time
-
-        # High-water mark is older than activity time
-        old_hwm = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
-        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_SENT_TEST_FILE.write_text(str(old_hwm))
-
-        # Notification received before last activity — should NOT be returned
-        before_ts = datetime(2025, 3, 1, tzinfo=UTC).isoformat()
-        # Notification received after last activity — should be returned
-        after_ts = datetime(2025, 7, 1, tzinfo=UTC).isoformat()
-
-        n_before = _make_notification(
-            id="before00-0000-0000-0000-000000000000", timestamp=before_ts
-        )
-        n_after = _make_notification(
-            id="after000-0000-0000-0000-000000000000", timestamp=after_ts
-        )
-        mock_load.return_value = [n_before, n_after]
-
-        result = get_unsent_notifications()
-        assert len(result) == 1
-        assert result[0].id == "after000-0000-0000-0000-000000000000"
-
-        # High-water mark should have been advanced to activity time
-        written_hwm = float(LAST_SENT_TEST_FILE.read_text().strip())
-        assert written_hwm == pytest.approx(activity_time, abs=1.0)
-
-    @patch("sase_telegram.outbound.get_tui_last_activity", return_value=0)
-    @patch("sase_telegram.outbound.load_notifications")
-    def test_manual_idle_does_not_advance_hwm(self, mock_load, _mock_activity):
-        """epoch=0 (manual idle via I key) should NOT advance the HWM.
-
-        When the user manually marks idle, accumulated notifications should
-        still be delivered via Telegram.
-        """
-        old_hwm = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
-        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_SENT_TEST_FILE.write_text(str(old_hwm))
-
-        new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
-        n = _make_notification(
-            id="notif000-0000-0000-0000-000000000000", timestamp=new_ts
-        )
-        mock_load.return_value = [n]
-
-        result = get_unsent_notifications()
-        assert len(result) == 1
-
-        # HWM should NOT have been advanced
-        written_hwm = float(LAST_SENT_TEST_FILE.read_text().strip())
-        assert written_hwm == pytest.approx(old_hwm, abs=1.0)
 
 
 class TestMarkSent:

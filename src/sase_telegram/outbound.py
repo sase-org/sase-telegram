@@ -7,7 +7,6 @@ import tempfile
 import time
 from pathlib import Path
 
-from sase.ace.tui_activity import get_tui_last_activity
 from sase.notifications.models import Notification
 from sase.notifications.store import load_notifications
 
@@ -19,6 +18,13 @@ def get_unsent_notifications() -> list[Notification]:
     """Return notifications that haven't been sent to Telegram yet.
 
     Uses a high-water mark timestamp file to track what's already been sent.
+    The high-water mark is only advanced by ``mark_sent()`` after a
+    notification is actually delivered to Telegram.  We deliberately do
+    NOT advance it based on TUI activity — doing so can silently drop
+    notifications when the outbound chop was offline during the activity
+    window.  The ``n.read or n.dismissed`` filter is sufficient to
+    suppress notifications the user has already acted on in the TUI.
+
     On first run (no file), initializes the file to now and returns empty
     to avoid dumping backlog.
     """
@@ -28,16 +34,6 @@ def get_unsent_notifications() -> list[Notification]:
         return []
 
     last_sent_ts = float(LAST_SENT_FILE.read_text().strip())
-
-    # Advance the high-water mark to the TUI's last activity time so
-    # notifications the user already saw during active TUI use are not
-    # re-sent via Telegram when the user later becomes idle.
-    # epoch=0 (manual idle via I key) is excluded so accumulated
-    # notifications are still delivered.
-    activity_ts = get_tui_last_activity()
-    if activity_ts is not None and activity_ts > 0 and activity_ts > last_sent_ts:
-        last_sent_ts = activity_ts
-        _write_high_water_mark(activity_ts)
 
     all_notifs = load_notifications()
     unsent = []
