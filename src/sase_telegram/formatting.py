@@ -274,18 +274,26 @@ def _format_plan_approval(
     else:
         text = f"📋 *Plan Review*\n\n{notes_text}"
 
+    row1 = [
+        InlineKeyboardButton(
+            "✅ Approve",
+            callback_data=callback_data.encode("plan", prefix, "approve"),
+        ),
+        InlineKeyboardButton(
+            "❌ Reject",
+            callback_data=callback_data.encode("plan", prefix, "reject"),
+        ),
+    ]
+    if n.action_data.get("epic_available") == "true":
+        row1.append(
+            InlineKeyboardButton(
+                "📋 Epic",
+                callback_data=callback_data.encode("plan", prefix, "epic"),
+            )
+        )
     keyboard = InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    "✅ Approve",
-                    callback_data=callback_data.encode("plan", prefix, "approve"),
-                ),
-                InlineKeyboardButton(
-                    "❌ Reject",
-                    callback_data=callback_data.encode("plan", prefix, "reject"),
-                ),
-            ],
+            row1,
             [
                 InlineKeyboardButton(
                     "💬 Feedback",
