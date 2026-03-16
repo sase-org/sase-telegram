@@ -249,6 +249,8 @@ def _handle_dot_command(text: str) -> None:
 
     if command == ".kill":
         _handle_kill_command(args)
+    elif command == ".list":
+        _handle_list_command()
     # Unknown commands are silently ignored (preserves original behavior)
 
 
@@ -264,6 +266,38 @@ def _handle_kill_command(args: str) -> None:
 
     result = kill_named_agent(name)
     telegram_client.send_message(chat_id, result.message)
+
+
+def _handle_list_command() -> None:
+    """Handle .list — show all currently running agents."""
+    from sase.agent_names import list_running_agents
+
+    chat_id = credentials.get_chat_id()
+    agents = list_running_agents()
+
+    if not agents:
+        telegram_client.send_message(chat_id, "No running agents.")
+        return
+
+    lines: list[str] = [f"{len(agents)} running agent(s):\n"]
+    for a in agents:
+        label = a.name or "(unnamed)"
+        model = a.model or "?"
+        parts = [f"  {label} — {model}, {a.duration}"]
+        details: list[str] = []
+        if a.project:
+            details.append(a.project)
+        if a.workspace_num is not None:
+            details.append(f"ws#{a.workspace_num}")
+        if a.pid is not None:
+            details.append(f"PID {a.pid}")
+        if a.approve:
+            details.append("autonomous")
+        if details:
+            parts.append(f"    ({', '.join(details)})")
+        lines.append("\n".join(parts))
+
+    telegram_client.send_message(chat_id, "\n".join(lines))
 
 
 def _handle_text_message(text: str) -> None:
