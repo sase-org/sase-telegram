@@ -283,14 +283,11 @@ def _format_plan_approval(
             "❌ Reject",
             callback_data=callback_data.encode("plan", prefix, "reject"),
         ),
+        InlineKeyboardButton(
+            "📋 Epic",
+            callback_data=callback_data.encode("plan", prefix, "epic"),
+        ),
     ]
-    if n.action_data.get("epic_available") == "true":
-        row1.append(
-            InlineKeyboardButton(
-                "📋 Epic",
-                callback_data=callback_data.encode("plan", prefix, "epic"),
-            )
-        )
     keyboard = InlineKeyboardMarkup(
         [
             row1,
