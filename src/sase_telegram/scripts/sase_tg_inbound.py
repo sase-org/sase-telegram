@@ -270,6 +270,8 @@ def _handle_kill_command(args: str) -> None:
 
 def _handle_list_command() -> None:
     """Handle .list — show all currently running agents."""
+    import html
+
     from sase.agent_names import list_running_agents
 
     chat_id = credentials.get_chat_id()
@@ -279,25 +281,34 @@ def _handle_list_command() -> None:
         telegram_client.send_message(chat_id, "No running agents.")
         return
 
-    lines: list[str] = [f"{len(agents)} running agent(s):\n"]
+    blocks: list[str] = [f"<b>{len(agents)} Running Agent(s)</b>"]
     for a in agents:
-        label = a.name or "(unnamed)"
-        model = a.model or "?"
-        parts = [f"  {label} — {model}, {a.duration}"]
+        label = html.escape(a.name or "(unnamed)")
+        model = html.escape(a.model or "?")
+
         details: list[str] = []
         if a.project:
-            details.append(a.project)
+            details.append(html.escape(a.project))
         if a.workspace_num is not None:
             details.append(f"ws#{a.workspace_num}")
         if a.pid is not None:
             details.append(f"PID {a.pid}")
         if a.approve:
             details.append("autonomous")
-        if details:
-            parts.append(f"    ({', '.join(details)})")
-        lines.append("\n".join(parts))
 
-    telegram_client.send_message(chat_id, "\n".join(lines))
+        block = f"<b>{label}</b>  {model}, {a.duration}"
+        if details:
+            block += f"\n{' · '.join(details)}"
+        if a.prompt:
+            snippet = a.prompt.replace("\n", " ")
+            if len(snippet) > 120:
+                snippet = snippet[:120] + "…"
+            block += f"\n<i>{html.escape(snippet)}</i>"
+        blocks.append(block)
+
+    telegram_client.send_message(
+        chat_id, "\n\n".join(blocks), parse_mode="HTML"
+    )
 
 
 def _handle_text_message(text: str) -> None:
