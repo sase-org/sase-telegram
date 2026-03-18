@@ -7,10 +7,13 @@ import tempfile
 from pathlib import Path
 from sase.notifications.models import Notification
 from sase_telegram.formatting import (
+    EXPANDABLE_THRESHOLD,
+    MAX_MESSAGE_LENGTH,
     NOTES_TRUNCATION_THRESHOLD,
-    PLAN_CONTENT_MAX,
     _convert_inline,
     _escape_code_entity,
+    _format_notes_text,
+    _wrap_expandable_blockquote,
     escape_markdown_v2,
     format_notification,
     markdown_to_telegram_v2,
@@ -196,9 +199,10 @@ class TestFormatPlanApproval:
         assert "Some content here" in text
         assert keyboard is not None
         assert len(keyboard.inline_keyboard) == 2
-        assert len(keyboard.inline_keyboard[0]) == 2  # Approve + Reject
+        assert len(keyboard.inline_keyboard[0]) == 3  # Approve + Reject + Epic
         assert "Approve" in keyboard.inline_keyboard[0][0].text
         assert "Reject" in keyboard.inline_keyboard[0][1].text
+        assert "Epic" in keyboard.inline_keyboard[0][2].text
         assert len(keyboard.inline_keyboard[1]) == 1  # Feedback
         assert "Feedback" in keyboard.inline_keyboard[1][0].text
         assert attachments == []
@@ -206,7 +210,7 @@ class TestFormatPlanApproval:
         Path(plan_file).unlink()
 
     def test_with_large_plan(self):
-        # Generate content that exceeds PLAN_CONTENT_MAX after conversion
+        # Generate content that exceeds MAX_MESSAGE_LENGTH after conversion
         large_content = "\n".join(f"## Section {i}\n\nContent line {i}." for i in range(200))
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(large_content)
@@ -220,8 +224,36 @@ class TestFormatPlanApproval:
         )
         text, keyboard, attachments = format_notification(n)
 
+        # Plan should be in expandable blockquote and truncated to fit
+        assert text.startswith("📋 *Plan Review*")
+        assert "**>" in text  # expandable blockquote marker
         assert "truncated" in text
+        assert len(text) <= MAX_MESSAGE_LENGTH
         assert plan_file in attachments
+        assert keyboard is not None
+
+        Path(plan_file).unlink()
+
+    def test_medium_plan_in_blockquote_no_truncation(self):
+        # Plan longer than EXPANDABLE_THRESHOLD but fits in one message
+        medium_content = "\n".join(f"## Step {i}\n\nDo thing {i}." for i in range(20))
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(medium_content)
+            plan_file = f.name
+
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[plan_file],
+        )
+        text, keyboard, attachments = format_notification(n)
+
+        # Should be in expandable blockquote but NOT truncated
+        assert "**>" in text
+        assert "||" in text
+        assert "truncated" not in text
+        assert attachments == []
         assert keyboard is not None
 
         Path(plan_file).unlink()
@@ -441,6 +473,49 @@ class TestFormatGeneric:
         assert attachments == []
 
 
+class TestExpandableBlockquote:
+    def test_single_line(self):
+        result = _wrap_expandable_blockquote("hello world")
+        assert result == "**>hello world||"
+
+    def test_multi_line(self):
+        result = _wrap_expandable_blockquote("line one\nline two\nline three")
+        assert result == "**>line one\n>line two\n>line three||"
+
+    def test_empty_string(self):
+        assert _wrap_expandable_blockquote("") == ""
+
+    def test_code_block_at_end(self):
+        # Code block closing ``` at end should put || on its own line
+        result = _wrap_expandable_blockquote("some code\n```")
+        assert result.endswith("\n>||")
+        assert "```||" not in result
+
+    def test_preserves_inner_formatting(self):
+        result = _wrap_expandable_blockquote("*bold*\n`code`")
+        assert result == "**>*bold*\n>`code`||"
+
+
+class TestFormatNotesText:
+    def test_short_notes_plain(self):
+        notes = ["Short note"]
+        result = _format_notes_text(notes)
+        assert "**>" not in result  # no blockquote
+        assert "Short note" in result
+
+    def test_long_notes_in_blockquote(self):
+        long_note = "x" * (EXPANDABLE_THRESHOLD + 100)
+        result = _format_notes_text([long_note])
+        assert result.startswith("**>")
+        assert "||" in result
+
+    def test_very_long_notes_truncated_in_blockquote(self):
+        long_note = "x" * (NOTES_TRUNCATION_THRESHOLD + 500)
+        result = _format_notes_text([long_note])
+        assert result.startswith("**>")
+        assert "see TUI for full output" in result
+
+
 class TestNoteTruncation:
     def test_short_notes_not_truncated(self):
         n = _make_notification(
@@ -460,6 +535,16 @@ class TestNoteTruncation:
         )
         text, _, _ = format_notification(n)
         assert "see TUI for full output" in text
+
+    def test_long_notes_use_expandable_blockquote(self):
+        long_note = "x" * (EXPANDABLE_THRESHOLD + 100)
+        n = _make_notification(
+            action="HITL",
+            sender="hitl",
+            notes=[long_note],
+        )
+        text, _, _ = format_notification(n)
+        assert "**>" in text  # expandable blockquote marker
 
     def test_long_generic_notes_truncated(self):
         long_note = "y" * (NOTES_TRUNCATION_THRESHOLD + 100)

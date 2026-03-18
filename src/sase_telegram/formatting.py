@@ -15,11 +15,11 @@ from sase_telegram import callback_data
 # Telegram message limit
 MAX_MESSAGE_LENGTH = 4096
 
-# Max chars of converted plan content before truncation
-PLAN_CONTENT_MAX = 3500
-
-# Truncation threshold for notes content in non-plan messages
+# Truncation threshold for notes/plan content (hard cap before blockquote wrapping)
 NOTES_TRUNCATION_THRESHOLD = 3500
+
+# Content longer than this is wrapped in an expandable blockquote (Bot API 7.4+)
+EXPANDABLE_THRESHOLD = 500
 
 # Max chars of prompt text to display in workflow-complete messages
 PROMPT_DISPLAY_MAX = 1000
@@ -197,12 +197,45 @@ def markdown_to_telegram_v2(md: str) -> str:
     return "\n".join(result)
 
 
-def _truncate_notes(notes: list[str], threshold: int = NOTES_TRUNCATION_THRESHOLD) -> str:
-    """Join notes and truncate if exceeding threshold."""
+def _wrap_expandable_blockquote(text: str) -> str:
+    """Wrap text in a Telegram MarkdownV2 expandable blockquote (Bot API 7.4+).
+
+    First line starts with ``**>``, subsequent lines with ``>``,
+    and the closing ``||`` is appended to the last line.
+    """
+    if not text:
+        return text
+    lines = text.split("\n")
+    result = [f"**>{lines[0]}"]
+    for line in lines[1:]:
+        result.append(f">{line}")
+    # If the last line could interfere with || (e.g. code block closing ```),
+    # put the closing marker on its own blockquote line.
+    if result[-1].rstrip().endswith("```"):
+        result.append(">||")
+    else:
+        result[-1] += "||"
+    return "\n".join(result)
+
+
+def _format_notes_text(
+    notes: list[str],
+    max_length: int = NOTES_TRUNCATION_THRESHOLD,
+) -> str:
+    """Format notes for Telegram, using expandable blockquote for long content.
+
+    Short notes are returned as escaped MarkdownV2 text.
+    Long notes (> EXPANDABLE_THRESHOLD) are wrapped in an expandable blockquote.
+    Very long notes (> max_length) are truncated before wrapping.
+    """
     text = "\n".join(notes)
-    if len(text) > threshold:
-        text = text[:threshold] + "\n\n... (see TUI for full output)"
-    return text
+    use_blockquote = len(text) > EXPANDABLE_THRESHOLD
+    if len(text) > max_length:
+        text = text[:max_length] + "\n\n... (see TUI for full output)"
+    escaped = escape_markdown_v2(text)
+    if use_blockquote:
+        return _wrap_expandable_blockquote(escaped)
+    return escaped
 
 
 def format_notification(
@@ -246,7 +279,7 @@ def _format_plan_approval(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     prefix = _notif_prefix(n)
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     attachments: list[str] = []
 
     plan_content = ""
@@ -259,18 +292,37 @@ def _format_plan_approval(
 
     if plan_content:
         converted = markdown_to_telegram_v2(plan_content)
-        if len(converted) > PLAN_CONTENT_MAX:
-            # Truncate at line boundary and attach full plan
-            trunc_pos = converted.rfind("\n", 0, PLAN_CONTENT_MAX)
-            if trunc_pos == -1:
-                trunc_pos = PLAN_CONTENT_MAX
-            converted = (
-                converted[:trunc_pos]
-                + f"\n\n{escape_markdown_v2('... (truncated, see attached)')}"
-            )
-            if n.files:
-                attachments.append(n.files[0])
-        text = f"📋 *Plan Review*\n\n{notes_text}\n\n{converted}"
+        header = f"📋 *Plan Review*\n\n{notes_text}\n\n"
+
+        if len(converted) > EXPANDABLE_THRESHOLD:
+            # Wrap plan in expandable blockquote for compact display
+            plan_block = _wrap_expandable_blockquote(converted)
+            text = f"{header}{plan_block}"
+
+            if len(text) > MAX_MESSAGE_LENGTH:
+                # Too long for one message — truncate and attach full PDF.
+                # Blockquote adds '>' per line, so overhead scales with line
+                # count.  Use 0.75 factor as a conservative estimate, then
+                # refine in a safety loop if still over the limit.
+                suffix = f"\n\n{escape_markdown_v2('... (truncated, see attached)')}"
+                budget = MAX_MESSAGE_LENGTH - len(header) - len(suffix)
+                target = int(budget * 0.75)
+                while target > 100:
+                    trunc_pos = converted.rfind("\n", 0, target)
+                    if trunc_pos == -1:
+                        trunc_pos = target
+                    plan_block = _wrap_expandable_blockquote(
+                        converted[:trunc_pos] + suffix
+                    )
+                    text = f"{header}{plan_block}"
+                    if len(text) <= MAX_MESSAGE_LENGTH:
+                        break
+                    target = int(target * 0.8)
+                if n.files:
+                    attachments.append(n.files[0])
+        else:
+            # Short plan — show inline without blockquote
+            text = f"{header}{converted}"
     else:
         text = f"📋 *Plan Review*\n\n{notes_text}"
 
@@ -304,7 +356,7 @@ def _format_plan_approval(
 
 def _format_hitl(n: Notification) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     prefix = _notif_prefix(n)
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     text = f"🔧 *HITL Request*\n\n{notes_text}"
 
     keyboard = InlineKeyboardMarkup(
@@ -332,7 +384,7 @@ def _format_user_question(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     prefix = _notif_prefix(n)
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     text = f"❓ *Question*\n\n{notes_text}"
 
     # Try to load question options from request file
@@ -380,7 +432,7 @@ def _format_workflow_complete(
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     from sase.llm_provider.registry import format_provider_model_label
 
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     agent_name = n.action_data.get("agent_name")
     has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
     icon = "✅✏️" if has_diff else "✅"
@@ -411,7 +463,7 @@ def _format_workflow_complete(
 def _format_error_digest(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     text = f"⚠️ *Error Digest*\n\n{notes_text}"
     attachments = [f for f in n.files if Path(f).exists()]
     return text, None, attachments
@@ -420,7 +472,7 @@ def _format_error_digest(
 def _format_image_generated(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     model = escape_markdown_v2(n.action_data.get("model", "gemini"))
     text = f"🖼️ *Image Generated* \\[{model}\\]\n\n{notes_text}"
     attachments = [f for f in n.files if Path(f).exists()]
@@ -431,6 +483,6 @@ def _format_generic(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     sender = escape_markdown_v2(n.sender)
-    notes_text = escape_markdown_v2(_truncate_notes(n.notes))
+    notes_text = _format_notes_text(n.notes)
     text = f"🔔 *{sender}*\n\n{notes_text}"
     return text, None, []
