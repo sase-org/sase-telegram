@@ -177,7 +177,7 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         else:
             name_line = ""
         meta = escape_markdown_v2(
-            f"PID {result.pid} • workspace #{result.workspace_num}"
+            f"workspace #{result.workspace_num}"
         )
         escaped_display = escape_markdown_v2(display)
         telegram_client.send_message(
