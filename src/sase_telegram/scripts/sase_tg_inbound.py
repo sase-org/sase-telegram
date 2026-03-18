@@ -251,6 +251,8 @@ def _handle_dot_command(text: str) -> None:
         _handle_kill_command(args)
     elif command == ".list":
         _handle_list_command()
+    elif command == ".listx":
+        _handle_listx_command()
     # Unknown commands are silently ignored (preserves original behavior)
 
 
@@ -304,6 +306,61 @@ def _handle_list_command() -> None:
             if len(snippet) > 120:
                 snippet = snippet[:120] + "…"
             block += f"\n<i>{html.escape(snippet)}</i>"
+        blocks.append(block)
+
+    telegram_client.send_message(
+        chat_id, "\n\n".join(blocks), parse_mode="HTML"
+    )
+
+
+def _handle_listx_command() -> None:
+    """Handle .listx — show done but not yet dismissed agents."""
+    import html
+
+    from sase.ace.dismissed_agents import load_dismissed_agents
+    from sase.ace.tui.models.agent_loader import load_all_agents
+
+    _DISMISSABLE_STATUSES = {"DONE", "FAILED", "PLAN DONE"}
+
+    chat_id = credentials.get_chat_id()
+    all_agents = load_all_agents()
+    dismissed = load_dismissed_agents()
+
+    done_agents = [
+        a
+        for a in all_agents
+        if a.status in _DISMISSABLE_STATUSES
+        and not a.is_workflow_child
+        and a.identity not in dismissed
+    ]
+
+    if not done_agents:
+        telegram_client.send_message(chat_id, "No done agents.")
+        return
+
+    blocks: list[str] = [f"<b>{len(done_agents)} Done Agent(s)</b>"]
+    for a in done_agents:
+        label = html.escape(a.agent_name or a.cl_name)
+        model = html.escape(a.model or "?")
+
+        details: list[str] = []
+        if a.status != "DONE":
+            details.append(a.status)
+        if a.effective_workspace_num is not None:
+            details.append(f"ws#{a.effective_workspace_num}")
+
+        block = f"<b>{label}</b>  {model}, {a.duration_display}"
+        if details:
+            block += f"\n{' · '.join(details)}"
+
+        # Show raw xprompt snippet if available
+        raw = a.get_raw_xprompt_content()
+        if raw:
+            snippet = raw.replace("\n", " ").strip()
+            if len(snippet) > 120:
+                snippet = snippet[:120] + "…"
+            block += f"\n<i>{html.escape(snippet)}</i>"
+
         blocks.append(block)
 
     telegram_client.send_message(
