@@ -390,9 +390,10 @@ def _format_workflow_complete(
     ))
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
-        text = f"{icon} *{label} Complete* \\[{escaped_name}\\]\n\n{notes_text}"
+        name_line = f"\n▸ *agent:* `{escaped_name}`"
     else:
-        text = f"{icon} *{label} Complete*\n\n{notes_text}"
+        name_line = ""
+    text = f"{icon} *{label} Complete*{name_line}\n\n{notes_text}"
 
     prompt = n.action_data.get("prompt")
     if prompt:

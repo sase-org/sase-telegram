@@ -330,7 +330,7 @@ class TestFormatWorkflowComplete:
         text, keyboard, attachments = format_notification(n)
 
         assert "Complete" in text
-        assert "\\[c\\]" in text
+        assert "▸ *agent:* `c`" in text
         assert keyboard is None
 
     def test_shows_provider_model_label(self):
@@ -346,7 +346,7 @@ class TestFormatWorkflowComplete:
         text, _, _ = format_notification(n)
 
         assert "CLAUDE\\(opus\\) Complete" in text
-        assert "\\[c\\]" in text
+        assert "▸ *agent:* `c`" in text
 
     def test_diff_icon_when_diff_present(self):
         with tempfile.NamedTemporaryFile(suffix=".diff", delete=False) as f:

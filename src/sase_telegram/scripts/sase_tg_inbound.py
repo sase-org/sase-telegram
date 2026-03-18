@@ -170,14 +170,19 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         result = launch_agent_from_cwd(prompt)
         display = prompt[:200] + ("..." if len(prompt) > 200 else "")
         escaped_label = escape_markdown_v2(label)
-        name_part = f" \\[{escape_markdown_v2(auto_name)}\\]" if auto_name else ""
+        agent_name = directives.name or auto_name
+        if agent_name:
+            escaped_name = escape_markdown_v2(agent_name)
+            name_line = f"\n▸ *agent:* `{escaped_name}`"
+        else:
+            name_line = ""
         meta = escape_markdown_v2(
             f"PID {result.pid} • workspace #{result.workspace_num}"
         )
         escaped_display = escape_markdown_v2(display)
         telegram_client.send_message(
             chat_id,
-            f"🚀 *{escaped_label} Launched*{name_part}\n{meta}\n\n{escaped_display}",
+            f"🚀 *{escaped_label} Launched*{name_line}\n{meta}\n\n{escaped_display}",
             parse_mode="MarkdownV2",
         )
     except Exception as e:
