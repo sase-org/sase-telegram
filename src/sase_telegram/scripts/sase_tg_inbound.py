@@ -9,6 +9,7 @@ from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
 from sase_telegram.callback_data import decode
+from sase_telegram.formatting import escape_markdown_v2
 from sase_telegram.inbound import (
     IMAGES_DIR,
     ResponseAction,
@@ -168,10 +169,16 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
     try:
         result = launch_agent_from_cwd(prompt)
         display = prompt[:200] + ("..." if len(prompt) > 200 else "")
-        name_label = f" [{auto_name}]" if auto_name else ""
+        escaped_label = escape_markdown_v2(label)
+        name_part = f" \\[{escape_markdown_v2(auto_name)}\\]" if auto_name else ""
+        meta = escape_markdown_v2(
+            f"PID {result.pid} • workspace #{result.workspace_num}"
+        )
+        escaped_display = escape_markdown_v2(display)
         telegram_client.send_message(
             chat_id,
-            f"{label} launched{name_label} (PID {result.pid}, workspace #{result.workspace_num})\n\n{display}",
+            f"🚀 *{escaped_label} Launched*{name_part}\n{meta}\n\n{escaped_display}",
+            parse_mode="MarkdownV2",
         )
     except Exception as e:
         telegram_client.send_message(
