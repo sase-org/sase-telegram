@@ -394,6 +394,10 @@ def _handle_text_message(text: str) -> None:
         _handle_dot_command(text)
         return
 
+    # Ignore Telegram bot commands (e.g. /start, /help)
+    if text.startswith("/"):
+        return
+
     # Launch a new agent with this text as the prompt
     _launch_agent(text)
 

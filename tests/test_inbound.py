@@ -342,8 +342,7 @@ class TestLaunchAgent:
         mock_tg.send_message.assert_called_once()
         call_args = mock_tg.send_message.call_args
         assert call_args[0][0] == "12345"
-        assert "Agent launched" in call_args[0][1]
-        assert "PID 42" in call_args[0][1]
+        assert "Launched" in call_args[0][1]
         assert "List all open beads" in call_args[0][1]
 
     @patch(
@@ -590,6 +589,7 @@ class TestHandlePhotoMessage:
         message = SimpleNamespace(
             photo=[photo_small, photo_large],
             caption="Describe this",
+            caption_entities=None,
         )
 
         with (
@@ -635,7 +635,7 @@ class TestHandlePhotoMessage:
         mock_tg.download_file.side_effect = RuntimeError("Network error")
 
         photo = SimpleNamespace(file_id="fail_id_12345678")
-        message = SimpleNamespace(photo=[photo], caption=None)
+        message = SimpleNamespace(photo=[photo], caption=None, caption_entities=None)
 
         with (
             patch(

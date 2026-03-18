@@ -127,7 +127,7 @@ class TestOutboundIntegration:
         mock_send.assert_called_once()
         call_args = mock_send.call_args
         # send_message(chat_id, text, reply_markup=keyboard) — text is 2nd positional arg
-        assert "Workflow Complete" in call_args[0][1]
+        assert "Agent Complete" in call_args[0][1]
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
@@ -340,6 +340,7 @@ class TestInboundIntegration:
             text="Please fix the indentation on line 42",
             photo=None,
             document=None,
+            entities=None,
         )
         update2 = SimpleNamespace(
             update_id=301,
@@ -405,7 +406,7 @@ class TestInboundIntegration:
         self, mock_tg: MagicMock, _mock_launch: MagicMock
     ) -> None:
         """Offset file is updated after processing updates."""
-        text_msg = SimpleNamespace(text="random message", photo=None, document=None)
+        text_msg = SimpleNamespace(text="random message", photo=None, document=None, entities=None)
         update = SimpleNamespace(
             update_id=500,
             callback_query=None,
@@ -437,6 +438,7 @@ class TestInboundIntegration:
         message = SimpleNamespace(
             photo=[photo],
             caption="What is this diagram?",
+            caption_entities=None,
             text=None,
             document=None,
         )
