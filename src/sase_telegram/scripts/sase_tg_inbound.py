@@ -173,7 +173,7 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         agent_name = directives.name or auto_name
         if agent_name:
             escaped_name = escape_markdown_v2(agent_name)
-            name_line = f"\n▸ *agent:* `{escaped_name}`"
+            name_line = f"  _@{escaped_name}_"
         else:
             name_line = ""
         meta = escape_markdown_v2(

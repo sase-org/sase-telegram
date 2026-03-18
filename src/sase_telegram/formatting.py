@@ -390,7 +390,7 @@ def _format_workflow_complete(
     ))
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
-        name_line = f"\n▸ *agent:* `{escaped_name}`"
+        name_line = f"  _@{escaped_name}_"
     else:
         name_line = ""
     text = f"{icon} *{label} Complete*{name_line}\n\n{notes_text}"
