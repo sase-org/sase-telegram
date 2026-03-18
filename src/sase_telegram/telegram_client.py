@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InlineKeyboardMarkup, Message, Update
-from telegram.error import NetworkError, RetryAfter, TimedOut
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
 from sase_telegram.credentials import get_bot_token
 
@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2.0  # seconds
+_MAX_MESSAGE_LENGTH = 4096
 
 
 def _run_async(coro: Any) -> Any:
@@ -53,6 +54,8 @@ def _with_retry(fn: Callable[..., Any]) -> Callable[..., Any]:
                     _MAX_RETRIES,
                 )
                 time.sleep(wait)
+            except BadRequest:
+                raise
             except (TimedOut, NetworkError) as e:
                 if attempt == _MAX_RETRIES:
                     raise
@@ -75,14 +78,39 @@ def _get_bot() -> Bot:
     return Bot(token=get_bot_token())
 
 
-@_with_retry
-def send_message(
+def _split_message(text: str, limit: int = _MAX_MESSAGE_LENGTH) -> list[str]:
+    """Split a message into chunks that fit within Telegram's character limit.
+
+    Splits on newline boundaries first, then word boundaries.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        # Try to split at the last newline before the limit
+        split_at = text.rfind("\n", 0, limit)
+        if split_at == -1:
+            # No newline found — try splitting at a space
+            split_at = text.rfind(" ", 0, limit)
+        if split_at == -1:
+            # No good break point — hard split
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
+def _send_single_message(
     chat_id: str,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
 ) -> Message:
-    """Send a text message to a Telegram chat."""
+    """Send a single text message, falling back to plain text on parse errors."""
     try:
         return _run_async(
             _get_bot().send_message(
@@ -108,6 +136,31 @@ def send_message(
                 )
             )
         raise
+
+
+@_with_retry
+def send_message(
+    chat_id: str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+) -> Message:
+    """Send a text message to a Telegram chat.
+
+    Messages exceeding Telegram's 4096-character limit are automatically
+    split into multiple messages.  Only the last chunk carries the
+    ``reply_markup`` so that inline keyboards appear once at the end.
+    """
+    chunks = _split_message(text)
+    last_msg: Message | None = None
+    for i, chunk in enumerate(chunks):
+        # Only attach reply_markup to the last chunk
+        markup = reply_markup if i == len(chunks) - 1 else None
+        last_msg = _send_single_message(
+            chat_id=chat_id, text=chunk, reply_markup=markup, parse_mode=parse_mode
+        )
+    assert last_msg is not None  # noqa: S101 — chunks is never empty
+    return last_msg
 
 
 @_with_retry
