@@ -343,7 +343,6 @@ def _handle_listx_command() -> None:
         for a in all_agents
         if a.status in _DISMISSABLE_STATUSES
         and not a.is_workflow_child
-        and not a.approve
         and a.identity not in dismissed
     ]
 
