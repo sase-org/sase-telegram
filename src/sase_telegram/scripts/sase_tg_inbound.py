@@ -115,22 +115,15 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     pending_actions.remove(response.notif_id_prefix)
 
 
-def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
-    """Handle a Kill button press from a launch message."""
-    from sase.agent_names import kill_named_agent
+def _send_kill_result(name: str, result: Any, kill_info: dict[str, Any] | None) -> None:
+    """Send a kill confirmation (or failure) message to Telegram.
 
+    Shared by both the Kill button callback and the .kill dot command.
+    """
     chat_id = credentials.get_chat_id()
-    kill_key = f"kill-{agent_name}"
-    kill_info = pending_actions.get(kill_key)
+    kill_key = f"kill-{name}"
 
-    result = kill_named_agent(agent_name)
-
-    telegram_client.answer_callback_query(
-        callback_query.id,
-        "Agent killed" if result.success else result.message,
-    )
-
-    # Remove keyboard from the launch message
+    # Remove keyboard from the original launch message
     if kill_info:
         try:
             telegram_client.edit_message_reply_markup(
@@ -142,7 +135,7 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
             pass  # Message may have been deleted or already edited
 
     if result.success:
-        escaped_name = escape_markdown_v2(agent_name)
+        escaped_name = escape_markdown_v2(name)
         keyboard: InlineKeyboardMarkup | None = None
         if kill_info and kill_info.get("prompt"):
             keyboard = InlineKeyboardMarkup(
@@ -171,6 +164,21 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
 
     if kill_info:
         pending_actions.remove(kill_key)
+
+
+def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
+    """Handle a Kill button press from a launch message."""
+    from sase.agent_names import kill_named_agent
+
+    kill_key = f"kill-{agent_name}"
+    kill_info = pending_actions.get(kill_key)
+    result = kill_named_agent(agent_name)
+
+    telegram_client.answer_callback_query(
+        callback_query.id,
+        "Agent killed" if result.success else result.message,
+    )
+    _send_kill_result(agent_name, result, kill_info)
 
 
 def _launch_agent(prompt: str) -> None:
@@ -381,7 +389,7 @@ def _handle_dot_command(text: str) -> None:
 
 
 def _handle_kill_command(args: str) -> None:
-    """Handle /kill <agent_name> — terminate a running agent by name."""
+    """Handle .kill <agent_name> — terminate a running agent by name."""
     from sase.agent_names import kill_named_agent
 
     chat_id = credentials.get_chat_id()
@@ -390,8 +398,10 @@ def _handle_kill_command(args: str) -> None:
         telegram_client.send_message(chat_id, "Usage: .kill <agent_name>")
         return
 
+    kill_key = f"kill-{name}"
+    kill_info = pending_actions.get(kill_key)
     result = kill_named_agent(name)
-    telegram_client.send_message(chat_id, result.message)
+    _send_kill_result(name, result, kill_info)
 
 
 def _handle_list_command() -> None:
