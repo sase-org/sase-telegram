@@ -363,7 +363,11 @@ class TestFormatWorkflowComplete:
 
         assert "Complete" in text
         assert "_@c_" in text
-        assert keyboard is None
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "📋 Resume"
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#resume:c "
 
     def test_shows_provider_model_label(self):
         n = _make_notification(

@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.notifications.models import Notification
 
@@ -478,7 +478,25 @@ def _format_workflow_complete(
     attachments = [
         str(p) for f in n.files if (p := Path(f).expanduser()).exists()
     ]
-    return text, None, attachments
+
+    keyboard: InlineKeyboardMarkup | None = None
+    if agent_name:
+        from sase.xprompt import extract_vcs_workflow_tag
+
+        resume_text = f"#resume:{agent_name} "
+        raw_prompt = n.action_data.get("prompt", "")
+        if raw_prompt:
+            vcs_tag = extract_vcs_workflow_tag(raw_prompt)
+            if vcs_tag:
+                resume_text = f"{vcs_tag}{resume_text}"
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "📋 Resume",
+                copy_text=CopyTextButton(text=resume_text),
+            ),
+        ]])
+
+    return text, keyboard, attachments
 
 
 def _format_error_digest(
