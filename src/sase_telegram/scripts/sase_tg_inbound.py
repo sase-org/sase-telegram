@@ -186,11 +186,17 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         if agent_name:
             from sase.xprompt import extract_vcs_workflow_tag
 
-            wait_text = f"#{agent_name} "
+            vcs_prefix = ""
             vcs_tag = extract_vcs_workflow_tag(prompt)
             if vcs_tag:
-                wait_text = f"{vcs_tag}{wait_text}"
+                vcs_prefix = f"{vcs_tag}"
+            resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
+            wait_text = f"{vcs_prefix}%w:{agent_name} "
             keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "📋 Resume",
+                    copy_text=CopyTextButton(text=resume_text),
+                ),
                 InlineKeyboardButton(
                     "📋 Wait",
                     copy_text=CopyTextButton(text=wait_text),

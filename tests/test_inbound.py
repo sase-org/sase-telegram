@@ -478,8 +478,11 @@ class TestLaunchAgent:
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
         assert len(buttons) == 1
-        assert buttons[0][0].text == "📋 Wait"
-        assert buttons[0][0].copy_text.text == "#c "
+        assert len(buttons[0]) == 2
+        assert buttons[0][0].text == "📋 Resume"
+        assert buttons[0][0].copy_text.text == "#resume:c %w:c "
+        assert buttons[0][1].text == "📋 Wait"
+        assert buttons[0][1].copy_text.text == "%w:c "
 
     @patch(
         "sase_telegram.scripts.sase_tg_inbound.telegram_client"
@@ -517,7 +520,10 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].copy_text.text == "#gh:sase #foo "
+        assert buttons[0][0].text == "📋 Resume"
+        assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
+        assert buttons[0][1].text == "📋 Wait"
+        assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
 
 class TestAwaitingFeedbackState:
