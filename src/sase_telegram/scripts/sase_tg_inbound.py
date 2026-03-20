@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
-from sase_telegram.callback_data import decode
+from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase_telegram.formatting import escape_markdown_v2
@@ -52,11 +52,18 @@ def _write_response(response: ResponseAction) -> None:
     response.response_path.write_text(json.dumps(response.response_data, indent=2))
 
 
-def _handle_callback(
-    callback_query: Any, pending: dict[str, Any]
-) -> None:
+def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle an inline keyboard button press."""
     data_str: str = callback_query.data
+
+    # Handle kill callbacks (agent management, not notification-based)
+    try:
+        cb = decode(data_str)
+        if cb.action_type == "kill":
+            _handle_kill_from_callback(callback_query, cb.notif_id_prefix)
+            return
+    except ValueError:
+        pass
 
     # Check two-step first (feedback/custom -> save awaiting state)
     twostep = process_callback_twostep(data_str, pending)
@@ -81,9 +88,7 @@ def _handle_callback(
         try:
             decode(data_str)
         except ValueError:
-            telegram_client.answer_callback_query(
-                callback_query.id, "Invalid callback"
-            )
+            telegram_client.answer_callback_query(callback_query.id, "Invalid callback")
             return
         telegram_client.answer_callback_query(
             callback_query.id, "This action has already been handled"
@@ -108,6 +113,64 @@ def _handle_callback(
         )
 
     pending_actions.remove(response.notif_id_prefix)
+
+
+def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
+    """Handle a Kill button press from a launch message."""
+    from sase.agent_names import kill_named_agent
+
+    chat_id = credentials.get_chat_id()
+    kill_key = f"kill-{agent_name}"
+    kill_info = pending_actions.get(kill_key)
+
+    result = kill_named_agent(agent_name)
+
+    telegram_client.answer_callback_query(
+        callback_query.id,
+        "Agent killed" if result.success else result.message,
+    )
+
+    # Remove keyboard from the launch message
+    if kill_info:
+        try:
+            telegram_client.edit_message_reply_markup(
+                kill_info["chat_id"],
+                kill_info["message_id"],
+                reply_markup=None,
+            )
+        except Exception:
+            pass  # Message may have been deleted or already edited
+
+    if result.success:
+        escaped_name = escape_markdown_v2(agent_name)
+        keyboard: InlineKeyboardMarkup | None = None
+        if kill_info and kill_info.get("prompt"):
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "📋 Retry",
+                            copy_text=CopyTextButton(text=kill_info["prompt"]),
+                        ),
+                    ]
+                ]
+            )
+        telegram_client.send_message(
+            chat_id,
+            f"💀 *Agent @{escaped_name} terminated*",
+            parse_mode="MarkdownV2",
+            reply_markup=keyboard,
+        )
+    else:
+        escaped_msg = escape_markdown_v2(result.message)
+        telegram_client.send_message(
+            chat_id,
+            f"⚠️ *Kill failed:* {escaped_msg}",
+            parse_mode="MarkdownV2",
+        )
+
+    if kill_info:
+        pending_actions.remove(kill_key)
 
 
 def _launch_agent(prompt: str) -> None:
@@ -152,6 +215,9 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
             expanded = prompt
     _, directives = extract_prompt_directives(expanded)
 
+    # Save original prompt before modification (for kill-retry copy button)
+    original_prompt = prompt
+
     # Auto-assign a name if the user didn't provide one
     auto_name: str | None = None
     if directives.name is None:
@@ -178,9 +244,7 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
             name_line = f"  _@{escaped_name}_"
         else:
             name_line = ""
-        meta = escape_markdown_v2(
-            f"workspace #{result.workspace_num}"
-        )
+        meta = escape_markdown_v2(f"workspace #{result.workspace_num}")
         escaped_display = escape_markdown_v2(display)
         keyboard: InlineKeyboardMarkup | None = None
         if agent_name:
@@ -192,22 +256,43 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
                 vcs_prefix = f"{vcs_tag}"
             resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
             wait_text = f"{vcs_prefix}%w:{agent_name} "
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "📋 Resume",
-                    copy_text=CopyTextButton(text=resume_text),
-                ),
-                InlineKeyboardButton(
-                    "📋 Wait",
-                    copy_text=CopyTextButton(text=wait_text),
-                ),
-            ]])
-        telegram_client.send_message(
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "📋 Resume",
+                            copy_text=CopyTextButton(text=resume_text),
+                        ),
+                        InlineKeyboardButton(
+                            "📋 Wait",
+                            copy_text=CopyTextButton(text=wait_text),
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🗡️ Kill",
+                            callback_data=encode("kill", agent_name, "go"),
+                        ),
+                    ],
+                ]
+            )
+        msg = telegram_client.send_message(
             chat_id,
             f"🚀 *{escaped_label} Launched*{name_line}\n{meta}\n\n{escaped_display}",
             parse_mode="MarkdownV2",
             reply_markup=keyboard,
         )
+        if agent_name:
+            pending_actions.add(
+                f"kill-{agent_name}",
+                {
+                    "action": "kill",
+                    "agent_name": agent_name,
+                    "prompt": original_prompt,
+                    "message_id": msg.message_id,
+                    "chat_id": chat_id,
+                },
+            )
     except Exception as e:
         telegram_client.send_message(
             chat_id,
@@ -245,9 +330,11 @@ def _handle_photo_message(message: Any) -> None:
         telegram_client.send_message(chat_id, f"Failed to download photo: {e}")
         return
 
-    caption = reconstruct_code_markers(
-        message.caption, message.caption_entities
-    ) if message.caption else message.caption
+    caption = (
+        reconstruct_code_markers(message.caption, message.caption_entities)
+        if message.caption
+        else message.caption
+    )
     prompt = build_photo_prompt(dest, caption)
     _launch_agent(prompt)
 
@@ -269,9 +356,11 @@ def _handle_document_image(message: Any) -> None:
         telegram_client.send_message(chat_id, f"Failed to download image: {e}")
         return
 
-    caption = reconstruct_code_markers(
-        message.caption, message.caption_entities
-    ) if message.caption else message.caption
+    caption = (
+        reconstruct_code_markers(message.caption, message.caption_entities)
+        if message.caption
+        else message.caption
+    )
     prompt = build_photo_prompt(dest, caption)
     _launch_agent(prompt)
 
@@ -343,9 +432,7 @@ def _handle_list_command() -> None:
             block += f"\n<i>{html.escape(snippet)}</i>"
         blocks.append(block)
 
-    telegram_client.send_message(
-        chat_id, "\n\n".join(blocks), parse_mode="HTML"
-    )
+    telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
 
 
 def _handle_listx_command() -> None:
@@ -398,9 +485,7 @@ def _handle_listx_command() -> None:
 
         blocks.append(block)
 
-    telegram_client.send_message(
-        chat_id, "\n\n".join(blocks), parse_mode="HTML"
-    )
+    telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
 
 
 def _handle_text_message(text: str) -> None:

@@ -177,9 +177,7 @@ class TestProcessCallbackTwostep:
         assert info["artifacts_dir"] == str(tmp_path)
 
     def test_question_custom(self, tmp_path: Path) -> None:
-        request = {
-            "questions": [{"question": "What do you think?", "options": []}]
-        }
+        request = {"questions": [{"question": "What do you think?", "options": []}]}
         (tmp_path / "question_request.json").write_text(json.dumps(request))
 
         pending = _make_pending_question("ques0001", str(tmp_path))
@@ -296,15 +294,9 @@ class TestHandleTextMessageAgentLaunch:
             {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
         )
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-            ) as mock_launch,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._write_response"
-            ),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions"
-            ),
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound._write_response"),
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
         ):
             _handle_text_message("Some feedback text")
             mock_launch.assert_not_called()
@@ -313,16 +305,14 @@ class TestHandleTextMessageAgentLaunch:
 class TestLaunchAgent:
     """Tests for the _launch_agent helper (script module)."""
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_success_sends_confirmation(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -345,16 +335,14 @@ class TestLaunchAgent:
         assert "Launched" in call_args[0][1]
         assert "List all open beads" in call_args[0][1]
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_failure_sends_error(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -373,16 +361,14 @@ class TestLaunchAgent:
         assert "Failed to launch agent" in call_args[0][1]
         assert "No workspace available" in call_args[0][1]
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_auto_name_prepended_when_no_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -410,16 +396,14 @@ class TestLaunchAgent:
         assert launched_prompt.startswith("%n:c ")
         assert "List all open beads" in launched_prompt
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_no_auto_name_when_name_directive_present(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -441,16 +425,14 @@ class TestLaunchAgent:
         assert not launched_prompt.startswith("%n:foo %n:")
         assert "%n:foo" in launched_prompt
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_launch_includes_wait_keyboard(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -477,23 +459,24 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert len(buttons) == 1
+        assert len(buttons) == 2
         assert len(buttons[0]) == 2
         assert buttons[0][0].text == "📋 Resume"
         assert buttons[0][0].copy_text.text == "#resume:c %w:c "
         assert buttons[0][1].text == "📋 Wait"
         assert buttons[0][1].copy_text.text == "%w:c "
+        assert len(buttons[1]) == 1
+        assert buttons[1][0].text == "🗡️ Kill"
+        assert buttons[1][0].callback_data == "kill:c:go"
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_launch_wait_keyboard_includes_vcs_tag(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
+        mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_single_agent,
@@ -646,12 +629,8 @@ class TestReconstructCodeMarkers:
 class TestHandlePhotoMessage:
     """Tests for _handle_photo_message (script module)."""
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_downloads_highest_res_and_launches_agent(
         self,
         mock_creds: MagicMock,
@@ -681,9 +660,7 @@ class TestHandlePhotoMessage:
                 "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
                 tmp_path,
             ),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-            ) as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
         ):
             _handle_photo_message(message)
 
@@ -697,12 +674,8 @@ class TestHandlePhotoMessage:
         prompt = mock_launch.call_args[0][0]
         assert "Describe this" in prompt
 
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
-    )
-    @patch(
-        "sase_telegram.scripts.sase_tg_inbound.credentials"
-    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_download_failure_sends_error(
         self,
         mock_creds: MagicMock,
@@ -726,9 +699,7 @@ class TestHandlePhotoMessage:
                 "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
                 tmp_path,
             ),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-            ) as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
         ):
             _handle_photo_message(message)
 
