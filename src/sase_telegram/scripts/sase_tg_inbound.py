@@ -149,7 +149,7 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
                 [
                     [
                         InlineKeyboardButton(
-                            "📋 Retry",
+                            "🔄 Retry",
                             copy_text=CopyTextButton(text=kill_info["prompt"]),
                         ),
                     ]
