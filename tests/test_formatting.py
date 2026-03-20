@@ -211,7 +211,9 @@ class TestFormatPlanApproval:
 
     def test_with_large_plan(self):
         # Generate content that exceeds MAX_MESSAGE_LENGTH after conversion
-        large_content = "\n".join(f"## Section {i}\n\nContent line {i}." for i in range(200))
+        large_content = "\n".join(
+            f"## Section {i}\n\nContent line {i}." for i in range(200)
+        )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(large_content)
             plan_file = f.name
@@ -502,11 +504,11 @@ class TestExpandableBlockquote:
     def test_blank_lines_use_zwsp(self):
         """Blank lines become zero-width spaces so Telegram keeps one blockquote."""
         result = _wrap_expandable_blockquote("header\n\nbody")
-        assert result == "**>header\n>\u200B\n>body||"
+        assert result == "**>header\n>\u200b\n>body||"
 
     def test_consecutive_blank_lines_collapsed(self):
         result = _wrap_expandable_blockquote("a\n\n\n\nb")
-        assert result == "**>a\n>\u200B\n>b||"
+        assert result == "**>a\n>\u200b\n>b||"
 
     def test_leading_trailing_blanks_stripped(self):
         result = _wrap_expandable_blockquote("\n\nfirst\nlast\n\n")

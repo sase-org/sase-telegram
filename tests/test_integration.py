@@ -78,9 +78,7 @@ class TestOutboundIntegration:
     """Integration tests for the outbound main() entry point."""
 
     @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=False)
-    def test_exits_early_when_user_active(
-        self, _mock_idle: MagicMock
-    ) -> None:
+    def test_exits_early_when_user_active(self, _mock_idle: MagicMock) -> None:
         """When user is active, no messages should be sent."""
         result = outbound_main(["--dry-run"])
         assert result == 0
@@ -113,7 +111,9 @@ class TestOutboundIntegration:
 
         # Set up high-water mark in the past
         LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_SENT_TEST_FILE.write_text(str(datetime(2024, 1, 1, tzinfo=UTC).timestamp()))
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
 
         n = _make_notification(
             sender="crs",
@@ -146,7 +146,9 @@ class TestOutboundIntegration:
         mock_send.return_value = MagicMock(message_id=99)
 
         LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_SENT_TEST_FILE.write_text(str(datetime(2024, 1, 1, tzinfo=UTC).timestamp()))
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
 
         n = _make_notification(
             action="PlanApproval",
@@ -170,10 +172,14 @@ class TestOutboundIntegration:
         assert pending[prefix]["action"] == "PlanApproval"
         assert pending[prefix]["message_id"] == 99
 
-    def test_dry_run_prints_without_sending(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_dry_run_prints_without_sending(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Dry run outputs notification info without calling Telegram API."""
         LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        LAST_SENT_TEST_FILE.write_text(str(datetime(2024, 1, 1, tzinfo=UTC).timestamp()))
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
 
         n = _make_notification(sender="crs", notes=["Done!"])
 
@@ -360,9 +366,7 @@ class TestInboundIntegration:
         assert data["feedback"] == "Please fix the indentation on line 42"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_expired_action_handled_gracefully(
-        self, mock_tg: MagicMock
-    ) -> None:
+    def test_expired_action_handled_gracefully(self, mock_tg: MagicMock) -> None:
         """Callback for expired action returns 'expired' message."""
         from sase_telegram import pending_actions
 
@@ -395,7 +399,9 @@ class TestInboundIntegration:
         assert result == 0
 
         # Verify the "expired" response was sent
-        mock_tg.answer_callback_query.assert_called_with("cb_4", "This request has expired")
+        mock_tg.answer_callback_query.assert_called_with(
+            "cb_4", "This request has expired"
+        )
 
         # Pending action should be cleaned up
         assert pending_actions.get("gone0001") is None
@@ -406,7 +412,9 @@ class TestInboundIntegration:
         self, mock_tg: MagicMock, _mock_launch: MagicMock
     ) -> None:
         """Offset file is updated after processing updates."""
-        text_msg = SimpleNamespace(text="random message", photo=None, document=None, entities=None)
+        text_msg = SimpleNamespace(
+            text="random message", photo=None, document=None, entities=None
+        )
         update = SimpleNamespace(
             update_id=500,
             callback_query=None,

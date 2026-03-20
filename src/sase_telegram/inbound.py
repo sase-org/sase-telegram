@@ -108,9 +108,7 @@ def clear_awaiting_feedback() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _get_question_info(
-    response_dir: str, idx: int
-) -> tuple[str, str]:
+def _get_question_info(response_dir: str, idx: int) -> tuple[str, str]:
     """Return (question_text, option_label) from question_request.json."""
     request_file = Path(response_dir) / "question_request.json"
     request_data = json.loads(request_file.read_text())

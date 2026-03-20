@@ -135,7 +135,9 @@ def _log_send_diagnostics(notifications: list) -> None:
 
     try:
         now = time.time()
-        now_str = datetime.fromtimestamp(now, tz=EASTERN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now_str = datetime.fromtimestamp(now, tz=EASTERN_TZ).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
         lines = [f"\n=== SEND @ {now_str} ({now:.3f}) ==="]
 
         # Read raw state files
@@ -158,7 +160,9 @@ def _log_send_diagnostics(notifications: list) -> None:
         # Notification details
         lines.append(f"  notifications_count: {len(notifications)}")
         for n in notifications[:5]:  # cap at 5 for brevity
-            lines.append(f"    {n.id[:8]} sender={n.sender} ts={n.timestamp} action={n.action}")
+            lines.append(
+                f"    {n.id[:8]} sender={n.sender} ts={n.timestamp} action={n.action}"
+            )
 
         _DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_DEBUG_LOG, "a") as f:
@@ -265,18 +269,14 @@ def _run_outbound(args: argparse.Namespace) -> int:
                 # attaching the entire chat history.
                 actual_path = file_path
                 if _is_chat_file(file_path):
-                    response_file, _ = _make_response_only_file(
-                        file_path
-                    )
+                    response_file, _ = _make_response_only_file(file_path)
                     if response_file:
                         response_temps.append(response_file)
                         actual_path = str(response_file)
 
                         # Embed diff content into the response markdown
                         if diff_paths:
-                            _append_diff_to_markdown(
-                                response_file, diff_paths
-                            )
+                            _append_diff_to_markdown(response_file, diff_paths)
                             diff_embedded = True
 
                 if _is_image_file(actual_path):

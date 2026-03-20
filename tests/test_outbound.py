@@ -142,9 +142,7 @@ class TestIsImageFile:
 
 class TestAppendDiffToMarkdown:
     def test_appends_diff_content(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as resp:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as resp:
             resp.write("# Response\n\nSome content.")
 
         with tempfile.NamedTemporaryFile(
@@ -164,9 +162,7 @@ class TestAppendDiffToMarkdown:
         Path(diff.name).unlink()
 
     def test_skips_empty_diff(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as resp:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as resp:
             resp.write("Response content.")
 
         with tempfile.NamedTemporaryFile(
@@ -183,9 +179,7 @@ class TestAppendDiffToMarkdown:
         Path(diff.name).unlink()
 
     def test_skips_nonexistent_diff(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as resp:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as resp:
             resp.write("Response content.")
 
         _append_diff_to_markdown(Path(resp.name), ["/nonexistent/file.diff"])

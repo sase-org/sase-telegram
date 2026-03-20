@@ -69,7 +69,7 @@ def _convert_inline(text: str) -> str:
     for match in _INLINE_PATTERN.finditer(text):
         # Escape plain text before this match
         if match.start() > pos:
-            parts.append(escape_markdown_v2(text[pos:match.start()]))
+            parts.append(escape_markdown_v2(text[pos : match.start()]))
 
         if match.group(1):  # inline code
             code = match.group(1)[1:-1]
@@ -219,10 +219,10 @@ def _wrap_expandable_blockquote(text: str) -> str:
             lines.append(line)
             prev_blank = False
         elif not prev_blank:
-            lines.append("\u200B")
+            lines.append("\u200b")
             prev_blank = True
     # Drop trailing blank placeholder
-    while lines and lines[-1] == "\u200B":
+    while lines and lines[-1] == "\u200b":
         lines.pop()
     if not lines:
         return text
@@ -457,10 +457,12 @@ def _format_workflow_complete(
     agent_name = n.action_data.get("agent_name")
     has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
     icon = "✅✏️" if has_diff else "✅"
-    label = escape_markdown_v2(format_provider_model_label(
-        n.action_data.get("llm_provider"),
-        n.action_data.get("model"),
-    ))
+    label = escape_markdown_v2(
+        format_provider_model_label(
+            n.action_data.get("llm_provider"),
+            n.action_data.get("model"),
+        )
+    )
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
         name_line = f"  _@{escaped_name}_"
@@ -470,14 +472,14 @@ def _format_workflow_complete(
 
     prompt = n.action_data.get("prompt")
     if prompt:
-        truncated = prompt if len(prompt) <= PROMPT_DISPLAY_MAX else (
-            prompt[:PROMPT_DISPLAY_MAX] + "…"
+        truncated = (
+            prompt
+            if len(prompt) <= PROMPT_DISPLAY_MAX
+            else (prompt[:PROMPT_DISPLAY_MAX] + "…")
         )
         text += f"\n\n📝 *Prompt:*\n{escape_markdown_v2(truncated)}"
 
-    attachments = [
-        str(p) for f in n.files if (p := Path(f).expanduser()).exists()
-    ]
+    attachments = [str(p) for f in n.files if (p := Path(f).expanduser()).exists()]
 
     keyboard: InlineKeyboardMarkup | None = None
     if agent_name:
@@ -489,12 +491,16 @@ def _format_workflow_complete(
             vcs_tag = extract_vcs_workflow_tag(raw_prompt)
             if vcs_tag:
                 resume_text = f"{vcs_tag}{resume_text}"
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "📋 Resume",
-                copy_text=CopyTextButton(text=resume_text),
-            ),
-        ]])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📋 Resume",
+                        copy_text=CopyTextButton(text=resume_text),
+                    ),
+                ]
+            ]
+        )
 
     return text, keyboard, attachments
 
