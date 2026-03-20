@@ -202,10 +202,31 @@ def _wrap_expandable_blockquote(text: str) -> str:
 
     First line starts with ``**>``, subsequent lines with ``>``,
     and the closing ``||`` is appended to the last line.
+
+    Empty lines use a zero-width space (``\\u200B``) so Telegram does not
+    split the content into multiple separate blockquotes.
     """
     if not text:
         return text
-    lines = text.split("\n")
+    # Strip leading/trailing blank lines, collapse consecutive blanks, and
+    # replace remaining blank lines with a zero-width space to keep the
+    # blockquote continuous.
+    raw_lines = text.strip("\n").split("\n")
+    lines: list[str] = []
+    prev_blank = False
+    for line in raw_lines:
+        if line.strip():
+            lines.append(line)
+            prev_blank = False
+        elif not prev_blank:
+            lines.append("\u200B")
+            prev_blank = True
+    # Drop trailing blank placeholder
+    while lines and lines[-1] == "\u200B":
+        lines.pop()
+    if not lines:
+        return text
+
     result = [f"**>{lines[0]}"]
     for line in lines[1:]:
         result.append(f">{line}")

@@ -495,6 +495,27 @@ class TestExpandableBlockquote:
         result = _wrap_expandable_blockquote("*bold*\n`code`")
         assert result == "**>*bold*\n>`code`||"
 
+    def test_blank_lines_use_zwsp(self):
+        """Blank lines become zero-width spaces so Telegram keeps one blockquote."""
+        result = _wrap_expandable_blockquote("header\n\nbody")
+        assert result == "**>header\n>\u200B\n>body||"
+
+    def test_consecutive_blank_lines_collapsed(self):
+        result = _wrap_expandable_blockquote("a\n\n\n\nb")
+        assert result == "**>a\n>\u200B\n>b||"
+
+    def test_leading_trailing_blanks_stripped(self):
+        result = _wrap_expandable_blockquote("\n\nfirst\nlast\n\n")
+        assert result == "**>first\n>last||"
+
+    def test_content_with_sections_stays_single_blockquote(self):
+        """Simulates plan content with headers and code blocks."""
+        content = "\n*Design*\n\nSome paragraph\n\n```yaml\ncode\n```\n\n*Decisions*\n"
+        result = _wrap_expandable_blockquote(content)
+        # Should be one continuous blockquote (single **> at start, single || at end)
+        assert result.count("**>") == 1
+        assert result.endswith(">*Decisions*||")
+
 
 class TestFormatNotesText:
     def test_short_notes_plain(self):
