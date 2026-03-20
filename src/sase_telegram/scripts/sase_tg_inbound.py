@@ -9,6 +9,8 @@ from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
 from sase_telegram.callback_data import decode
+from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
+
 from sase_telegram.formatting import escape_markdown_v2
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -180,10 +182,25 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
             f"workspace #{result.workspace_num}"
         )
         escaped_display = escape_markdown_v2(display)
+        keyboard: InlineKeyboardMarkup | None = None
+        if agent_name:
+            from sase.xprompt import extract_vcs_workflow_tag
+
+            wait_text = f"#{agent_name} "
+            vcs_tag = extract_vcs_workflow_tag(prompt)
+            if vcs_tag:
+                wait_text = f"{vcs_tag}{wait_text}"
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "📋 Wait",
+                    copy_text=CopyTextButton(text=wait_text),
+                ),
+            ]])
         telegram_client.send_message(
             chat_id,
             f"🚀 *{escaped_label} Launched*{name_line}\n{meta}\n\n{escaped_display}",
             parse_mode="MarkdownV2",
+            reply_markup=keyboard,
         )
     except Exception as e:
         telegram_client.send_message(

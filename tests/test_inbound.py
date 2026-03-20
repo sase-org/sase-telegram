@@ -441,6 +441,84 @@ class TestLaunchAgent:
         assert not launched_prompt.startswith("%n:foo %n:")
         assert "%n:foo" in launched_prompt
 
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
+    )
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
+    )
+    def test_launch_includes_wait_keyboard(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        with (
+            patch(
+                "sase.agent_names.get_next_auto_name",
+                return_value="c",
+            ),
+            patch(
+                "sase.agent_launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ),
+        ):
+            _launch_agent("List all open beads")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert len(buttons) == 1
+        assert buttons[0][0].text == "📋 Wait"
+        assert buttons[0][0].copy_text.text == "#c "
+
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client"
+    )
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.credentials"
+    )
+    def test_launch_wait_keyboard_includes_vcs_tag(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_single_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        with (
+            patch(
+                "sase.agent_launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ),
+            patch(
+                "sase.xprompt.extract_vcs_workflow_tag",
+                return_value="#gh:sase ",
+            ),
+        ):
+            _launch_single_agent("%n:foo #gh:sase Fix a bug")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].copy_text.text == "#gh:sase #foo "
+
 
 class TestAwaitingFeedbackState:
     def setup_method(self) -> None:
