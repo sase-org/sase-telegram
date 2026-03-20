@@ -27,6 +27,9 @@ PROMPT_DISPLAY_MAX = 1000
 # Characters that must be escaped in MarkdownV2
 _MARKDOWN_V2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
 
+# Matches ``` code blocks in MarkdownV2 output (language specifier optional)
+_CODE_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)\n```", re.DOTALL)
+
 # Regex for inline markdown formatting (order matters: code > bold > italic > link)
 _INLINE_PATTERN = re.compile(
     r"(`[^`]+`)"  # inline code
@@ -197,6 +200,21 @@ def markdown_to_telegram_v2(md: str) -> str:
     return "\n".join(result)
 
 
+def _code_blocks_to_inline(text: str) -> str:
+    """Convert ``` code blocks to per-line inline code for blockquote compat.
+
+    Telegram's MarkdownV2 parser splits expandable blockquotes when they
+    contain ``` code blocks.  This replaces each code block with per-line
+    inline code (single backticks) which renders correctly inside blockquotes.
+    """
+
+    def _replace(m: re.Match[str]) -> str:
+        lines = m.group(1).split("\n")
+        return "\n".join(f"`{line}`" if line.strip() else line for line in lines)
+
+    return _CODE_BLOCK_RE.sub(_replace, text)
+
+
 def _wrap_expandable_blockquote(text: str) -> str:
     """Wrap text in a Telegram MarkdownV2 expandable blockquote (Bot API 7.4+).
 
@@ -316,7 +334,9 @@ def _format_plan_approval(
         header = f"📋 *Plan Review*\n\n{notes_text}\n\n"
 
         if len(converted) > EXPANDABLE_THRESHOLD:
-            # Wrap plan in expandable blockquote for compact display
+            # Telegram's MarkdownV2 parser splits expandable blockquotes
+            # when they contain ``` code blocks.  Convert to inline code.
+            converted = _code_blocks_to_inline(converted)
             plan_block = _wrap_expandable_blockquote(converted)
             text = f"{header}{plan_block}"
 

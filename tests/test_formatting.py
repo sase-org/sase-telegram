@@ -10,6 +10,7 @@ from sase_telegram.formatting import (
     EXPANDABLE_THRESHOLD,
     MAX_MESSAGE_LENGTH,
     NOTES_TRUNCATION_THRESHOLD,
+    _code_blocks_to_inline,
     _convert_inline,
     _escape_code_entity,
     _format_notes_text,
@@ -233,6 +234,38 @@ class TestFormatPlanApproval:
         assert len(text) <= MAX_MESSAGE_LENGTH
         assert plan_file in attachments
         assert keyboard is not None
+
+        Path(plan_file).unlink()
+
+    def test_plan_with_code_blocks_no_triple_backticks_in_blockquote(self):
+        """Code blocks inside expandable blockquotes are converted to inline code."""
+        # Content must exceed EXPANDABLE_THRESHOLD (500 chars) after conversion
+        padding = "\n".join(f"Step {i}: do thing {i}." for i in range(30))
+        medium_content = (
+            "# Plan\n\n## Phase 1\n\n" + padding + "\n\n"
+            "```python\ndef foo():\n    pass\n```\n\n"
+            "## Phase 2\n\nMore text.\n\n"
+            "```bash\necho hello\n```\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(medium_content)
+            plan_file = f.name
+
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[plan_file],
+        )
+        text, _, _ = format_notification(n)
+
+        # Blockquote should not contain ``` code blocks (causes splitting)
+        blockquote_start = text.index("**>")
+        blockquote_content = text[blockquote_start:]
+        assert "```" not in blockquote_content
+        # But should still have inline code
+        assert "`def foo():`" in text
+        assert "`echo hello`" in text
 
         Path(plan_file).unlink()
 
@@ -477,6 +510,42 @@ class TestFormatGeneric:
         assert "Something happened" in text
         assert keyboard is None
         assert attachments == []
+
+
+class TestCodeBlocksToInline:
+    def test_simple_code_block(self):
+        text = "before\n```python\ndef foo():\n    pass\n```\nafter"
+        result = _code_blocks_to_inline(text)
+        assert "```" not in result
+        assert "`def foo():`" in result
+        assert "`    pass`" in result
+        assert "before" in result
+        assert "after" in result
+
+    def test_code_block_without_language(self):
+        text = "```\nsome code\n```"
+        result = _code_blocks_to_inline(text)
+        assert result == "`some code`"
+
+    def test_no_code_blocks(self):
+        text = "plain text with `inline code`"
+        assert _code_blocks_to_inline(text) == text
+
+    def test_multiple_code_blocks(self):
+        text = "```py\na\n```\ntext\n```js\nb\n```"
+        result = _code_blocks_to_inline(text)
+        assert "```" not in result
+        assert "`a`" in result
+        assert "`b`" in result
+        assert "text" in result
+
+    def test_blank_lines_in_code(self):
+        text = "```\nline1\n\nline2\n```"
+        result = _code_blocks_to_inline(text)
+        lines = result.split("\n")
+        assert lines[0] == "`line1`"
+        assert lines[1] == ""  # blank line preserved (not wrapped)
+        assert lines[2] == "`line2`"
 
 
 class TestExpandableBlockquote:
