@@ -495,7 +495,7 @@ def _format_workflow_complete(
             [
                 [
                     InlineKeyboardButton(
-                        "📋 Resume",
+                        "▶️ Resume",
                         copy_text=CopyTextButton(text=resume_text),
                     ),
                 ]

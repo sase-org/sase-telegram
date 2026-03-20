@@ -260,11 +260,11 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
                 [
                     [
                         InlineKeyboardButton(
-                            "📋 Resume",
+                            "▶️ Resume",
                             copy_text=CopyTextButton(text=resume_text),
                         ),
                         InlineKeyboardButton(
-                            "📋 Wait",
+                            "⏳ Wait",
                             copy_text=CopyTextButton(text=wait_text),
                         ),
                     ],
