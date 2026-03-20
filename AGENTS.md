@@ -15,10 +15,14 @@ just check      # lint + test
 
 ## Architecture
 - `src/sase_telegram/credentials.py` — Bot token (via `pass`), chat ID and username (env vars)
-- `src/sase_telegram/telegram_client.py` — Sync wrapper around async `python-telegram-bot`
+- `src/sase_telegram/telegram_client.py` — Sync wrapper with retry/backoff and message splitting
+- `src/sase_telegram/formatting.py` — Notification → MarkdownV2 formatting and inline keyboards
 - `src/sase_telegram/callback_data.py` — Encode/decode inline keyboard callback data
-- `src/sase_telegram/pending_actions.py` — Persist pending actions to JSON file
+- `src/sase_telegram/inbound.py` — Pure logic for callback/text/photo processing (no API calls)
+- `src/sase_telegram/outbound.py` — High-water mark tracking, exclusive lock, unsent detection
+- `src/sase_telegram/pending_actions.py` — Persist pending actions to JSON (24h stale cleanup)
 - `src/sase_telegram/rate_limit.py` — Sliding window rate limiter
+- `src/sase_telegram/pdf_convert.py` — Markdown to PDF via pandoc (engine fallback chain)
 - `src/sase_telegram/scripts/` — CLI entry points for outbound/inbound chops
 - Depends on `sase>=0.1.0` and `python-telegram-bot>=21.0`
 
