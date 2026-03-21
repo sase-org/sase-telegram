@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sase.ace.tui_activity import is_idle
-from sase.chat_history import extract_response_from_chat_file
+from sase.history.chat import extract_response_from_chat_file
 from sase.sase_utils import EASTERN_TZ, get_sase_directory
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
