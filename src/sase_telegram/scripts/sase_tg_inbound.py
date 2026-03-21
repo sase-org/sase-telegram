@@ -120,6 +120,10 @@ def _send_kill_result(name: str, result: Any, kill_info: dict[str, Any] | None) 
 
     Shared by both the Kill button callback and the .kill dot command.
     """
+    import logging
+
+    log = logging.getLogger(__name__)
+
     chat_id = credentials.get_chat_id()
     kill_key = f"kill-{name}"
 
@@ -134,36 +138,39 @@ def _send_kill_result(name: str, result: Any, kill_info: dict[str, Any] | None) 
         except Exception:
             pass  # Message may have been deleted or already edited
 
-    if result.success:
-        escaped_name = escape_markdown_v2(name)
-        keyboard: InlineKeyboardMarkup | None = None
-        if kill_info and kill_info.get("prompt"):
-            keyboard = InlineKeyboardMarkup(
-                [
+    try:
+        if result.success:
+            escaped_name = escape_markdown_v2(name)
+            keyboard: InlineKeyboardMarkup | None = None
+            if kill_info and kill_info.get("prompt"):
+                keyboard = InlineKeyboardMarkup(
                     [
-                        InlineKeyboardButton(
-                            "🔄 Retry",
-                            copy_text=CopyTextButton(text=kill_info["prompt"]),
-                        ),
+                        [
+                            InlineKeyboardButton(
+                                "🔄 Retry",
+                                copy_text=CopyTextButton(text=kill_info["prompt"]),
+                            ),
+                        ]
                     ]
-                ]
+                )
+            telegram_client.send_message(
+                chat_id,
+                f"💀 *Agent @{escaped_name} terminated*",
+                parse_mode="MarkdownV2",
+                reply_markup=keyboard,
             )
-        telegram_client.send_message(
-            chat_id,
-            f"💀 *Agent @{escaped_name} terminated*",
-            parse_mode="MarkdownV2",
-            reply_markup=keyboard,
-        )
-    else:
-        escaped_msg = escape_markdown_v2(result.message)
-        telegram_client.send_message(
-            chat_id,
-            f"⚠️ *Kill failed:* {escaped_msg}",
-            parse_mode="MarkdownV2",
-        )
-
-    if kill_info:
-        pending_actions.remove(kill_key)
+        else:
+            escaped_msg = escape_markdown_v2(result.message)
+            telegram_client.send_message(
+                chat_id,
+                f"⚠️ *Kill failed:* {escaped_msg}",
+                parse_mode="MarkdownV2",
+            )
+    except Exception:
+        log.exception("Failed to send kill result message for agent %s", name)
+    finally:
+        if kill_info:
+            pending_actions.remove(kill_key)
 
 
 def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
@@ -174,10 +181,14 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
     kill_info = pending_actions.get(kill_key)
     result = kill_named_agent(agent_name)
 
-    telegram_client.answer_callback_query(
-        callback_query.id,
-        "Agent killed" if result.success else result.message,
-    )
+    try:
+        telegram_client.answer_callback_query(
+            callback_query.id,
+            "Agent killed" if result.success else result.message,
+        )
+    except Exception:
+        pass  # Callback popup is best-effort; confirmation message matters more
+
     _send_kill_result(agent_name, result, kill_info)
 
 
