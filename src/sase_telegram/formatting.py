@@ -279,10 +279,18 @@ def _format_notes_text(
 
 def format_notification(
     notification: Notification,
+    *,
+    has_research: bool = False,
+    has_non_research_diff: bool | None = None,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     """Format a notification for Telegram.
 
     Returns (message_text, keyboard_or_None, attachment_file_paths).
+
+    Args:
+        has_research: True when the agent created new research/*.md files.
+        has_non_research_diff: When set, overrides the diff-file heuristic
+            for the pencil icon.  ``None`` means "use default logic".
     """
     match notification.action:
         case "PlanApproval":
@@ -305,7 +313,11 @@ def format_notification(
                 "user-agent",
                 "user-workflow",
             ):
-                return _format_workflow_complete(notification)
+                return _format_workflow_complete(
+                    notification,
+                    has_research=has_research,
+                    has_non_research_diff=has_non_research_diff,
+                )
             return _format_generic(notification)
 
 
@@ -470,13 +482,23 @@ def _format_user_question(
 
 def _format_workflow_complete(
     n: Notification,
+    *,
+    has_research: bool = False,
+    has_non_research_diff: bool | None = None,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     from sase.llm_provider.registry import format_provider_model_label
 
     notes_text = _format_notes_text(n.notes)
     agent_name = n.action_data.get("agent_name")
     has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
-    icon = "✅✏️" if has_diff else "✅"
+    if has_non_research_diff is not None:
+        has_diff = has_non_research_diff
+    icon_parts = ["✅"]
+    if has_diff:
+        icon_parts.append("✏️")
+    if has_research:
+        icon_parts.append("📚")
+    icon = "".join(icon_parts)
     label = escape_markdown_v2(
         format_provider_model_label(
             n.action_data.get("llm_provider"),
