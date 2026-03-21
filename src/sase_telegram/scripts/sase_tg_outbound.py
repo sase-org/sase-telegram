@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sase.ace.tui_activity import is_idle
 from sase.history.chat import extract_response_from_chat_file
-from sase.sase_utils import EASTERN_TZ, get_sase_directory
+from sase.sase_utils import get_sase_directory, get_timezone
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import format_notification
@@ -242,7 +242,7 @@ def _log_send_diagnostics(notifications: list) -> None:
 
     try:
         now = time.time()
-        now_str = datetime.fromtimestamp(now, tz=EASTERN_TZ).strftime(
+        now_str = datetime.fromtimestamp(now, tz=get_timezone()).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         lines = [f"\n=== SEND @ {now_str} ({now:.3f}) ==="]
