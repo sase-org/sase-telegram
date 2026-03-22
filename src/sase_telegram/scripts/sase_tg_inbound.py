@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,14 @@ from sase_telegram.inbound import (
     save_awaiting_feedback,
     save_offset,
 )
+
+log = logging.getLogger(__name__)
+
+# File-based cache for set_my_commands to avoid Telegram rate limits.
+_COMMANDS_REGISTERED_PATH = (
+    Path.home() / ".sase" / "telegram" / "commands_registered_ts"
+)
+_COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -154,10 +164,6 @@ def _send_kill_result(
 
     Shared by both the Kill button callback and the /kill command.
     """
-    import logging
-
-    log = logging.getLogger(__name__)
-
     chat_id = credentials.get_chat_id()
     kill_key = f"kill-{name}"
 
@@ -240,12 +246,15 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
 
 def _launch_agent(prompt: str) -> None:
     """Launch a background sase agent from a Telegram prompt."""
+    log.info("Launching agent for prompt: %s", prompt[:120])
+
     # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
     try:
         from sase.xprompt import process_xprompt_references
 
         expanded = process_xprompt_references(prompt)
     except Exception:
+        log.warning("Failed to expand xprompts, using raw prompt", exc_info=True)
         expanded = prompt
 
     # Check for multi-model directive (e.g. %m(opus,sonnet))
@@ -253,6 +262,7 @@ def _launch_agent(prompt: str) -> None:
 
     model_prompts = split_prompt_for_models(expanded)
     if model_prompts is not None:
+        log.info("Multi-model directive found, launching %d agents", len(model_prompts))
         _launch_multi_model_agents(model_prompts)
         return
 
@@ -300,7 +310,15 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
 
     chat_id = credentials.get_chat_id()
     try:
+        log.info(
+            "Calling launch_agent_from_cwd (model=%s, name=%s)",
+            label,
+            directives.name or auto_name,
+        )
         result = launch_agent_from_cwd(prompt)
+        log.info(
+            "Agent launched: workspace #%s, PID %s", result.workspace_num, result.pid
+        )
         display = prompt[:200] + ("..." if len(prompt) > 200 else "")
         escaped_label = escape_markdown_v2(label)
         agent_name = directives.name or auto_name
@@ -359,10 +377,14 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
                 },
             )
     except Exception as e:
-        telegram_client.send_message(
-            chat_id,
-            f"Failed to launch agent: {e}",
-        )
+        log.error("Failed to launch agent: %s", e, exc_info=True)
+        try:
+            telegram_client.send_message(
+                chat_id,
+                f"Failed to launch agent: {e}",
+            )
+        except Exception:
+            log.error("Failed to send error message to Telegram", exc_info=True)
 
 
 def _launch_multi_model_agents(model_prompts: list[str]) -> None:
@@ -391,7 +413,9 @@ def _handle_photo_message(message: Any) -> None:
     try:
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
         telegram_client.download_file(file_id, dest)
+        log.info("Downloaded photo to %s", dest)
     except Exception as e:
+        log.error("Failed to download photo: %s", e, exc_info=True)
         telegram_client.send_message(chat_id, f"Failed to download photo: {e}")
         return
 
@@ -614,12 +638,45 @@ _SLASH_COMMANDS = [
 ]
 
 
+def _register_commands_if_needed() -> None:
+    """Register slash commands with Telegram, at most once per hour.
+
+    Uses a file-based timestamp to avoid calling ``set_my_commands`` on every
+    tick (every 5 seconds), which triggers Telegram rate limits and blocks
+    the entire inbound chop for 20+ minutes.
+    """
+    try:
+        if _COMMANDS_REGISTERED_PATH.exists():
+            last_ts = float(_COMMANDS_REGISTERED_PATH.read_text().strip())
+            if time.time() - last_ts < _COMMANDS_REGISTER_INTERVAL:
+                return
+    except (ValueError, OSError):
+        pass  # Corrupted file — re-register
+
+    try:
+        telegram_client.set_my_commands(_SLASH_COMMANDS)
+        _COMMANDS_REGISTERED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _COMMANDS_REGISTERED_PATH.write_text(str(time.time()))
+        log.info("Registered Telegram slash commands")
+    except Exception:
+        log.warning(
+            "Failed to register slash commands (will retry later)", exc_info=True
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Inbound Telegram chop entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+    # Suppress noisy httpx request logging
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     _parse_args(argv)
 
-    # Register slash commands for Telegram auto-complete menu (idempotent)
-    telegram_client.set_my_commands(_SLASH_COMMANDS)
+    # Register slash commands (cached, non-blocking on failure)
+    _register_commands_if_needed()
 
     # Clean up stale pending actions
     pending_actions.cleanup_stale()
@@ -631,6 +688,8 @@ def main(argv: list[str] | None = None) -> int:
     if not updates:
         return 0
 
+    log.info("Received %d update(s) (offset=%s)", len(updates), offset)
+
     # Save offset BEFORE processing to prevent duplicate agent launches when
     # overlapping invocations race (at-most-once delivery).
     last_update_id = max(u.update_id for u in updates)
@@ -638,20 +697,28 @@ def main(argv: list[str] | None = None) -> int:
 
     for update in updates:
         if update.callback_query:
+            log.info("Processing callback: %s", update.callback_query.data)
             _handle_callback(update.callback_query, pending)
         elif update.message:
             msg = update.message
             if msg.photo:
+                log.info("Processing photo message")
                 _handle_photo_message(msg)
             elif (
                 msg.document
                 and msg.document.mime_type
                 and msg.document.mime_type.startswith("image/")
             ):
+                log.info("Processing document image: %s", msg.document.file_name)
                 _handle_document_image(msg)
             elif msg.text:
                 text = reconstruct_code_markers(msg.text, msg.entities)
+                log.info("Processing text message: %s", text[:100])
                 _handle_text_message(text)
+            else:
+                log.info(
+                    "Skipping unsupported message type (update_id=%d)", update.update_id
+                )
 
     return 0
 

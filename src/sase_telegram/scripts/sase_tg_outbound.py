@@ -280,6 +280,13 @@ def _log_send_diagnostics(notifications: list) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Outbound Telegram chop entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+    # Suppress noisy httpx request logging
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     args = _parse_args(argv)
 
     # Clean up stale pending actions
@@ -311,6 +318,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
     if not notifications:
         return 0
 
+    log.info("Sending %d notification(s)", len(notifications))
     _log_send_diagnostics(notifications)
 
     chat_id = get_chat_id() if not args.dry_run else "DRY_RUN"
