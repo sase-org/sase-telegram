@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from pathlib import Path
 from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
@@ -115,7 +117,39 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     pending_actions.remove(response.notif_id_prefix)
 
 
-def _send_kill_result(name: str, result: Any, kill_info: dict[str, Any] | None) -> None:
+def _get_agent_retry_prompt(name: str) -> str | None:
+    """Read the original prompt for a named agent from its artifact directory.
+
+    Falls back to raw_xprompt.md when the pending action is missing (e.g. due
+    to a file-level race between concurrent inbound/outbound handlers).
+    Strips auto-assigned ``%n:<name>`` directives so the retry gets a fresh name.
+    """
+    from sase.agent_names import find_named_agent
+
+    agent = find_named_agent(name)
+    if agent is None:
+        return None
+
+    raw_path = Path(agent.artifacts_dir) / "raw_xprompt.md"
+    try:
+        prompt = raw_path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return None
+
+    if not prompt:
+        return None
+
+    # Strip auto-assigned %n:<name> directive so the retry gets a fresh name
+    return re.sub(r"^%n:\S+\s*", "", prompt)
+
+
+def _send_kill_result(
+    name: str,
+    result: Any,
+    kill_info: dict[str, Any] | None,
+    *,
+    prompt_fallback: str | None = None,
+) -> None:
     """Send a kill confirmation (or failure) message to Telegram.
 
     Shared by both the Kill button callback and the .kill dot command.
@@ -141,14 +175,17 @@ def _send_kill_result(name: str, result: Any, kill_info: dict[str, Any] | None) 
     try:
         if result.success:
             escaped_name = escape_markdown_v2(name)
+            retry_prompt = (
+                kill_info.get("prompt") if kill_info else None
+            ) or prompt_fallback
             keyboard: InlineKeyboardMarkup | None = None
-            if kill_info and kill_info.get("prompt"):
+            if retry_prompt:
                 keyboard = InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
                                 "🔄 Retry",
-                                copy_text=CopyTextButton(text=kill_info["prompt"]),
+                                copy_text=CopyTextButton(text=retry_prompt),
                             ),
                         ]
                     ]
@@ -179,6 +216,15 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
 
     kill_key = f"kill-{agent_name}"
     kill_info = pending_actions.get(kill_key)
+
+    # Read prompt fallback from agent artifacts BEFORE killing (the agent
+    # must still be findable).  Only needed when pending_actions lost the entry.
+    prompt_fallback = (
+        _get_agent_retry_prompt(agent_name)
+        if not (kill_info and kill_info.get("prompt"))
+        else None
+    )
+
     result = kill_named_agent(agent_name)
 
     try:
@@ -189,7 +235,7 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
     except Exception:
         pass  # Callback popup is best-effort; confirmation message matters more
 
-    _send_kill_result(agent_name, result, kill_info)
+    _send_kill_result(agent_name, result, kill_info, prompt_fallback=prompt_fallback)
 
 
 def _launch_agent(prompt: str) -> None:
@@ -411,8 +457,17 @@ def _handle_kill_command(args: str) -> None:
 
     kill_key = f"kill-{name}"
     kill_info = pending_actions.get(kill_key)
+
+    # Read prompt fallback from agent artifacts BEFORE killing (the agent
+    # must still be findable).  Only needed when pending_actions lost the entry.
+    prompt_fallback = (
+        _get_agent_retry_prompt(name)
+        if not (kill_info and kill_info.get("prompt"))
+        else None
+    )
+
     result = kill_named_agent(name)
-    _send_kill_result(name, result, kill_info)
+    _send_kill_result(name, result, kill_info, prompt_fallback=prompt_fallback)
 
 
 def _handle_list_command() -> None:
