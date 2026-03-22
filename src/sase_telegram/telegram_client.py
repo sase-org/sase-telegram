@@ -219,6 +219,16 @@ def edit_message_reply_markup(
 
 
 @_with_retry
+def set_my_commands(commands: list[tuple[str, str]]) -> bool:
+    """Register bot commands for the Telegram auto-complete menu."""
+    from telegram import BotCommand
+
+    bot = _get_bot()
+    bot_commands = [BotCommand(cmd, desc) for cmd, desc in commands]
+    return _run_async(bot.set_my_commands(bot_commands))
+
+
+@_with_retry
 def download_file(file_id: str, destination: Path) -> Path:
     """Download a Telegram file to a local path."""
     bot = _get_bot()

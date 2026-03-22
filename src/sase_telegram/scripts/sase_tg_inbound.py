@@ -152,7 +152,7 @@ def _send_kill_result(
 ) -> None:
     """Send a kill confirmation (or failure) message to Telegram.
 
-    Shared by both the Kill button callback and the .kill dot command.
+    Shared by both the Kill button callback and the /kill command.
     """
     import logging
 
@@ -430,29 +430,54 @@ def _handle_document_image(message: Any) -> None:
     _launch_agent(prompt)
 
 
-def _handle_dot_command(text: str) -> None:
-    """Dispatch a Telegram dot command (e.g. '.kill agent') to the appropriate handler."""
+def _handle_command(text: str) -> None:
+    """Dispatch a slash command (e.g. '/kill agent') to the appropriate handler."""
     parts = text.split(None, 1)
-    command = parts[0].lower()
+    command = parts[0][1:].split("@")[0].lower()  # strip prefix and @bot suffix
     args = parts[1] if len(parts) > 1 else ""
 
-    if command == ".kill":
+    if command == "kill":
         _handle_kill_command(args)
-    elif command == ".list":
+    elif command == "list":
         _handle_list_command()
-    elif command == ".listx":
+    elif command == "listx":
         _handle_listx_command()
-    # Unknown commands are silently ignored (preserves original behavior)
+    # Unknown commands (e.g. /start) are silently ignored
+
+
+def _show_kill_selection(chat_id: str) -> None:
+    """Show an inline keyboard of running agents to kill."""
+    from sase.agent_names import list_running_agents
+
+    agents = list_running_agents()
+    if not agents:
+        telegram_client.send_message(chat_id, "No running agents.")
+        return
+
+    buttons = [
+        [InlineKeyboardButton(a.name, callback_data=encode("kill", a.name, "go"))]
+        for a in agents
+        if a.name
+    ]
+    if not buttons:
+        telegram_client.send_message(chat_id, "No named agents to kill.")
+        return
+
+    telegram_client.send_message(
+        chat_id,
+        "Select an agent to kill:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 def _handle_kill_command(args: str) -> None:
-    """Handle .kill <agent_name> — terminate a running agent by name."""
+    """Handle /kill [agent_name] — terminate a running agent by name."""
     from sase.agent_names import kill_named_agent
 
     chat_id = credentials.get_chat_id()
     name = args.strip()
     if not name:
-        telegram_client.send_message(chat_id, "Usage: .kill <agent_name>")
+        _show_kill_selection(chat_id)
         return
 
     kill_key = f"kill-{name}"
@@ -471,7 +496,7 @@ def _handle_kill_command(args: str) -> None:
 
 
 def _handle_list_command() -> None:
-    """Handle .list — show all currently running agents."""
+    """Handle /list — show all currently running agents."""
     import html
 
     from sase.agent_names import list_running_agents
@@ -512,7 +537,7 @@ def _handle_list_command() -> None:
 
 
 def _handle_listx_command() -> None:
-    """Handle .listx — show done but not yet dismissed agents."""
+    """Handle /listx — show done but not yet dismissed agents."""
     import html
 
     from sase.ace.dismissed_agents import load_dismissed_agents
@@ -573,22 +598,28 @@ def _handle_text_message(text: str) -> None:
         pending_actions.remove(response.notif_id_prefix)
         return
 
-    # Dispatch Telegram dot commands (e.g. ".kill agent")
-    if text.startswith("."):
-        _handle_dot_command(text)
-        return
-
-    # Ignore Telegram bot commands (e.g. /start, /help)
+    # Dispatch slash commands (e.g. "/kill agent")
     if text.startswith("/"):
+        _handle_command(text)
         return
 
     # Launch a new agent with this text as the prompt
     _launch_agent(text)
 
 
+_SLASH_COMMANDS = [
+    ("kill", "Terminate a running agent"),
+    ("list", "Show all running agents"),
+    ("listx", "Show done/undismissed agents"),
+]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Inbound Telegram chop entry point."""
     _parse_args(argv)
+
+    # Register slash commands for Telegram auto-complete menu (idempotent)
+    telegram_client.set_my_commands(_SLASH_COMMANDS)
 
     # Clean up stale pending actions
     pending_actions.cleanup_stale()
