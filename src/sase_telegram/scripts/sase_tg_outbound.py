@@ -13,7 +13,8 @@ from pathlib import Path
 
 from sase.ace.tui_activity import is_idle
 from sase.history.chat import extract_response_from_chat_file
-from sase.sase_utils import get_sase_directory, get_timezone
+from sase.core.paths import get_sase_directory
+from sase.core.time import get_timezone
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import format_notification
