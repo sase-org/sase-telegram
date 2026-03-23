@@ -135,7 +135,7 @@ def _get_agent_retry_prompt(name: str) -> str | None:
     to a file-level race between concurrent inbound/outbound handlers).
     Strips auto-assigned ``%n:<name>`` directives so the retry gets a fresh name.
     """
-    from sase.agent_names import find_named_agent
+    from sase.agent.names import find_named_agent
 
     agent = find_named_agent(name)
     if agent is None:
@@ -220,7 +220,7 @@ def _send_kill_result(
 
 def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
     """Handle a Kill button press from a launch message."""
-    from sase.agent_names import kill_named_agent
+    from sase.agent.names import kill_named_agent
 
     kill_key = f"kill-{agent_name}"
     kill_info = pending_actions.get(kill_key)
@@ -273,8 +273,8 @@ def _launch_agent(prompt: str) -> None:
 
 def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
     """Launch a single background sase agent from a Telegram prompt."""
-    from sase.agent_launcher import launch_agent_from_cwd
-    from sase.agent_names import get_next_auto_name
+    from sase.agent.launcher import launch_agent_from_cwd
+    from sase.agent.names import get_next_auto_name
     from sase.llm_provider.registry import (
         format_provider_model_label,
         get_default_provider_name,
@@ -473,7 +473,7 @@ def _handle_command(text: str) -> None:
 
 def _show_kill_selection(chat_id: str) -> None:
     """Show an inline keyboard of running agents to kill."""
-    from sase.agent_names import list_running_agents
+    from sase.agent.names import list_running_agents
 
     agents = list_running_agents()
     if not agents:
@@ -498,7 +498,7 @@ def _show_kill_selection(chat_id: str) -> None:
 
 def _handle_kill_command(args: str) -> None:
     """Handle /kill [agent_name] — terminate a running agent by name."""
-    from sase.agent_names import kill_named_agent
+    from sase.agent.names import kill_named_agent
 
     chat_id = credentials.get_chat_id()
     name = args.strip()
@@ -525,7 +525,7 @@ def _handle_list_command() -> None:
     """Handle /list — show all currently running agents."""
     import html
 
-    from sase.agent_names import list_running_agents
+    from sase.agent.names import list_running_agents
 
     chat_id = credentials.get_chat_id()
     agents = list_running_agents()
