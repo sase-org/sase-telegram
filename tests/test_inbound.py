@@ -707,3 +707,51 @@ class TestHandlePhotoMessage:
         mock_tg.send_message.assert_called_once()
         error_msg = mock_tg.send_message.call_args[0][1]
         assert "Failed to download photo" in error_msg
+
+
+class TestSendKillResult:
+    """Tests for _send_kill_result (kill confirmation message)."""
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_short_prompt_includes_retry_button(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(success=True, message="Killed")
+        kill_info = {"prompt": "short prompt", "chat_id": "12345", "message_id": 1}
+
+        _send_kill_result("a", result, kill_info)
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][0].text == "🔄 Retry"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_long_prompt_omits_retry_button(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(success=True, message="Killed")
+        long_prompt = "x" * 300
+        kill_info = {"prompt": long_prompt, "chat_id": "12345", "message_id": 1}
+
+        _send_kill_result("a", result, kill_info)
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is None

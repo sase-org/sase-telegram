@@ -38,6 +38,7 @@ _COMMANDS_REGISTERED_PATH = (
     Path.home() / ".sase" / "telegram" / "commands_registered_ts"
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
+_COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -184,8 +185,9 @@ def _send_kill_result(
             retry_prompt = (
                 kill_info.get("prompt") if kill_info else None
             ) or prompt_fallback
+            # Telegram CopyTextButton limit is 256 characters
             keyboard: InlineKeyboardMarkup | None = None
-            if retry_prompt:
+            if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
                 keyboard = InlineKeyboardMarkup(
                     [
                         [
