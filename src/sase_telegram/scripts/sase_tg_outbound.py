@@ -392,6 +392,23 @@ def _run_outbound(args: argparse.Namespace) -> int:
                 p.unlink(missing_ok=True)
             continue
 
+        # Save pending action IMMEDIATELY after send so the inbound
+        # chop can find it when the user taps a button.  Previously
+        # this was deferred until after attachment processing, creating
+        # a race window where fast button presses arrived before the
+        # pending action was persisted — silently losing the callback.
+        if n.action in _ACTIONABLE_ACTIONS:
+            pending_actions.add(
+                n.id[:8],
+                {
+                    "notification_id": n.id,
+                    "action": n.action,
+                    "action_data": n.action_data,
+                    "message_id": msg.message_id,
+                    "chat_id": chat_id,
+                },
+            )
+
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []
         research_temps: list[Path] = []
@@ -487,19 +504,6 @@ def _run_outbound(args: argparse.Namespace) -> int:
 
         for p in pdf_temps + response_temps + filtered_diff_temps + research_temps:
             p.unlink(missing_ok=True)
-
-        # Save pending action for actionable notifications
-        if n.action in _ACTIONABLE_ACTIONS:
-            pending_actions.add(
-                n.id[:8],
-                {
-                    "notification_id": n.id,
-                    "action": n.action,
-                    "action_data": n.action_data,
-                    "message_id": msg.message_id,
-                    "chat_id": chat_id,
-                },
-            )
 
     return 0
 
