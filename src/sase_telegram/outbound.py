@@ -22,8 +22,11 @@ def get_unsent_notifications() -> list[Notification]:
     notification is actually delivered to Telegram.  We deliberately do
     NOT advance it based on TUI activity — doing so can silently drop
     notifications when the outbound chop was offline during the activity
-    window.  The ``n.read or n.dismissed`` filter is sufficient to
-    suppress notifications the user has already acted on in the TUI.
+    window.  The ``n.read`` filter suppresses notifications the user
+    has already read in the TUI.  We intentionally do NOT filter on
+    ``n.dismissed`` — TUI agent-dismissal is a UI cleanup action that
+    happens while the user is active, but the outbound only runs when
+    idle, so filtering on dismissed would silently drop notifications.
 
     On first run (no file), initializes the file to now and returns empty
     to avoid dumping backlog.
@@ -35,10 +38,10 @@ def get_unsent_notifications() -> list[Notification]:
 
     last_sent_ts = float(LAST_SENT_FILE.read_text().strip())
 
-    all_notifs = load_notifications()
+    all_notifs = load_notifications(include_dismissed=True)
     unsent = []
     for n in all_notifs:
-        if n.read or n.dismissed:
+        if n.read:
             continue
         from datetime import datetime
 

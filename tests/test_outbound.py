@@ -62,7 +62,7 @@ class TestGetUnsentNotifications:
 
     @patch("sase_telegram.outbound.load_notifications")
     def test_filters_correctly(self, mock_load):
-        """Only returns unread, undismissed notifications newer than last sent."""
+        """Returns unread notifications newer than last sent (including dismissed)."""
         old_ts = datetime(2024, 1, 1, tzinfo=UTC).isoformat()
         new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
 
@@ -80,14 +80,19 @@ class TestGetUnsentNotifications:
         n_read = _make_notification(
             id="read0000-0000-0000-0000-000000000000", timestamp=new_ts, read=True
         )
+        # Dismissed notifications should still be sent — TUI dismissal is a
+        # UI cleanup action that happens while active, but the outbound only
+        # runs when idle.
         n_dismissed = _make_notification(
             id="dism0000-0000-0000-0000-000000000000", timestamp=new_ts, dismissed=True
         )
         mock_load.return_value = [n_old, n_new, n_read, n_dismissed]
 
         result = get_unsent_notifications()
-        assert len(result) == 1
-        assert result[0].id == "new00000-0000-0000-0000-000000000000"
+        assert len(result) == 2
+        result_ids = {r.id for r in result}
+        assert "new00000-0000-0000-0000-000000000000" in result_ids
+        assert "dism0000-0000-0000-0000-000000000000" in result_ids
 
 
 class TestMarkSent:
