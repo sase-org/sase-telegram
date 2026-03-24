@@ -1,0 +1,1 @@
+precommit_command: "just fmt"

@@ -108,6 +108,24 @@ def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None
             f.write("```\n")
 
 
+def _prepend_commit_message_to_markdown(
+    response_file: Path, commit_message: str
+) -> None:
+    """Append a commit message section to a response markdown file.
+
+    Called before _append_diff_to_markdown() so the commit message
+    appears above the diff in the resulting PDF.
+    """
+    with open(response_file, "a", encoding="utf-8") as f:
+        f.write("\n\n---\n\n")
+        f.write("## Commit Message\n\n")
+        f.write("```\n")
+        f.write(commit_message)
+        if not commit_message.endswith("\n"):
+            f.write("\n")
+        f.write("```\n")
+
+
 _RESEARCH_MD_PATH_RE = re.compile(r"^research/.+\.md$")
 
 
@@ -433,6 +451,13 @@ def _run_outbound(args: argparse.Namespace) -> int:
                     if response_file:
                         response_temps.append(response_file)
                         actual_path = str(response_file)
+
+                        # Embed commit message into the response markdown
+                        commit_message = n.action_data.get("commit_message")
+                        if commit_message:
+                            _prepend_commit_message_to_markdown(
+                                response_file, commit_message
+                            )
 
                         # Embed diff content into the response markdown
                         if diff_paths:
