@@ -737,7 +737,7 @@ class TestSendKillResult:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_long_prompt_omits_retry_button(
+    def test_long_prompt_uses_callback_retry_button(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -752,6 +752,63 @@ class TestSendKillResult:
 
         _send_kill_result("a", result, kill_info)
 
+        # Should store prompt in pending_actions for callback retrieval
+        mock_pending.add.assert_called_once_with(
+            "retry-a",
+            {"action": "retry", "prompt": long_prompt},
+        )
+
+        # Should include a callback-based Retry button
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
-        assert keyboard is None
+        assert keyboard is not None
+        btn = keyboard.inline_keyboard[0][0]
+        assert btn.text == "🔄 Retry"
+        assert btn.callback_data == "retry:a:go"
+
+
+class TestHandleRetryFromCallback:
+    """Tests for _handle_retry_from_callback."""
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_sends_prompt_as_message(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
+
+        mock_creds.get_chat_id.return_value = "12345"
+        prompt = "x" * 500
+        mock_pending.get.return_value = {"action": "retry", "prompt": prompt}
+
+        cb = SimpleNamespace(id="cb1")
+        _handle_retry_from_callback(cb, "agent1")
+
+        mock_tg.send_message.assert_called_once_with("12345", prompt)
+        mock_tg.answer_callback_query.assert_called_once_with("cb1", "Prompt sent")
+        mock_pending.remove.assert_called_once_with("retry-agent1")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_expired_retry_shows_unavailable(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
+
+        mock_pending.get.return_value = None
+
+        cb = SimpleNamespace(id="cb1")
+        _handle_retry_from_callback(cb, "agent1")
+
+        mock_tg.send_message.assert_not_called()
+        mock_tg.answer_callback_query.assert_called_once_with(
+            "cb1", "Retry prompt no longer available"
+        )

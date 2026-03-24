@@ -69,11 +69,14 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle an inline keyboard button press."""
     data_str: str = callback_query.data
 
-    # Handle kill callbacks (agent management, not notification-based)
+    # Handle kill/retry callbacks (agent management, not notification-based)
     try:
         cb = decode(data_str)
         if cb.action_type == "kill":
             _handle_kill_from_callback(callback_query, cb.notif_id_prefix)
+            return
+        if cb.action_type == "retry":
+            _handle_retry_from_callback(callback_query, cb.notif_id_prefix)
             return
     except ValueError:
         pass
@@ -198,6 +201,24 @@ def _send_kill_result(
                         ]
                     ]
                 )
+            elif retry_prompt:
+                # Prompt too long for CopyTextButton — use a callback button
+                # that sends the prompt as a new message when pressed.
+                retry_key = f"retry-{name}"
+                pending_actions.add(
+                    retry_key,
+                    {"action": "retry", "prompt": retry_prompt},
+                )
+                keyboard = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🔄 Retry",
+                                callback_data=encode("retry", name, "go"),
+                            ),
+                        ]
+                    ]
+                )
             telegram_client.send_message(
                 chat_id,
                 f"💀 *Agent @{escaped_name} terminated*",
@@ -244,6 +265,24 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
         pass  # Callback popup is best-effort; confirmation message matters more
 
     _send_kill_result(agent_name, result, kill_info, prompt_fallback=prompt_fallback)
+
+
+def _handle_retry_from_callback(callback_query: Any, agent_name: str) -> None:
+    """Handle a Retry button press: send the original prompt as a message."""
+    retry_key = f"retry-{agent_name}"
+    retry_info = pending_actions.get(retry_key)
+
+    if not retry_info or not retry_info.get("prompt"):
+        telegram_client.answer_callback_query(
+            callback_query.id, "Retry prompt no longer available"
+        )
+        return
+
+    chat_id = credentials.get_chat_id()
+    prompt = retry_info["prompt"]
+    telegram_client.send_message(chat_id, prompt)
+    telegram_client.answer_callback_query(callback_query.id, "Prompt sent")
+    pending_actions.remove(retry_key)
 
 
 def _launch_agent(prompt: str) -> None:
