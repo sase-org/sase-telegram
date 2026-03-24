@@ -378,11 +378,12 @@ def _format_plan_approval(
                     if len(text) <= MAX_MESSAGE_LENGTH:
                         break
                     target = int(target * 0.8)
-                if n.files:
-                    attachments.append(n.files[0])
         else:
             # Short plan — show inline without blockquote
             text = f"{header}{converted}"
+        # Always attach plan PDF regardless of message length
+        if n.files:
+            attachments.append(n.files[0])
     else:
         text = f"📋 *Plan Review*{name_line}\n\n{notes_text}"
 
