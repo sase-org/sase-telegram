@@ -414,16 +414,16 @@ def _run_outbound(args: argparse.Namespace) -> int:
         # a race window where fast button presses arrived before the
         # pending action was persisted — silently losing the callback.
         if n.action in _ACTIONABLE_ACTIONS:
-            pending_actions.add(
-                n.id[:8],
-                {
-                    "notification_id": n.id,
-                    "action": n.action,
-                    "action_data": n.action_data,
-                    "message_id": msg.message_id,
-                    "chat_id": chat_id,
-                },
-            )
+            entry: dict[str, object] = {
+                "notification_id": n.id,
+                "action": n.action,
+                "action_data": n.action_data,
+                "message_id": msg.message_id,
+                "chat_id": chat_id,
+            }
+            if n.action == "PlanApproval" and n.files:
+                entry["plan_file"] = n.files[0]
+            pending_actions.add(n.id[:8], entry)
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []

@@ -200,13 +200,14 @@ class TestFormatPlanApproval:
         assert "Some content here" in text
         assert keyboard is not None
         assert len(keyboard.inline_keyboard) == 2
-        assert len(keyboard.inline_keyboard[0]) == 3  # Approve + Reject + Epic
+        assert len(keyboard.inline_keyboard[0]) == 3  # Approve + Commit + Epic
         assert "Approve" in keyboard.inline_keyboard[0][0].text
-        assert "Reject" in keyboard.inline_keyboard[0][1].text
+        assert "Commit" in keyboard.inline_keyboard[0][1].text
         assert "Epic" in keyboard.inline_keyboard[0][2].text
-        assert len(keyboard.inline_keyboard[1]) == 1  # Feedback
-        assert "Feedback" in keyboard.inline_keyboard[1][0].text
-        assert attachments == []
+        assert len(keyboard.inline_keyboard[1]) == 2  # Reject + Feedback
+        assert "Reject" in keyboard.inline_keyboard[1][0].text
+        assert "Feedback" in keyboard.inline_keyboard[1][1].text
+        assert attachments == [plan_file]
 
         Path(plan_file).unlink()
 
@@ -288,7 +289,7 @@ class TestFormatPlanApproval:
         assert "**>" in text
         assert "||" in text
         assert "truncated" not in text
-        assert attachments == []
+        assert attachments == [plan_file]
         assert keyboard is not None
 
         Path(plan_file).unlink()
@@ -400,7 +401,7 @@ class TestFormatWorkflowComplete:
         assert "_@c_" in text
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
-        assert button.text == "📋 Resume"
+        assert button.text == "▶️ Resume"
         assert button.copy_text is not None
         assert button.copy_text.text == "#resume:c "
 

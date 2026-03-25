@@ -65,6 +65,45 @@ def _write_response(response: ResponseAction) -> None:
     response.response_path.write_text(json.dumps(response.response_data, indent=2))
 
 
+def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
+    """Send a confirmation message with a Plan copy button after approve/commit."""
+    plan_file = action.get("plan_file", "")
+    if plan_file:
+        project_dir = action.get("action_data", {}).get("project_dir")
+        if project_dir:
+            try:
+                rel = str(Path(plan_file).relative_to(project_dir))
+            except ValueError:
+                rel = Path(plan_file).name
+        else:
+            rel = Path(plan_file).name
+    else:
+        rel = ""
+
+    label = "Plan approved" if choice == "approve" else "Plan committed"
+    text = escape_markdown_v2(label)
+
+    if rel:
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📋 Plan",
+                        copy_text=CopyTextButton(text=rel),
+                    )
+                ]
+            ]
+        )
+    else:
+        keyboard = None
+
+    chat_id = action.get("chat_id")
+    if chat_id:
+        telegram_client.send_message(
+            chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
+        )
+
+
 def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle an inline keyboard button press."""
     data_str: str = callback_query.data
@@ -127,6 +166,14 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         telegram_client.edit_message_reply_markup(
             action["chat_id"], action["message_id"], reply_markup=None
         )
+
+    # Send confirmation with Plan copy button for approve/commit
+    if response.action_type == "plan" and response.response_data.get("action") in (
+        "approve",
+        "commit",
+    ):
+        if action:
+            _send_plan_confirmation(action, response.response_data["action"])
 
     pending_actions.remove(response.notif_id_prefix)
 

@@ -176,6 +176,14 @@ def process_callback(
                 response_data={"action": "epic"},
                 answer_text="Epic created",
             )
+        elif cb.choice == "commit":
+            return ResponseAction(
+                action_type="plan",
+                notif_id_prefix=cb.notif_id_prefix,
+                response_path=response_path,
+                response_data={"action": "commit"},
+                answer_text="Plan committed",
+            )
 
     elif cb.action_type == "hitl":
         artifacts_dir = action_data["artifacts_dir"]

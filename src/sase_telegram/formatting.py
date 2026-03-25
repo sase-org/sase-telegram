@@ -393,25 +393,25 @@ def _format_plan_approval(
             callback_data=callback_data.encode("plan", prefix, "approve"),
         ),
         InlineKeyboardButton(
-            "❌ Reject",
-            callback_data=callback_data.encode("plan", prefix, "reject"),
+            "📦 Commit",
+            callback_data=callback_data.encode("plan", prefix, "commit"),
         ),
         InlineKeyboardButton(
             "📋 Epic",
             callback_data=callback_data.encode("plan", prefix, "epic"),
         ),
     ]
-    keyboard = InlineKeyboardMarkup(
-        [
-            row1,
-            [
-                InlineKeyboardButton(
-                    "💬 Feedback",
-                    callback_data=callback_data.encode("plan", prefix, "feedback"),
-                ),
-            ],
-        ]
-    )
+    row2 = [
+        InlineKeyboardButton(
+            "❌ Reject",
+            callback_data=callback_data.encode("plan", prefix, "reject"),
+        ),
+        InlineKeyboardButton(
+            "💬 Feedback",
+            callback_data=callback_data.encode("plan", prefix, "feedback"),
+        ),
+    ]
+    keyboard = InlineKeyboardMarkup([row1, row2])
     return text, keyboard, attachments
 
 

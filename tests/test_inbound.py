@@ -110,6 +110,16 @@ class TestProcessCallbackPlan:
         assert result is not None
         assert result.response_data == {"action": "reject"}
 
+    def test_commit(self, tmp_path: Path) -> None:
+        response_dir = str(tmp_path)
+        pending = _make_pending_plan("abcd1234", response_dir)
+        result = process_callback("plan:abcd1234:commit", pending)
+        assert result is not None
+        assert result.action_type == "plan"
+        assert result.response_data == {"action": "commit"}
+        assert result.answer_text == "Plan committed"
+        assert result.response_path == tmp_path / "plan_response.json"
+
     def test_unknown_pending(self) -> None:
         result = process_callback("plan:unknown1:approve", {})
         assert result is None
@@ -324,7 +334,7 @@ class TestLaunchAgent:
         mock_result.workspace_num = 3
 
         with patch(
-            "sase.agent_launcher.launch_agent_from_cwd",
+            "sase.agent.launcher.launch_agent_from_cwd",
             return_value=mock_result,
         ):
             _launch_agent("List all open beads")
@@ -351,7 +361,7 @@ class TestLaunchAgent:
         mock_creds.get_chat_id.return_value = "12345"
 
         with patch(
-            "sase.agent_launcher.launch_agent_from_cwd",
+            "sase.agent.launcher.launch_agent_from_cwd",
             side_effect=RuntimeError("No workspace available"),
         ):
             _launch_agent("Do something")
@@ -381,11 +391,11 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent_names.get_next_auto_name",
+                "sase.agent.names.get_next_auto_name",
                 return_value="c",
             ),
             patch(
-                "sase.agent_launcher.launch_agent_from_cwd",
+                "sase.agent.launcher.launch_agent_from_cwd",
                 return_value=mock_result,
             ) as mock_launch,
         ):
@@ -415,7 +425,7 @@ class TestLaunchAgent:
         mock_result.workspace_num = 3
 
         with patch(
-            "sase.agent_launcher.launch_agent_from_cwd",
+            "sase.agent.launcher.launch_agent_from_cwd",
             return_value=mock_result,
         ) as mock_launch:
             _launch_agent("%n:foo List all open beads")
@@ -445,11 +455,11 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent_names.get_next_auto_name",
+                "sase.agent.names.get_next_auto_name",
                 return_value="c",
             ),
             patch(
-                "sase.agent_launcher.launch_agent_from_cwd",
+                "sase.agent.launcher.launch_agent_from_cwd",
                 return_value=mock_result,
             ),
         ):
@@ -461,9 +471,9 @@ class TestLaunchAgent:
         buttons = keyboard.inline_keyboard
         assert len(buttons) == 2
         assert len(buttons[0]) == 2
-        assert buttons[0][0].text == "📋 Resume"
+        assert buttons[0][0].text == "▶️ Resume"
         assert buttons[0][0].copy_text.text == "#resume:c %w:c "
-        assert buttons[0][1].text == "📋 Wait"
+        assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "%w:c "
         assert len(buttons[1]) == 1
         assert buttons[1][0].text == "🗡️ Kill"
@@ -489,7 +499,7 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent_launcher.launch_agent_from_cwd",
+                "sase.agent.launcher.launch_agent_from_cwd",
                 return_value=mock_result,
             ),
             patch(
@@ -503,9 +513,9 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].text == "📋 Resume"
+        assert buttons[0][0].text == "▶️ Resume"
         assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
-        assert buttons[0][1].text == "📋 Wait"
+        assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
 
