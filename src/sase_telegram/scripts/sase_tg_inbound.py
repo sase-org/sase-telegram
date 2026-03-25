@@ -695,6 +695,8 @@ def _handle_resume_command() -> None:
     done_buttons: list[list[InlineKeyboardButton]] = []
     for a in all_agents:
         name = a.agent_name or a.cl_name
+        if name == "unknown":
+            continue
         if a.status not in _DISMISSABLE_STATUSES:
             continue
         if a.is_workflow_child:
