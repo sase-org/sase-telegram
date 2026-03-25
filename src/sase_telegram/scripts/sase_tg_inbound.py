@@ -73,7 +73,9 @@ def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
         project_dir = action.get("action_data", {}).get("project_dir")
         if project_dir:
             try:
-                rel = str(Path(plan_file).relative_to(project_dir))
+                rel = str(
+                    Path(plan_file).resolve().relative_to(Path(project_dir).resolve())
+                )
             except ValueError:
                 rel = Path(plan_file).name
         else:
