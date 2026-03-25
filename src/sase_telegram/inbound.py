@@ -348,6 +348,22 @@ def process_text_message(text: str) -> ResponseAction | None:
 
 
 # ---------------------------------------------------------------------------
+# Confirmation text for two-step completions
+# ---------------------------------------------------------------------------
+
+
+def confirmation_text(response: ResponseAction) -> str:
+    """Return a human-readable confirmation string for a two-step response."""
+    if response.action_type == "plan":
+        return "\u2705 Feedback received \u2014 plan will be revised"
+    if response.action_type == "hitl":
+        return "\u2705 Feedback received"
+    if response.action_type == "question":
+        return "\u2705 Answer received"
+    return "\u2705 Response received"
+
+
+# ---------------------------------------------------------------------------
 # Photo / image helpers
 # ---------------------------------------------------------------------------
 

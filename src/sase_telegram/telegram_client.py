@@ -109,6 +109,7 @@ def _send_single_message(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
+    reply_to_message_id: int | None = None,
 ) -> Message:
     """Send a single text message, falling back to plain text on parse errors."""
     try:
@@ -118,6 +119,7 @@ def _send_single_message(
                 text=text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
             )
         )
     except Exception:
@@ -132,7 +134,10 @@ def _send_single_message(
             # client in a broken state (python-telegram-bot v21+).
             return _run_async(
                 _get_bot().send_message(
-                    chat_id=chat_id, text=text, reply_markup=reply_markup
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    reply_to_message_id=reply_to_message_id,
                 )
             )
         raise
@@ -144,6 +149,7 @@ def send_message(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
+    reply_to_message_id: int | None = None,
 ) -> Message:
     """Send a text message to a Telegram chat.
 
@@ -157,7 +163,11 @@ def send_message(
         # Only attach reply_markup to the last chunk
         markup = reply_markup if i == len(chunks) - 1 else None
         last_msg = _send_single_message(
-            chat_id=chat_id, text=chunk, reply_markup=markup, parse_mode=parse_mode
+            chat_id=chat_id,
+            text=chunk,
+            reply_markup=markup,
+            parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
         )
     assert last_msg is not None  # noqa: S101 — chunks is never empty
     return last_msg

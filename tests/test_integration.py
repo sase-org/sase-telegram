@@ -347,6 +347,7 @@ class TestInboundIntegration:
             photo=None,
             document=None,
             entities=None,
+            message_id=100,
         )
         update2 = SimpleNamespace(
             update_id=301,
@@ -413,7 +414,11 @@ class TestInboundIntegration:
     ) -> None:
         """Offset file is updated after processing updates."""
         text_msg = SimpleNamespace(
-            text="random message", photo=None, document=None, entities=None
+            text="random message",
+            photo=None,
+            document=None,
+            entities=None,
+            message_id=500,
         )
         update = SimpleNamespace(
             update_id=500,

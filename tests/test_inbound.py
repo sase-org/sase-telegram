@@ -277,10 +277,11 @@ class TestHandleTextMessageAgentLaunch:
             _handle_text_message,
         )
 
+        msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
         with patch(
             "sase_telegram.scripts.sase_tg_inbound._launch_agent"
         ) as mock_launch:
-            _handle_text_message("List all open beads")
+            _handle_text_message(msg)
             mock_launch.assert_called_once_with("List all open beads")
 
     def test_slash_command_ignored(self) -> None:
@@ -288,10 +289,11 @@ class TestHandleTextMessageAgentLaunch:
             _handle_text_message,
         )
 
+        msg = SimpleNamespace(text="/start", entities=None, message_id=101)
         with patch(
             "sase_telegram.scripts.sase_tg_inbound._launch_agent"
         ) as mock_launch:
-            _handle_text_message("/start")
+            _handle_text_message(msg)
             mock_launch.assert_not_called()
 
     def test_feedback_flow_does_not_launch_agent(self, tmp_path: Path) -> None:
@@ -303,12 +305,14 @@ class TestHandleTextMessageAgentLaunch:
             "hitl0001",
             {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
         )
+        msg = SimpleNamespace(text="Some feedback text", entities=None, message_id=102)
         with (
             patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
             patch("sase_telegram.scripts.sase_tg_inbound._write_response"),
             patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
+            patch("sase_telegram.scripts.sase_tg_inbound._send_confirmation"),
         ):
-            _handle_text_message("Some feedback text")
+            _handle_text_message(msg)
             mock_launch.assert_not_called()
 
 

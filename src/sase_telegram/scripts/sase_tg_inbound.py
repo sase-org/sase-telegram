@@ -21,6 +21,7 @@ from sase_telegram.inbound import (
     ResponseAction,
     build_photo_prompt,
     clear_awaiting_feedback,
+    confirmation_text,
     get_last_offset,
     make_image_filename,
     process_callback,
@@ -780,13 +781,28 @@ def _handle_resume_command() -> None:
     )
 
 
-def _handle_text_message(text: str) -> None:
+def _send_confirmation(response: ResponseAction, message_id: int) -> None:
+    """Send a confirmation reply to the user's feedback/answer message."""
+    try:
+        chat_id = credentials.get_chat_id()
+        telegram_client.send_message(
+            chat_id,
+            confirmation_text(response),
+            reply_to_message_id=message_id,
+        )
+    except Exception:
+        log.warning("Failed to send confirmation reply", exc_info=True)
+
+
+def _handle_text_message(message: Any) -> None:
     """Handle a text message: feedback completion, or new agent launch."""
+    text = reconstruct_code_markers(message.text, message.entities)
     response = process_text_message(text)
     if response is not None:
         _write_response(response)
         clear_awaiting_feedback()
         pending_actions.remove(response.notif_id_prefix)
+        _send_confirmation(response, message.message_id)
         return
 
     # Dispatch slash commands (e.g. "/kill agent")
@@ -880,9 +896,8 @@ def main(argv: list[str] | None = None) -> int:
                 log.info("Processing document image: %s", msg.document.file_name)
                 _handle_document_image(msg)
             elif msg.text:
-                text = reconstruct_code_markers(msg.text, msg.entities)
-                log.info("Processing text message: %s", text[:100])
-                _handle_text_message(text)
+                log.info("Processing text message: %s", msg.text[:100])
+                _handle_text_message(msg)
             else:
                 log.info(
                     "Skipping unsupported message type (update_id=%d)", update.update_id
