@@ -507,6 +507,8 @@ def _handle_command(text: str) -> None:
         _handle_list_command()
     elif command == "listx":
         _handle_listx_command()
+    elif command == "resume":
+        _handle_resume_command()
     # Unknown commands (e.g. /start) are silently ignored
 
 
@@ -654,6 +656,81 @@ def _handle_listx_command() -> None:
     telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
 
 
+def _handle_resume_command() -> None:
+    """Handle /resume — show copy buttons to resume running or done agents."""
+    from sase.ace.dismissed_agents import load_dismissed_agents
+    from sase.ace.tui.models.agent_loader import load_all_agents
+    from sase.agent.names import list_running_agents
+    from sase.xprompt import extract_vcs_workflow_tag
+
+    _DISMISSABLE_STATUSES = {"DONE", "FAILED", "PLAN DONE"}
+    chat_id = credentials.get_chat_id()
+
+    # --- Running agents ---
+    running = list_running_agents()
+    running_buttons: list[list[InlineKeyboardButton]] = []
+    running_names: set[str] = set()
+    for a in running:
+        if not a.name:
+            continue
+        running_names.add(a.name)
+        vcs_prefix = ""
+        if a.prompt:
+            vcs_tag = extract_vcs_workflow_tag(a.prompt)
+            if vcs_tag:
+                vcs_prefix = vcs_tag
+        resume_text = f"{vcs_prefix}#resume:{a.name} %w:{a.name} "
+        running_buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"🏃 {a.name}",
+                    copy_text=CopyTextButton(text=resume_text),
+                )
+            ]
+        )
+
+    # --- Done/undismissed agents ---
+    all_agents = load_all_agents()
+    dismissed = load_dismissed_agents()
+    done_buttons: list[list[InlineKeyboardButton]] = []
+    for a in all_agents:
+        name = a.agent_name or a.cl_name
+        if a.status not in _DISMISSABLE_STATUSES:
+            continue
+        if a.is_workflow_child:
+            continue
+        if a.identity in dismissed:
+            continue
+        if name in running_names:
+            continue
+        vcs_prefix = ""
+        raw = a.get_raw_xprompt_content()
+        if raw:
+            vcs_tag = extract_vcs_workflow_tag(raw)
+            if vcs_tag:
+                vcs_prefix = vcs_tag
+        resume_text = f"{vcs_prefix}#resume:{name} "
+        done_buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"✅ {name}",
+                    copy_text=CopyTextButton(text=resume_text),
+                )
+            ]
+        )
+
+    buttons = running_buttons + done_buttons
+    if not buttons:
+        telegram_client.send_message(chat_id, "No agents to resume.")
+        return
+
+    telegram_client.send_message(
+        chat_id,
+        "Select an agent to resume:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
 def _handle_text_message(text: str) -> None:
     """Handle a text message: feedback completion, or new agent launch."""
     response = process_text_message(text)
@@ -676,6 +753,7 @@ _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
     ("list", "Show all running agents"),
     ("listx", "Show done/undismissed agents"),
+    ("resume", "Copy resume text for an agent"),
 ]
 
 
