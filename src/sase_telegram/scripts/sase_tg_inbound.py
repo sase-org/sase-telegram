@@ -291,7 +291,7 @@ def _send_kill_result(
 
 def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
     """Handle a Kill button press from a launch message."""
-    from sase.agent.names import kill_named_agent
+    from sase.agent.running import kill_named_agent
 
     kill_key = f"kill-{agent_name}"
     kill_info = pending_actions.get(kill_key)
@@ -564,7 +564,7 @@ def _handle_command(text: str) -> None:
 
 def _show_kill_selection(chat_id: str) -> None:
     """Show an inline keyboard of running agents to kill."""
-    from sase.agent.names import list_running_agents
+    from sase.agent.running import list_running_agents
 
     agents = list_running_agents()
     if not agents:
@@ -589,7 +589,7 @@ def _show_kill_selection(chat_id: str) -> None:
 
 def _handle_kill_command(args: str) -> None:
     """Handle /kill [agent_name] — terminate a running agent by name."""
-    from sase.agent.names import kill_named_agent
+    from sase.agent.running import kill_named_agent
 
     chat_id = credentials.get_chat_id()
     name = args.strip()
@@ -616,7 +616,7 @@ def _handle_list_command() -> None:
     """Handle /list — show all currently running agents."""
     import html
 
-    from sase.agent.names import list_running_agents
+    from sase.agent.running import list_running_agents
 
     chat_id = credentials.get_chat_id()
     agents = list_running_agents()
@@ -710,7 +710,7 @@ def _handle_resume_command() -> None:
     """Handle /resume — show copy buttons to resume running or done agents."""
     from sase.ace.dismissed_agents import load_dismissed_agents
     from sase.ace.tui.models.agent_loader import load_all_agents
-    from sase.agent.names import list_running_agents
+    from sase.agent.running import list_running_agents
     from sase.xprompt import extract_vcs_workflow_tag
 
     _DISMISSABLE_STATUSES = {"DONE", "FAILED", "PLAN DONE"}
