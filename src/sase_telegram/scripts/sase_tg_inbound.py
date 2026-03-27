@@ -360,6 +360,13 @@ def _launch_agent(prompt: str) -> None:
     _launch_single_agent(prompt, expanded)
 
 
+def _prompt_has_pr_xprompt(prompt: str) -> bool:
+    """Check if a prompt contains the #pr xprompt."""
+    from sase.xprompt.workflow_validator_extract import extract_xprompt_calls
+
+    return any(call.name == "pr" for call in extract_xprompt_calls(prompt))
+
+
 def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
     """Launch a single background sase agent from a Telegram prompt."""
     from sase.agent.launcher import launch_agent_from_cwd
@@ -422,11 +429,13 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         escaped_display = escape_markdown_v2(display)
         keyboard: InlineKeyboardMarkup | None = None
         if agent_name:
-            from sase.xprompt import extract_vcs_workflow_tag
+            from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
 
             vcs_prefix = ""
             vcs_tag = extract_vcs_workflow_tag(prompt)
             if vcs_tag:
+                if _prompt_has_pr_xprompt(prompt):
+                    vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
                 vcs_prefix = f"{vcs_tag}"
             resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
             wait_text = f"{vcs_prefix}%w:{agent_name} "

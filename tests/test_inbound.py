@@ -522,6 +522,94 @@ class TestLaunchAgent:
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_vcs_tag_uses_at_name_when_pr_present(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_single_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ),
+            patch(
+                "sase.xprompt.extract_vcs_workflow_tag",
+                return_value="#gh:sase ",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._prompt_has_pr_xprompt",
+                return_value=True,
+            ),
+            patch(
+                "sase.xprompt.replace_ref_in_vcs_tag",
+                return_value="#gh:@foo ",
+            ),
+        ):
+            _launch_single_agent("%n:foo #gh:sase #pr(fix_bug) Fix a bug")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "▶️ Resume"
+        assert buttons[0][0].copy_text.text == "#gh:@foo #resume:foo %w:foo "
+        assert buttons[0][1].text == "⏳ Wait"
+        assert buttons[0][1].copy_text.text == "#gh:@foo %w:foo "
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_vcs_tag_unchanged_without_pr(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_single_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ),
+            patch(
+                "sase.xprompt.extract_vcs_workflow_tag",
+                return_value="#gh:sase ",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._prompt_has_pr_xprompt",
+                return_value=False,
+            ),
+        ):
+            _launch_single_agent("%n:foo #gh:sase Fix a bug without pr")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
+        assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
+
 
 class TestAwaitingFeedbackState:
     def setup_method(self) -> None:
