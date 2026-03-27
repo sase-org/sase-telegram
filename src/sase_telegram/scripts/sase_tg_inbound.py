@@ -743,20 +743,20 @@ def _handle_resume_command() -> None:
     all_agents = load_all_agents()
     dismissed = load_dismissed_agents()
     done_buttons: list[list[InlineKeyboardButton]] = []
-    for a in all_agents:
-        name = a.agent_name or a.cl_name
+    for agent in all_agents:
+        name = agent.agent_name or agent.cl_name
         if name == "unknown":
             continue
-        if a.status not in _DISMISSABLE_STATUSES:
+        if agent.status not in _DISMISSABLE_STATUSES:
             continue
-        if a.is_workflow_child:
+        if agent.is_workflow_child:
             continue
-        if a.identity in dismissed:
+        if agent.identity in dismissed:
             continue
         if name in running_names:
             continue
         vcs_prefix = ""
-        raw = a.get_raw_xprompt_content()
+        raw = agent.get_raw_xprompt_content()
         if raw:
             vcs_tag = extract_vcs_workflow_tag(raw)
             if vcs_tag:
