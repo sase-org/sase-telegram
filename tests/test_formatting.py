@@ -445,6 +445,51 @@ class TestFormatWorkflowComplete:
         assert text.startswith("✅ ")
         assert "✏️" not in text
 
+    def test_resume_uses_cl_name_over_project(self):
+        from unittest.mock import patch
+
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "agent_name": "c",
+                "prompt": "#gh:sase Fix the bug",
+                "cl_name": "sase_foobar_1",
+            },
+        )
+        with patch(
+            "sase.xprompt.extract_vcs_workflow_tag",
+            return_value="#gh:sase ",
+        ):
+            _, keyboard, _ = format_notification(n)
+
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#gh:sase_foobar_1 #resume:c "
+
+    def test_resume_without_cl_name_uses_original_tag(self):
+        from unittest.mock import patch
+
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "agent_name": "c",
+                "prompt": "#gh:sase Fix the bug",
+            },
+        )
+        with patch(
+            "sase.xprompt.extract_vcs_workflow_tag",
+            return_value="#gh:sase ",
+        ):
+            _, keyboard, _ = format_notification(n)
+
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#gh:sase #resume:c "
+
 
 class TestFormatErrorDigest:
     def test_with_digest_file(self):

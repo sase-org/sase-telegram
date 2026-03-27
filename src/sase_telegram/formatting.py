@@ -538,13 +538,16 @@ def _format_workflow_complete(
 
     keyboard: InlineKeyboardMarkup | None = None
     if agent_name:
-        from sase.xprompt import extract_vcs_workflow_tag
+        from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
 
         resume_text = f"#resume:{agent_name} "
         raw_prompt = n.action_data.get("prompt", "")
         if raw_prompt:
             vcs_tag = extract_vcs_workflow_tag(raw_prompt)
             if vcs_tag:
+                cl_name = n.action_data.get("cl_name")
+                if cl_name:
+                    vcs_tag = replace_ref_in_vcs_tag(vcs_tag, cl_name)
                 resume_text = f"{vcs_tag}{resume_text}"
         keyboard = InlineKeyboardMarkup(
             [
