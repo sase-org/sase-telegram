@@ -520,6 +520,11 @@ def _format_workflow_complete(
         name_line = ""
     text = f"{icon} *{label} Complete*{name_line}\n\n{notes_text}"
 
+    pr_url = n.action_data.get("pr_url")
+    if pr_url:
+        escaped_url = escape_markdown_v2(pr_url)
+        text += f"\n\n🔗 *PR:* {escaped_url}"
+
     prompt = n.action_data.get("prompt")
     if prompt:
         truncated = (
