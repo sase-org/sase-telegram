@@ -377,6 +377,49 @@ def make_image_filename(file_id: str) -> str:
     return f"{ts}_{file_id[:12]}.jpg"
 
 
+_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "UserQuestion"}
+
+
+def find_externally_handled(
+    pending: dict[str, Any],
+) -> list[tuple[str, int, str]]:
+    """Find pending actions whose notifications were handled externally (e.g. TUI).
+
+    Returns list of (notif_id_prefix, message_id, chat_id) for actions that
+    should have their Telegram buttons removed.
+    """
+    handled: list[tuple[str, int, str]] = []
+    for prefix, entry in pending.items():
+        action = entry.get("action")
+        if action not in _ACTIONABLE_ACTIONS:
+            continue
+        action_data = entry.get("action_data", {})
+
+        if action == "PlanApproval":
+            response_dir = Path(action_data.get("response_dir", ""))
+            if (
+                (response_dir / "plan_response.json").exists()
+                or (response_dir / "plan_approved.marker").exists()
+                or (
+                    response_dir != Path("")
+                    and not (response_dir / "plan_request.json").exists()
+                )
+            ):
+                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+
+        elif action == "HITL":
+            artifacts_dir = Path(action_data.get("artifacts_dir", ""))
+            if (artifacts_dir / "hitl_response.json").exists():
+                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+
+        elif action == "UserQuestion":
+            response_dir = Path(action_data.get("response_dir", ""))
+            if (response_dir / "question_response.json").exists():
+                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+
+    return handled
+
+
 def build_photo_prompt(image_path: Path, caption: str | None) -> str:
     """Build an agent prompt that references a downloaded image."""
     if caption:

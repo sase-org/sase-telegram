@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from sase_telegram.inbound import (
     build_photo_prompt,
     clear_awaiting_feedback,
+    find_externally_handled,
     get_last_offset,
     load_awaiting_feedback,
     make_image_filename,
@@ -914,3 +915,93 @@ class TestHandleRetryFromCallback:
         mock_tg.answer_callback_query.assert_called_once_with(
             "cb1", "Retry prompt no longer available"
         )
+
+
+class TestFindExternallyHandled:
+    """Tests for find_externally_handled() — detecting TUI-handled actions."""
+
+    def test_plan_response_file_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "plan_response.json").write_text("{}")
+        pending = _make_pending_plan("plan0001", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "plan0001"
+
+    def test_plan_approved_marker_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "plan_approved.marker").write_text("")
+        pending = _make_pending_plan("plan0002", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "plan0002"
+
+    def test_plan_request_gone_detected(self, tmp_path: Path) -> None:
+        # No plan_request.json means the request was cleaned up (e.g. reject)
+        pending = _make_pending_plan("plan0003", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "plan0003"
+
+    def test_plan_still_pending(self, tmp_path: Path) -> None:
+        (tmp_path / "plan_request.json").write_text("{}")
+        pending = _make_pending_plan("plan0004", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert result == []
+
+    def test_hitl_response_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "hitl_response.json").write_text("{}")
+        pending = _make_pending_hitl("hitl0001", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "hitl0001"
+
+    def test_hitl_still_pending(self, tmp_path: Path) -> None:
+        pending = _make_pending_hitl("hitl0002", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert result == []
+
+    def test_question_response_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "question_response.json").write_text("{}")
+        pending = _make_pending_question("ques0001", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "ques0001"
+
+    def test_question_still_pending(self, tmp_path: Path) -> None:
+        pending = _make_pending_question("ques0002", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert result == []
+
+    def test_non_actionable_skipped(self) -> None:
+        pending = {
+            "kill-agent1": {
+                "action": "kill",
+                "agent_name": "agent1",
+                "message_id": 42,
+                "chat_id": "12345",
+            }
+        }
+        result = find_externally_handled(pending)
+        assert result == []
+
+    def test_mixed_pending(self, tmp_path: Path) -> None:
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        # Only plan_a is handled (has response file)
+        (dir_a / "plan_response.json").write_text("{}")
+        (dir_b / "plan_request.json").write_text("{}")
+
+        pending = {
+            **_make_pending_plan("plan000a", str(dir_a)),
+            **_make_pending_plan("plan000b", str(dir_b)),
+        }
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "plan000a"
+
+    def test_returns_message_id_and_chat_id(self, tmp_path: Path) -> None:
+        (tmp_path / "hitl_response.json").write_text("{}")
+        pending = _make_pending_hitl("hitl0003", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert result == [("hitl0003", 42, "12345")]

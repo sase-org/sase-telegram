@@ -22,7 +22,9 @@ from sase_telegram.inbound import (
     build_photo_prompt,
     clear_awaiting_feedback,
     confirmation_text,
+    find_externally_handled,
     get_last_offset,
+    load_awaiting_feedback,
     make_image_filename,
     process_callback,
     process_callback_twostep,
@@ -880,39 +882,55 @@ def main(argv: list[str] | None = None) -> int:
     offset = get_last_offset()
     updates = telegram_client.get_updates(offset=offset, timeout=0)
 
-    if not updates:
-        return 0
+    if updates:
+        log.info("Received %d update(s) (offset=%s)", len(updates), offset)
 
-    log.info("Received %d update(s) (offset=%s)", len(updates), offset)
+        # Save offset BEFORE processing to prevent duplicate agent launches when
+        # overlapping invocations race (at-most-once delivery).
+        last_update_id = max(u.update_id for u in updates)
+        save_offset(last_update_id + 1)
 
-    # Save offset BEFORE processing to prevent duplicate agent launches when
-    # overlapping invocations race (at-most-once delivery).
-    last_update_id = max(u.update_id for u in updates)
-    save_offset(last_update_id + 1)
+        for update in updates:
+            if update.callback_query:
+                log.info("Processing callback: %s", update.callback_query.data)
+                _handle_callback(update.callback_query, pending)
+            elif update.message:
+                msg = update.message
+                if msg.photo:
+                    log.info("Processing photo message")
+                    _handle_photo_message(msg)
+                elif (
+                    msg.document
+                    and msg.document.mime_type
+                    and msg.document.mime_type.startswith("image/")
+                ):
+                    log.info("Processing document image: %s", msg.document.file_name)
+                    _handle_document_image(msg)
+                elif msg.text:
+                    log.info("Processing text message: %s", msg.text[:100])
+                    _handle_text_message(msg)
+                else:
+                    log.info(
+                        "Skipping unsupported message type (update_id=%d)",
+                        update.update_id,
+                    )
 
-    for update in updates:
-        if update.callback_query:
-            log.info("Processing callback: %s", update.callback_query.data)
-            _handle_callback(update.callback_query, pending)
-        elif update.message:
-            msg = update.message
-            if msg.photo:
-                log.info("Processing photo message")
-                _handle_photo_message(msg)
-            elif (
-                msg.document
-                and msg.document.mime_type
-                and msg.document.mime_type.startswith("image/")
-            ):
-                log.info("Processing document image: %s", msg.document.file_name)
-                _handle_document_image(msg)
-            elif msg.text:
-                log.info("Processing text message: %s", msg.text[:100])
-                _handle_text_message(msg)
-            else:
-                log.info(
-                    "Skipping unsupported message type (update_id=%d)", update.update_id
-                )
+        # Re-read pending actions since _handle_callback may have removed some.
+        pending = pending_actions.list_all()
+
+    # Clean up pending actions handled by the TUI (remove stale buttons).
+    handled = find_externally_handled(pending)
+    for prefix, message_id, chat_id in handled:
+        try:
+            telegram_client.edit_message_reply_markup(
+                chat_id, message_id, reply_markup=None
+            )
+        except Exception:
+            pass  # Message may have been deleted or already edited
+        pending_actions.remove(prefix)
+        awaiting = load_awaiting_feedback()
+        if awaiting and awaiting.get("prefix") == prefix:
+            clear_awaiting_feedback()
 
     return 0
 
