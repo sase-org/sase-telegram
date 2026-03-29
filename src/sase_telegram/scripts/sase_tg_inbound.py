@@ -573,6 +573,28 @@ def _handle_command(text: str) -> None:
     # Unknown commands (e.g. /start) are silently ignored
 
 
+def _format_agent_description(
+    name: str, model: str, duration: str, prompt: str | None, status: str | None = None
+) -> str:
+    """Format an HTML description block for an agent.
+
+    Used by /kill and /resume to show context above the inline buttons.
+    """
+    import html
+
+    label = html.escape(name)
+    model_esc = html.escape(model or "?")
+    line = f"<b>{label}</b>  {model_esc}, {duration}"
+    if status and status != "DONE":
+        line += f" · {html.escape(status)}"
+    if prompt:
+        snippet = prompt.replace("\n", " ").strip()
+        if len(snippet) > 80:
+            snippet = snippet[:80] + "…"
+        line += f"\n<i>{html.escape(snippet)}</i>"
+    return line
+
+
 def _show_kill_selection(chat_id: str) -> None:
     """Show an inline keyboard of running agents to kill."""
     from sase.agent.running import list_running_agents
@@ -582,18 +604,25 @@ def _show_kill_selection(chat_id: str) -> None:
         telegram_client.send_message(chat_id, "No running agents.")
         return
 
-    buttons = [
-        [InlineKeyboardButton(a.name, callback_data=encode("kill", a.name, "go"))]
-        for a in agents
-        if a.name
-    ]
-    if not buttons:
+    named_agents = [(a, a.name) for a in agents if a.name]
+    if not named_agents:
         telegram_client.send_message(chat_id, "No named agents to kill.")
         return
 
+    descriptions = [
+        _format_agent_description(name, a.model or "?", a.duration, a.prompt)
+        for a, name in named_agents
+    ]
+    text = "Select an agent to kill:\n\n" + "\n\n".join(descriptions)
+    buttons = [
+        [InlineKeyboardButton(name, callback_data=encode("kill", name, "go"))]
+        for _, name in named_agents
+    ]
+
     telegram_client.send_message(
         chat_id,
-        "Select an agent to kill:",
+        text,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -787,9 +816,50 @@ def _handle_resume_command() -> None:
         telegram_client.send_message(chat_id, "No agents to resume.")
         return
 
+    # Build description blocks
+    running_descs = [
+        _format_agent_description(a.name, a.model or "?", a.duration, a.prompt)
+        for a in running
+        if a.name and a.name in running_names
+    ]
+    done_descs: list[str] = []
+    for agent in all_agents:
+        name = agent.agent_name or agent.cl_name
+        if name == "unknown":
+            continue
+        if agent.status not in _DISMISSABLE_STATUSES:
+            continue
+        if agent.is_workflow_child:
+            continue
+        if agent.identity in dismissed:
+            continue
+        if name in running_names:
+            continue
+        raw = agent.get_raw_xprompt_content()
+        done_descs.append(
+            _format_agent_description(
+                name,
+                agent.model or "?",
+                agent.duration_display,
+                raw,
+                status=agent.status,
+            )
+        )
+
+    parts = ["Select an agent to resume:"]
+    has_both = running_descs and done_descs
+    if has_both:
+        parts.append("\nRunning:\n" + "\n\n".join(running_descs))
+        parts.append("\nDone:\n" + "\n\n".join(done_descs))
+    else:
+        all_descs = running_descs or done_descs
+        parts.append("\n" + "\n\n".join(all_descs))
+    text = "\n".join(parts)
+
     telegram_client.send_message(
         chat_id,
-        "Select an agent to resume:",
+        text,
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
