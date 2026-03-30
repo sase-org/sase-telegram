@@ -333,12 +333,22 @@ def _format_plan_approval(
     notes_text = _format_notes_text(n.notes)
     attachments: list[str] = []
 
+    from sase.llm_provider.registry import format_provider_model_label
+
     agent_name = n.action_data.get("agent_name")
     if agent_name:
         escaped_name = escape_markdown_v2(agent_name)
         name_line = f"  _@{escaped_name}_"
     else:
         name_line = ""
+
+    raw_provider = n.action_data.get("llm_provider")
+    raw_model = n.action_data.get("model")
+    if raw_provider or raw_model:
+        label = escape_markdown_v2(format_provider_model_label(raw_provider, raw_model))
+        plan_title = f"📋 *{label} Plan Review*"
+    else:
+        plan_title = "📋 *Plan Review*"
 
     plan_content = ""
     if n.files:
@@ -350,7 +360,7 @@ def _format_plan_approval(
 
     if plan_content:
         converted = markdown_to_telegram_v2(plan_content)
-        header = f"📋 *Plan Review*{name_line}\n\n{notes_text}\n\n"
+        header = f"{plan_title}{name_line}\n\n{notes_text}\n\n"
 
         if len(converted) > EXPANDABLE_THRESHOLD:
             # Telegram's MarkdownV2 parser splits expandable blockquotes
@@ -385,7 +395,7 @@ def _format_plan_approval(
         if n.files:
             attachments.append(n.files[0])
     else:
-        text = f"📋 *Plan Review*{name_line}\n\n{notes_text}"
+        text = f"{plan_title}{name_line}\n\n{notes_text}"
 
     row1 = [
         InlineKeyboardButton(
