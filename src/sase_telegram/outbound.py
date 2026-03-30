@@ -41,7 +41,7 @@ def get_unsent_notifications() -> list[Notification]:
     all_notifs = load_notifications(include_dismissed=True)
     unsent = []
     for n in all_notifs:
-        if n.read:
+        if n.read or n.silent:
             continue
         from datetime import datetime
 

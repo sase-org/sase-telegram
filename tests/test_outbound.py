@@ -37,6 +37,7 @@ def _make_notification(
     timestamp: str | None = None,
     read: bool = False,
     dismissed: bool = False,
+    silent: bool = False,
 ) -> Notification:
     if timestamp is None:
         timestamp = datetime.now(UTC).isoformat()
@@ -47,6 +48,7 @@ def _make_notification(
         notes=["test note"],
         read=read,
         dismissed=dismissed,
+        silent=silent,
     )
 
 
@@ -93,6 +95,29 @@ class TestGetUnsentNotifications:
         result_ids = {r.id for r in result}
         assert "new00000-0000-0000-0000-000000000000" in result_ids
         assert "dism0000-0000-0000-0000-000000000000" in result_ids
+
+    @patch("sase_telegram.outbound.load_notifications")
+    def test_filters_silent_notifications(self, mock_load):
+        """Silent notifications are excluded even if unread and new."""
+        new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+
+        midpoint = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
+        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_SENT_TEST_FILE.write_text(str(midpoint))
+
+        n_normal = _make_notification(
+            id="norm0000-0000-0000-0000-000000000000", timestamp=new_ts
+        )
+        n_silent = _make_notification(
+            id="sil00000-0000-0000-0000-000000000000",
+            timestamp=new_ts,
+            silent=True,
+        )
+        mock_load.return_value = [n_normal, n_silent]
+
+        result = get_unsent_notifications()
+        assert len(result) == 1
+        assert result[0].id == "norm0000-0000-0000-0000-000000000000"
 
 
 class TestMarkSent:
