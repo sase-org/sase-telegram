@@ -403,8 +403,8 @@ def _format_plan_approval(
             callback_data=callback_data.encode("plan", prefix, "approve"),
         ),
         InlineKeyboardButton(
-            "📦 Commit",
-            callback_data=callback_data.encode("plan", prefix, "commit"),
+            "🚀 Run",
+            callback_data=callback_data.encode("plan", prefix, "run"),
         ),
         InlineKeyboardButton(
             "📋 Epic",

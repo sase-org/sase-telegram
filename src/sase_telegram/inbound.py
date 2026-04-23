@@ -176,13 +176,17 @@ def process_callback(
                 response_data={"action": "epic"},
                 answer_text="Epic created",
             )
-        elif cb.choice == "commit":
+        elif cb.choice == "run":
             return ResponseAction(
                 action_type="plan",
                 notif_id_prefix=cb.notif_id_prefix,
                 response_path=response_path,
-                response_data={"action": "commit"},
-                answer_text="Plan committed",
+                response_data={
+                    "action": "approve",
+                    "commit_plan": False,
+                    "run_coder": True,
+                },
+                answer_text="Running coder (no commit)",
             )
 
     elif cb.action_type == "hitl":

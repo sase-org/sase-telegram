@@ -111,14 +111,18 @@ class TestProcessCallbackPlan:
         assert result is not None
         assert result.response_data == {"action": "reject"}
 
-    def test_commit(self, tmp_path: Path) -> None:
+    def test_run(self, tmp_path: Path) -> None:
         response_dir = str(tmp_path)
         pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:commit", pending)
+        result = process_callback("plan:abcd1234:run", pending)
         assert result is not None
         assert result.action_type == "plan"
-        assert result.response_data == {"action": "commit"}
-        assert result.answer_text == "Plan committed"
+        assert result.response_data == {
+            "action": "approve",
+            "commit_plan": False,
+            "run_coder": True,
+        }
+        assert result.answer_text == "Running coder (no commit)"
         assert result.response_path == tmp_path / "plan_response.json"
 
     def test_unknown_pending(self) -> None:
