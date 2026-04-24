@@ -373,6 +373,7 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
     """Launch a single background sase agent from a Telegram prompt."""
     from sase.agent.launcher import launch_agent_from_cwd
     from sase.agent.names import get_next_auto_name
+    from sase.agent.repeat_launcher import extract_repeat_and_name
     from sase.llm_provider.registry import (
         format_provider_model_label,
         get_default_provider_name,
@@ -393,9 +394,16 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
     # Save original prompt before modification (for kill-retry copy button)
     original_prompt = prompt
 
+    # A %r:N prompt fans out inside spawn_repeat_batch, which owns naming
+    # for the whole batch. Prepending %n:<auto> here would turn the
+    # auto-picked letter into an *explicit* base and force the strict
+    # collision path — wrong when the user never asked for a specific name.
+    repeat_count, _, _ = extract_repeat_and_name(expanded)
+    is_repeat = repeat_count is not None and repeat_count > 1
+
     # Auto-assign a name if the user didn't provide one
     auto_name: str | None = None
-    if directives.name is None:
+    if directives.name is None and not is_repeat:
         auto_name = get_next_auto_name()
         prompt = f"%n:{auto_name} {prompt}"
 
@@ -425,6 +433,8 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
         if agent_name:
             escaped_name = escape_markdown_v2(agent_name)
             name_line = f"  _@{escaped_name}_"
+        elif is_repeat:
+            name_line = f"  _repeat×{escape_markdown_v2(str(repeat_count))}_"
         else:
             name_line = ""
         meta = escape_markdown_v2(f"workspace #{result.workspace_num}")

@@ -447,6 +447,45 @@ class TestLaunchAgent:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_no_auto_name_for_repeat_prompt(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        # Repeat prompts must flow through to spawn_repeat_batch without
+        # a %n:<auto> prepend — prepending turns the auto-name into an
+        # explicit base and triggers the strict collision check against
+        # orphan child-named agents.
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        with (
+            patch(
+                "sase.agent.names.get_next_auto_name",
+                return_value="c",
+            ) as mock_auto,
+            patch(
+                "sase.agent.launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ) as mock_launch,
+        ):
+            _launch_agent("%r:3 List all open beads")
+
+        launched_prompt = mock_launch.call_args[0][0]
+        assert "%n:" not in launched_prompt
+        assert "%r:3" in launched_prompt
+        mock_auto.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_launch_includes_wait_keyboard(
         self,
         mock_creds: MagicMock,
