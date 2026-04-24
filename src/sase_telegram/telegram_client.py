@@ -178,11 +178,17 @@ def send_document(
     chat_id: str,
     document: str | bytes,
     caption: str | None = None,
+    parse_mode: str | None = None,
 ) -> Message:
     """Send a document to a Telegram chat."""
     bot = _get_bot()
     return _run_async(
-        bot.send_document(chat_id=chat_id, document=document, caption=caption)
+        bot.send_document(
+            chat_id=chat_id,
+            document=document,
+            caption=caption,
+            parse_mode=parse_mode,
+        )
     )
 
 

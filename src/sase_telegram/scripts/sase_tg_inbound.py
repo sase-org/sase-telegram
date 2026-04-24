@@ -580,6 +580,8 @@ def _handle_command(text: str) -> None:
         _handle_listx_command()
     elif command == "resume":
         _handle_resume_command()
+    elif command == "xprompts":
+        _handle_xprompts_command()
     # Unknown commands (e.g. /start) are silently ignored
 
 
@@ -874,6 +876,98 @@ def _handle_resume_command() -> None:
     )
 
 
+def _format_xprompts_caption(stats: Any) -> str:
+    """Format an HTML caption summarising a CatalogStats object."""
+    import html
+
+    by_source = stats.by_source
+    lines = [
+        "📚 <b>xprompts Catalog</b>",
+        "",
+        f"<b>{stats.total}</b> xprompts across <b>{len(stats.by_project)}</b> projects",
+        "",
+        f"• Built-in:     {by_source.get('built-in', 0)}",
+        f"• Project:      {by_source.get('project', 0)}",
+        f"• Config:       {by_source.get('config', 0)}",
+        f"• Plugin:       {by_source.get('plugin', 0)}",
+        f"• Memory (auto): {by_source.get('memory', 0)}",
+    ]
+
+    top_tags_line: str | None = None
+    if stats.by_tag:
+        top = sorted(stats.by_tag.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        top_tags_html = " · ".join(
+            f"<code>#{html.escape(tag)}</code>" for tag, _ in top
+        )
+        top_tags_line = f"Top tags: {top_tags_html}"
+
+    lines.append("")
+    if top_tags_line:
+        lines.append(top_tags_line)
+        lines.append("")
+    lines.append(f"Generated {stats.generated_at.date().isoformat()}")
+
+    caption = "\n".join(lines)
+    if top_tags_line and len(caption) > 1000:
+        lines_no_tags = [ln for ln in lines if ln != top_tags_line]
+        caption = "\n".join(lines_no_tags)
+    return caption
+
+
+def _handle_xprompts_command() -> None:
+    """Handle /xprompts — build and send the xprompts PDF catalog."""
+    chat_id = credentials.get_chat_id()
+    telegram_client.send_message(chat_id, "📚 Building your xprompts catalog…")
+
+    try:
+        from sase.xprompt.catalog import (
+            NoXpromptsFound,
+            PdfEngineUnavailable,
+            build_xprompts_catalog,
+        )
+    except ImportError:
+        log.exception("Failed to import sase.xprompt.catalog")
+        telegram_client.send_message(
+            chat_id,
+            "Failed to build xprompts catalog: ImportError. See bot logs for details.",
+        )
+        return
+
+    try:
+        artifact = build_xprompts_catalog()
+    except PdfEngineUnavailable:
+        log.exception("PDF engine unavailable for /xprompts")
+        telegram_client.send_message(
+            chat_id,
+            "PDF engine (wkhtmltopdf/pandoc) not installed on the bot host — "
+            "cannot render the catalog PDF.",
+        )
+        return
+    except NoXpromptsFound:
+        log.exception("No xprompts found for /xprompts")
+        telegram_client.send_message(
+            chat_id,
+            "No xprompts found — unexpected, file a bug.",
+        )
+        return
+    except Exception as exc:
+        log.exception("Failed to build xprompts catalog")
+        telegram_client.send_message(
+            chat_id,
+            f"Failed to build xprompts catalog: {type(exc).__name__}. "
+            "See bot logs for details.",
+        )
+        return
+
+    caption = _format_xprompts_caption(artifact.stats)
+    telegram_client.send_document(
+        chat_id,
+        str(artifact.pdf_path),
+        caption=caption,
+        parse_mode="HTML",
+    )
+
+
 def _send_confirmation(response: ResponseAction, message_id: int) -> None:
     """Send a confirmation reply to the user's feedback/answer message."""
     try:
@@ -912,6 +1006,7 @@ _SLASH_COMMANDS = [
     ("list", "Show all running agents"),
     ("listx", "Show done/undismissed agents"),
     ("resume", "Copy resume text for an agent"),
+    ("xprompts", "Export the xprompts catalog as a PDF"),
 ]
 
 

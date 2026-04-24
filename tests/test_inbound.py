@@ -960,6 +960,75 @@ class TestHandleRetryFromCallback:
         )
 
 
+class TestXpromptsCommand:
+    """Tests for _handle_xprompts_command."""
+
+    def test_xprompts_command_builds_and_sends_pdf(self, tmp_path: Path) -> None:
+        from datetime import datetime
+
+        from sase.xprompt.catalog import CatalogArtifact, CatalogStats
+
+        pdf_path = tmp_path / "catalog.pdf"
+        pdf_path.write_bytes(b"%PDF-fake")
+        fake_artifact = CatalogArtifact(
+            pdf_path=pdf_path,
+            stats=CatalogStats(
+                total=5,
+                by_source={"built-in": 5},
+                by_project={},
+                by_tag={},
+                with_description=5,
+                with_inputs=0,
+                skills=0,
+                generated_at=datetime(2026, 4, 24),
+            ),
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase.xprompt.catalog.build_xprompts_catalog",
+                return_value=fake_artifact,
+            ) as build_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import (
+                _handle_xprompts_command,
+            )
+
+            _handle_xprompts_command()
+
+        build_mock.assert_called_once()
+        assert tc_mock.send_message.call_count == 1  # the ack
+        tc_mock.send_document.assert_called_once()
+        _args, kwargs = tc_mock.send_document.call_args
+        assert kwargs.get("parse_mode") == "HTML"
+        assert "xprompts Catalog" in kwargs.get("caption", "")
+
+    def test_xprompts_command_handles_pdf_engine_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        from sase.xprompt.catalog import PdfEngineUnavailable
+
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase.xprompt.catalog.build_xprompts_catalog",
+                side_effect=PdfEngineUnavailable("no engine"),
+            ),
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import (
+                _handle_xprompts_command,
+            )
+
+            _handle_xprompts_command()
+
+        assert tc_mock.send_message.call_count == 2  # ack + error
+        tc_mock.send_document.assert_not_called()
+
+
 class TestFindExternallyHandled:
     """Tests for find_externally_handled() — detecting TUI-handled actions."""
 
