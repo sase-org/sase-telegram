@@ -451,6 +451,20 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
                 vcs_prefix = f"{vcs_tag}"
             resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
             wait_text = f"{vcs_prefix}%w:{agent_name} "
+            if len(original_prompt) <= _COPY_TEXT_MAX:
+                retry_button = InlineKeyboardButton(
+                    "🔄 Retry",
+                    copy_text=CopyTextButton(text=original_prompt),
+                )
+            else:
+                pending_actions.add(
+                    f"retry-{agent_name}",
+                    {"action": "retry", "prompt": original_prompt},
+                )
+                retry_button = InlineKeyboardButton(
+                    "🔄 Retry",
+                    callback_data=encode("retry", agent_name, "go"),
+                )
             keyboard = InlineKeyboardMarkup(
                 [
                     [
@@ -468,6 +482,7 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
                             "🗡️ Kill",
                             callback_data=encode("kill", agent_name, "go"),
                         ),
+                        retry_button,
                     ],
                 ]
             )

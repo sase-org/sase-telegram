@@ -523,9 +523,55 @@ class TestLaunchAgent:
         assert buttons[0][0].copy_text.text == "#resume:c %w:c "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "%w:c "
-        assert len(buttons[1]) == 1
+        assert len(buttons[1]) == 2
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
+        assert buttons[1][1].text == "🔄 Retry"
+        assert buttons[1][1].copy_text.text == "List all open beads"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_retry_button_uses_callback_for_long_prompt(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+
+        long_prompt = "x" * 300
+
+        with (
+            patch(
+                "sase.agent.names.get_next_auto_name",
+                return_value="c",
+            ),
+            patch(
+                "sase.agent.launcher.launch_agent_from_cwd",
+                return_value=mock_result,
+            ),
+        ):
+            _launch_agent(long_prompt)
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[1][1].text == "🔄 Retry"
+        assert buttons[1][1].callback_data == "retry:c:go"
+        assert buttons[1][1].copy_text is None
+        mock_pa.add.assert_any_call(
+            "retry-c",
+            {"action": "retry", "prompt": long_prompt},
+        )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
