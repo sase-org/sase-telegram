@@ -10,8 +10,10 @@ from unittest.mock import MagicMock, patch
 from sase_telegram.inbound import (
     build_photo_prompt,
     clear_awaiting_feedback,
+    clear_awaiting_feedback_by_prefix,
     find_externally_handled,
     get_last_offset,
+    load_all_awaiting_feedback,
     load_awaiting_feedback,
     make_image_filename,
     process_callback,
@@ -227,6 +229,7 @@ class TestProcessTextMessage:
 
     def test_with_hitl_awaiting(self, tmp_path: Path) -> None:
         save_awaiting_feedback(
+            "42",
             "hitl0001",
             {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
         )
@@ -243,6 +246,7 @@ class TestProcessTextMessage:
 
     def test_with_question_awaiting(self, tmp_path: Path) -> None:
         save_awaiting_feedback(
+            "42",
             "ques0001",
             {
                 "action_type": "question",
@@ -307,10 +311,16 @@ class TestHandleTextMessageAgentLaunch:
         )
 
         save_awaiting_feedback(
+            "42",
             "hitl0001",
             {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
         )
-        msg = SimpleNamespace(text="Some feedback text", entities=None, message_id=102)
+        msg = SimpleNamespace(
+            text="Some feedback text",
+            entities=None,
+            message_id=102,
+            reply_to_message=SimpleNamespace(message_id=42),
+        )
         with (
             patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
             patch("sase_telegram.scripts.sase_tg_inbound._write_response"),
@@ -715,22 +725,112 @@ class TestAwaitingFeedbackState:
 
     def test_save_load_cycle(self) -> None:
         assert load_awaiting_feedback() is None
-        save_awaiting_feedback("abcd1234", {"action_type": "hitl", "dir": "/tmp"})
-        loaded = load_awaiting_feedback()
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl", "dir": "/tmp"})
+        loaded = load_awaiting_feedback("42")
         assert loaded is not None
         assert loaded["prefix"] == "abcd1234"
         assert loaded["action_info"]["action_type"] == "hitl"
 
-    def test_clear(self) -> None:
-        save_awaiting_feedback("abcd1234", {"action_type": "hitl"})
-        assert load_awaiting_feedback() is not None
-        clear_awaiting_feedback()
-        assert load_awaiting_feedback() is None
+    def test_clear_specific_key(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        assert load_awaiting_feedback("42") is not None
+        clear_awaiting_feedback("42")
+        assert load_awaiting_feedback("42") is None
 
-    def test_clear_when_no_file(self) -> None:
+    def test_clear_all_when_no_file(self) -> None:
         # Should not raise
         clear_awaiting_feedback()
         assert load_awaiting_feedback() is None
+
+    def test_concurrent_entries_do_not_overwrite(self) -> None:
+        save_awaiting_feedback(
+            "42", "abcd1234", {"action_type": "hitl", "dir": "/tmp/a"}
+        )
+        save_awaiting_feedback(
+            "43", "efgh5678", {"action_type": "plan", "dir": "/tmp/b"}
+        )
+        all_aw = load_all_awaiting_feedback()
+        assert set(all_aw) == {"42", "43"}
+        assert all_aw["42"]["prefix"] == "abcd1234"
+        assert all_aw["43"]["prefix"] == "efgh5678"
+
+    def test_clear_one_leaves_others_intact(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        clear_awaiting_feedback("42")
+        assert load_awaiting_feedback("42") is None
+        remaining = load_awaiting_feedback("43")
+        assert remaining is not None
+        assert remaining["prefix"] == "efgh5678"
+
+    def test_clear_by_prefix_finds_matching_entry(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        cleared = clear_awaiting_feedback_by_prefix("abcd1234")
+        assert cleared == "42"
+        assert load_awaiting_feedback("42") is None
+        assert load_awaiting_feedback("43") is not None
+
+    def test_clear_by_prefix_no_match_returns_none(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        assert clear_awaiting_feedback_by_prefix("zzzz9999") is None
+        assert load_awaiting_feedback("42") is not None
+
+    def test_load_without_key_returns_unique_entry(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        loaded = load_awaiting_feedback()
+        assert loaded is not None
+        assert loaded["prefix"] == "abcd1234"
+
+    def test_load_without_key_returns_none_when_ambiguous(self) -> None:
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        # With multiple entries and no key, the caller cannot disambiguate.
+        assert load_awaiting_feedback() is None
+
+    def test_legacy_single_entry_file_loads(self, tmp_path: Path) -> None:
+        # Old format: a flat single-entry object (no per-key map).
+        AWAITING_TEST_PATH.write_text(
+            json.dumps(
+                {
+                    "prefix": "legacy01",
+                    "action_info": {"action_type": "hitl", "dir": str(tmp_path)},
+                }
+            )
+        )
+        # No specific key known — falls back to the lone entry.
+        loaded = load_awaiting_feedback()
+        assert loaded is not None
+        assert loaded["prefix"] == "legacy01"
+        # Prefix-based clear still works against the normalized entry.
+        cleared = clear_awaiting_feedback_by_prefix("legacy01")
+        assert cleared is not None
+        assert load_awaiting_feedback() is None
+
+    def test_process_text_message_keyed_lookup(self, tmp_path: Path) -> None:
+        save_awaiting_feedback(
+            "42", "hitl0001", {"action_type": "hitl", "artifacts_dir": str(tmp_path)}
+        )
+        save_awaiting_feedback(
+            "43",
+            "ques0001",
+            {
+                "action_type": "question",
+                "response_dir": str(tmp_path),
+                "question_text": "?",
+            },
+        )
+        # Reply targeting message 42 -> hitl flow.
+        result = process_text_message("fix it", key="42")
+        assert result is not None
+        assert result.action_type == "hitl"
+        assert result.notif_id_prefix == "hitl0001"
+
+    def test_process_text_message_ambiguous_returns_none(self, tmp_path: Path) -> None:
+        save_awaiting_feedback("42", "a", {"action_type": "hitl"})
+        save_awaiting_feedback("43", "b", {"action_type": "plan"})
+        # No key, two entries -> cannot disambiguate.
+        assert process_text_message("fix it") is None
 
 
 class TestBuildPhotoPrompt:

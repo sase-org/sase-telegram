@@ -21,10 +21,10 @@ from sase_telegram.inbound import (
     ResponseAction,
     build_photo_prompt,
     clear_awaiting_feedback,
+    clear_awaiting_feedback_by_prefix,
     confirmation_text,
     find_externally_handled,
     get_last_offset,
-    load_awaiting_feedback,
     make_image_filename,
     process_callback,
     process_callback_twostep,
@@ -129,11 +129,19 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     twostep = process_callback_twostep(data_str, pending)
     if twostep is not None:
         prefix, action_info = twostep
-        save_awaiting_feedback(prefix, action_info)
+        action = pending.get(prefix)
+        # Key by the originating Telegram message_id so concurrent two-step
+        # flows do not overwrite each other. Fall back to the prefix when the
+        # pending entry is somehow missing the message_id.
+        key = (
+            str(action["message_id"])
+            if action and action.get("message_id") is not None
+            else prefix
+        )
+        save_awaiting_feedback(key, prefix, action_info)
         telegram_client.answer_callback_query(
             callback_query.id, "Send your feedback as a text message"
         )
-        action = pending.get(prefix)
         if action:
             telegram_client.edit_message_reply_markup(
                 action["chat_id"], action["message_id"], reply_markup=None
@@ -999,10 +1007,21 @@ def _send_confirmation(response: ResponseAction, message_id: int) -> None:
 def _handle_text_message(message: Any) -> None:
     """Handle a text message: feedback completion, or new agent launch."""
     text = reconstruct_code_markers(message.text, message.entities)
-    response = process_text_message(text)
+    reply_to = getattr(message, "reply_to_message", None)
+    reply_key = (
+        str(reply_to.message_id)
+        if reply_to is not None and getattr(reply_to, "message_id", None) is not None
+        else None
+    )
+    response = process_text_message(text, key=reply_key)
     if response is not None:
         _write_response(response)
-        clear_awaiting_feedback()
+        # Clear only the matched awaiting entry — leaves other concurrent
+        # flows intact.
+        if reply_key is not None:
+            clear_awaiting_feedback(reply_key)
+        else:
+            clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
         pending_actions.remove(response.notif_id_prefix)
         _send_confirmation(response, message.message_id)
         return
@@ -1118,9 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass  # Message may have been deleted or already edited
         pending_actions.remove(prefix)
-        awaiting = load_awaiting_feedback()
-        if awaiting and awaiting.get("prefix") == prefix:
-            clear_awaiting_feedback()
+        clear_awaiting_feedback_by_prefix(prefix)
 
     return 0
 

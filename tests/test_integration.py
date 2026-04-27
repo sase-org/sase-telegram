@@ -466,6 +466,94 @@ class TestInboundIntegration:
         assert data["feedback"] == "Please fix the indentation on line 42"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_concurrent_feedback_flows_do_not_overwrite(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Two pending two-step flows resolve independently via reply_to_message."""
+        from sase_telegram import pending_actions
+        from sase_telegram.inbound import load_all_awaiting_feedback
+
+        artifacts_a = tmp_path / "a"
+        artifacts_a.mkdir()
+        artifacts_b = tmp_path / "b"
+        artifacts_b.mkdir()
+
+        pending_actions.add(
+            "hitlAAAA",
+            {
+                "notification_id": "hitlAAAA-0000-0000-0000-000000000000",
+                "action": "HITL",
+                "action_data": {"artifacts_dir": str(artifacts_a)},
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+        pending_actions.add(
+            "hitlBBBB",
+            {
+                "notification_id": "hitlBBBB-0000-0000-0000-000000000000",
+                "action": "HITL",
+                "action_data": {"artifacts_dir": str(artifacts_b)},
+                "message_id": 43,
+                "chat_id": "12345",
+            },
+        )
+
+        # Step 1: Press feedback button on message 42.
+        cb_a = SimpleNamespace(
+            id="cb_a",
+            data="hitl:hitlAAAA:feedback",
+            message=SimpleNamespace(message_id=42),
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(update_id=600, callback_query=cb_a, message=None)
+        ]
+        mock_tg.answer_callback_query.return_value = True
+        mock_tg.edit_message_reply_markup.return_value = True
+        inbound_main(["--once"])
+
+        # Step 2: Press feedback button on message 43 — must NOT overwrite A.
+        cb_b = SimpleNamespace(
+            id="cb_b",
+            data="hitl:hitlBBBB:feedback",
+            message=SimpleNamespace(message_id=43),
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(update_id=601, callback_query=cb_b, message=None)
+        ]
+        inbound_main(["--once"])
+
+        all_aw = load_all_awaiting_feedback()
+        assert {"42", "43"} <= set(all_aw)
+        assert all_aw["42"]["prefix"] == "hitlAAAA"
+        assert all_aw["43"]["prefix"] == "hitlBBBB"
+
+        # Step 3: Reply targeting message 43 — completes B, leaves A intact.
+        text_msg = SimpleNamespace(
+            text="fix B please",
+            photo=None,
+            document=None,
+            entities=None,
+            message_id=200,
+            reply_to_message=SimpleNamespace(message_id=43),
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(update_id=602, callback_query=None, message=text_msg)
+        ]
+        inbound_main(["--once"])
+
+        response_b = artifacts_b / "hitl_response.json"
+        assert response_b.exists()
+        assert json.loads(response_b.read_text())["feedback"] == "fix B please"
+        # A's response file must NOT have been written.
+        assert not (artifacts_a / "hitl_response.json").exists()
+        # A's awaiting entry survives.
+        remaining = load_all_awaiting_feedback()
+        assert "42" in remaining
+        assert remaining["42"]["prefix"] == "hitlAAAA"
+        assert "43" not in remaining
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_expired_action_handled_gracefully(self, mock_tg: MagicMock) -> None:
         """Callback for expired action returns 'expired' message."""
         from sase_telegram import pending_actions

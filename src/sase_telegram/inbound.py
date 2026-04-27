@@ -77,30 +77,109 @@ def save_offset(offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Awaiting-feedback state (two-step flow)
+# Awaiting-feedback state (two-step flow), keyed by Telegram message_id
 # ---------------------------------------------------------------------------
 
+_LEGACY_AWAITING_KEY = "_legacy"
 
-def save_awaiting_feedback(prefix: str, action_info: dict[str, Any]) -> None:
-    """Save two-step feedback state to disk."""
+
+def _load_awaiting_map() -> dict[str, Any]:
+    """Read the awaiting-feedback map, normalizing the legacy single-entry shape.
+
+    The on-disk file used to be ``{"prefix": "...", "action_info": {...}}``.
+    Such files are surfaced as a single ``_LEGACY_AWAITING_KEY`` entry so callers
+    can still look up the only pending flow when no explicit key is known.
+    """
+    if not AWAITING_FEEDBACK_PATH.exists():
+        return {}
+    try:
+        data = json.loads(AWAITING_FEEDBACK_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if "prefix" in data and "action_info" in data:
+        return {
+            _LEGACY_AWAITING_KEY: {
+                "prefix": data["prefix"],
+                "action_info": data["action_info"],
+            }
+        }
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _save_awaiting_map(data: dict[str, Any]) -> None:
     AWAITING_FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    data = {"prefix": prefix, "action_info": action_info}
     AWAITING_FEEDBACK_PATH.write_text(json.dumps(data, indent=2))
 
 
-def load_awaiting_feedback() -> dict[str, Any] | None:
-    """Load two-step feedback state, or None if not awaiting."""
-    if not AWAITING_FEEDBACK_PATH.exists():
-        return None
-    try:
-        return json.loads(AWAITING_FEEDBACK_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+def save_awaiting_feedback(key: str, prefix: str, action_info: dict[str, Any]) -> None:
+    """Record an awaiting-feedback entry under ``key``.
+
+    ``key`` is typically the originating Telegram ``message_id`` (the message
+    hosting the feedback button). Existing entries under other keys are kept,
+    so concurrent two-step flows do not overwrite each other.
+    """
+    data = _load_awaiting_map()
+    data[str(key)] = {"prefix": prefix, "action_info": action_info}
+    _save_awaiting_map(data)
 
 
-def clear_awaiting_feedback() -> None:
-    """Clear two-step feedback state."""
-    AWAITING_FEEDBACK_PATH.unlink(missing_ok=True)
+def load_awaiting_feedback(key: str | None = None) -> dict[str, Any] | None:
+    """Return one awaiting-feedback entry.
+
+    If ``key`` is provided, return the entry under that key, or ``None``.
+    If ``key`` is ``None``, return the only entry when exactly one exists,
+    or ``None`` otherwise (legacy / single-flow fallback).
+    """
+    data = _load_awaiting_map()
+    if not data:
+        return None
+    if key is not None:
+        return data.get(str(key))
+    if len(data) == 1:
+        return next(iter(data.values()))
+    return None
+
+
+def load_all_awaiting_feedback() -> dict[str, Any]:
+    """Return the full awaiting-feedback map (key -> entry)."""
+    return _load_awaiting_map()
+
+
+def clear_awaiting_feedback(key: str | None = None) -> None:
+    """Clear awaiting-feedback entries.
+
+    With ``key``, drop only that entry. With ``key=None``, clear everything
+    (used by tests and as a hard-reset path).
+    """
+    if key is None:
+        AWAITING_FEEDBACK_PATH.unlink(missing_ok=True)
+        return
+    data = _load_awaiting_map()
+    skey = str(key)
+    if skey not in data:
+        return
+    del data[skey]
+    if data:
+        _save_awaiting_map(data)
+    else:
+        AWAITING_FEEDBACK_PATH.unlink(missing_ok=True)
+
+
+def clear_awaiting_feedback_by_prefix(prefix: str) -> str | None:
+    """Drop the awaiting-feedback entry whose ``prefix`` matches.
+
+    Returns the key that was cleared, or ``None`` if no entry matched.
+    Used by externally-handled cleanup, where the originating key may not
+    be known but the action prefix is.
+    """
+    data = _load_awaiting_map()
+    for key, entry in data.items():
+        if entry.get("prefix") == prefix:
+            clear_awaiting_feedback(key)
+            return key
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -292,13 +371,15 @@ def process_callback_twostep(
 # ---------------------------------------------------------------------------
 
 
-def process_text_message(text: str) -> ResponseAction | None:
+def process_text_message(text: str, key: str | None = None) -> ResponseAction | None:
     """Complete a two-step feedback flow using the user's text message.
 
-    Returns a ResponseAction if there is an active awaiting-feedback state,
-    or None if no feedback is pending.
+    ``key`` selects the matching awaiting-feedback entry (typically the
+    Telegram ``message_id`` the user replied to). When omitted, falls back to
+    the unique pending entry — preserves single-flow behavior and legacy
+    state files.
     """
-    awaiting = load_awaiting_feedback()
+    awaiting = load_awaiting_feedback(key)
     if not awaiting:
         return None
 
