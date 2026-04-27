@@ -172,6 +172,105 @@ class TestOutboundIntegration:
         assert pending[prefix]["action"] == "PlanApproval"
         assert pending[prefix]["message_id"] == 99
 
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
+    def test_advances_high_water_mark_per_notification(
+        self,
+        mock_chat_id: MagicMock,
+        _mock_idle: MagicMock,
+        mock_load: MagicMock,
+        mock_send: MagicMock,
+    ) -> None:
+        """Each successful send advances the high-water mark before the next one.
+
+        Pinning this behavior protects against regression to a "mark all at the
+        end" model: if a later notification fails after this test passes,
+        earlier notifications must not be re-sent on the next run.
+        """
+        mock_chat_id.return_value = "12345"
+        mock_send.return_value = MagicMock(message_id=42)
+
+        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
+
+        ts1 = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+        ts2 = datetime(2025, 6, 2, tzinfo=UTC).isoformat()
+        n1 = _make_notification(
+            id="n1000000-0000-0000-0000-000000000000", timestamp=ts1
+        )
+        n2 = _make_notification(
+            id="n2000000-0000-0000-0000-000000000000", timestamp=ts2
+        )
+        mock_load.return_value = [n1, n2]
+
+        # Snapshot the high-water mark each time send_message is called.
+        # The first send should advance to ts1 BEFORE the second send fires.
+        marks_during_send: list[float] = []
+
+        def _record_mark(*_a: Any, **_kw: Any) -> MagicMock:
+            marks_during_send.append(float(LAST_SENT_TEST_FILE.read_text().strip()))
+            return MagicMock(message_id=42)
+
+        mock_send.side_effect = _record_mark
+
+        result = outbound_main([])
+        assert result == 0
+        assert mock_send.call_count == 2
+
+        ts1_epoch = datetime.fromisoformat(ts1).timestamp()
+        ts2_epoch = datetime.fromisoformat(ts2).timestamp()
+        # Before first send the mark is still the original 2024 floor.
+        assert marks_during_send[0] == pytest.approx(
+            datetime(2024, 1, 1, tzinfo=UTC).timestamp(), abs=1.0
+        )
+        # Before the second send the mark has advanced to ts1 — proves
+        # the advance happened between sends, not after the loop.
+        assert marks_during_send[1] == pytest.approx(ts1_epoch, abs=1.0)
+        # After the loop the mark is at ts2.
+        final = float(LAST_SENT_TEST_FILE.read_text().strip())
+        assert final == pytest.approx(ts2_epoch, abs=1.0)
+
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
+    def test_failed_send_does_not_advance_high_water_mark(
+        self,
+        mock_chat_id: MagicMock,
+        _mock_idle: MagicMock,
+        mock_load: MagicMock,
+        mock_send: MagicMock,
+    ) -> None:
+        """A send failure on n2 leaves the mark at n1 so n2 retries on next run."""
+        mock_chat_id.return_value = "12345"
+
+        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
+
+        ts1 = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+        ts2 = datetime(2025, 6, 2, tzinfo=UTC).isoformat()
+        n1 = _make_notification(
+            id="n1000000-0000-0000-0000-000000000000", timestamp=ts1
+        )
+        n2 = _make_notification(
+            id="n2000000-0000-0000-0000-000000000000", timestamp=ts2
+        )
+        mock_load.return_value = [n1, n2]
+        mock_send.side_effect = [MagicMock(message_id=1), RuntimeError("boom")]
+
+        result = outbound_main([])
+        assert result == 0
+        # n1 advanced the mark, n2 raised before mark_sent ran for it.
+        final = float(LAST_SENT_TEST_FILE.read_text().strip())
+        ts1_epoch = datetime.fromisoformat(ts1).timestamp()
+        assert final == pytest.approx(ts1_epoch, abs=1.0)
+
     def test_dry_run_prints_without_sending(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
