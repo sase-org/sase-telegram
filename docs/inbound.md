@@ -52,11 +52,14 @@ For `feedback` and `custom` choices, the flow is:
 Text messages are dispatched in priority order:
 
 1. **Two-step completion** — If `awaiting_feedback.json` has an active flow, the text completes it (see above)
-2. **Dot commands** — Messages starting with `.` are agent management commands:
-   - `.kill <name>` — Kills a running agent by name
-   - `.list` — Lists active agents
-   - `.listx` — Lists active agents with extended details
-3. **Bot commands** — Messages starting with `/` (like `/start`) are silently ignored
+2. **Slash commands** — Messages starting with `/` are agent management commands (registered with `set_my_commands` so they appear in the chat input UI):
+   - `/list` — Lists running agents with provider/model and a prompt snippet
+   - `/listx` — Lists done agents not yet dismissed
+   - `/kill` — Shows an inline keyboard of running agents with rich descriptions
+   - `/kill <name>` — Terminates the named agent (sends a 🔄 Retry button on success)
+   - `/resume` — Shows resume copy buttons for running + done agents
+   - `/xprompts` — Builds the xprompts catalog PDF and reports its path
+3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
 
 ### Photos and Documents
