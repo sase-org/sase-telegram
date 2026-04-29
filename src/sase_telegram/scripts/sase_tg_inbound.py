@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +45,12 @@ _COMMANDS_REGISTERED_PATH = (
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
+_BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
+_VCS_PROJECT_RE = re.compile(
+    r"^#(?P<workflow>[A-Za-z][A-Za-z0-9_-]*(?:!!|\?\?)?)"
+    r"(?:(?::|_)(?P<ref>[A-Za-z0-9][A-Za-z0-9_.-]*)|\((?P<paren>[^)\s]+)\))"
+)
+_DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -62,6 +69,125 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional context string for lumberjack compatibility",
     )
     return parser.parse_args(argv)
+
+
+def _extract_project_from_prompt(prompt: str) -> str | None:
+    """Extract a project name from a leading VCS workflow tag in *prompt*."""
+    text = prompt.lstrip()
+    directive_match = _DIRECTIVE_PREFIX_RE.match(text)
+    if directive_match:
+        text = text[directive_match.end() :]
+
+    match = _VCS_PROJECT_RE.match(text)
+    if not match:
+        return None
+
+    project = match.group("ref") or match.group("paren")
+    if not project or project.startswith("@"):
+        return None
+    return project
+
+
+def _iter_pending_prompts() -> list[str]:
+    """Return pending Telegram prompts, newest first."""
+    try:
+        pending = pending_actions.list_all()
+    except Exception:
+        log.warning("Failed to load pending Telegram actions", exc_info=True)
+        return []
+
+    prompts: list[str] = []
+    for action in sorted(
+        pending.values(),
+        key=lambda item: item.get("created_at", 0) if isinstance(item, dict) else 0,
+        reverse=True,
+    ):
+        if not isinstance(action, dict):
+            continue
+
+        prompt = action.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            prompts.append(prompt)
+
+        action_data = action.get("action_data")
+        if isinstance(action_data, dict):
+            nested_prompt = action_data.get("prompt")
+            if isinstance(nested_prompt, str) and nested_prompt.strip():
+                prompts.append(nested_prompt)
+
+    return prompts
+
+
+def _resolve_workspace_from_project_file(project: str) -> str | None:
+    project_file = Path.home() / ".sase" / "projects" / project / f"{project}.gp"
+    try:
+        for line in project_file.read_text().splitlines():
+            if not line.startswith("WORKSPACE_DIR:"):
+                continue
+            workspace_dir = line.split(":", 1)[1].strip()
+            if workspace_dir and Path(workspace_dir).is_dir():
+                return workspace_dir
+            return None
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_workspace_for_project(project: str, source: str) -> str | None:
+    try:
+        from sase.running_field import get_workspace_directory
+
+        return get_workspace_directory(project, 1)
+    except Exception:
+        workspace_dir = _resolve_workspace_from_project_file(project)
+        if workspace_dir:
+            log.info("Resolved bead project %r from project WORKSPACE_DIR", project)
+            return workspace_dir
+
+        log.warning(
+            "Failed to resolve bead project %r from %s",
+            project,
+            source,
+            exc_info=True,
+        )
+        return None
+
+
+def _resolve_bead_cwd() -> str | None:
+    """Resolve the working directory for ``sase bead`` subprocesses."""
+    override = os.environ.get(_BEAD_PROJECT_ENV, "").strip()
+    if override:
+        return _resolve_workspace_for_project(override, _BEAD_PROJECT_ENV)
+
+    for prompt in _iter_pending_prompts():
+        project = _extract_project_from_prompt(prompt)
+        if not project:
+            continue
+        cwd = _resolve_workspace_for_project(project, "pending Telegram prompt")
+        if cwd:
+            return cwd
+
+    return None
+
+
+def _run_bead_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run ``sase bead`` in the resolved project context when available."""
+    cmd = ["sase", "bead", *args]
+    cwd = _resolve_bead_cwd()
+    if cwd is None:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=cwd,
+    )
 
 
 def _write_response(response: ResponseAction) -> None:
@@ -1005,12 +1131,7 @@ _BEAD_BUTTON_LABEL_MAX = 60
 def _show_bead_selection(chat_id: str) -> None:
     """Render an inline keyboard with one button per open bead."""
     try:
-        result = subprocess.run(
-            ["sase", "bead", "list"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = _run_bead_command(["list"])
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return
@@ -1080,12 +1201,7 @@ def _handle_bead_command(args: str) -> None:
     bead_id = parts[0]
 
     try:
-        result = subprocess.run(
-            ["sase", "bead", "show", bead_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = _run_bead_command(["show", bead_id])
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return

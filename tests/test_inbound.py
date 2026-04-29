@@ -854,6 +854,175 @@ class TestBuildPhotoPrompt:
         assert "describe what you see" in result
 
 
+class TestBeadProjectContext:
+    """Tests for resolving the project context used by /bead."""
+
+    def test_extract_project_from_prompt(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+
+        assert _extract_project_from_prompt("#gh:sase Fix the bug") == "sase"
+        assert _extract_project_from_prompt("%n:foo #gh_sase Fix the bug") == "sase"
+        assert _extract_project_from_prompt("#git(sase-telegram) Fix it") == (
+            "sase-telegram"
+        )
+        assert _extract_project_from_prompt("#gh:@foo Continue work") is None
+        assert _extract_project_from_prompt("plain prompt") is None
+
+    def test_env_project_takes_precedence(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        workspace = tmp_path / "override"
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.setenv("SASE_TELEGRAM_BEAD_PROJECT", "override")
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={
+                    "new": {
+                        "prompt": "#gh:sase Fix the bug",
+                        "created_at": 2,
+                    }
+                },
+            ) as list_all_mock,
+            patch(
+                "sase.running_field.get_workspace_directory",
+                return_value=str(workspace),
+            ) as get_workspace_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+
+            _run_bead_command(["list"])
+
+        get_workspace_mock.assert_called_once_with("override", 1)
+        list_all_mock.assert_not_called()
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
+
+    def test_resolves_project_from_pending_prompt(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        workspace = tmp_path / "sase"
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={
+                    "old": {"prompt": "#gh:other Old task", "created_at": 1},
+                    "new": {
+                        "action_data": {"prompt": "%n:c #gh_sase Fix the bug"},
+                        "created_at": 2,
+                    },
+                },
+            ),
+            patch(
+                "sase.running_field.get_workspace_directory",
+                return_value=str(workspace),
+            ) as get_workspace_mock,
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import _resolve_bead_cwd
+
+            assert _resolve_bead_cwd() == str(workspace)
+
+        get_workspace_mock.assert_called_once_with("sase", 1)
+
+    def test_project_file_workspace_fallback(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        project_dir = tmp_path / ".sase" / "projects" / "sase"
+        project_dir.mkdir(parents=True)
+        (project_dir / "sase.gp").write_text(f"WORKSPACE_DIR: {workspace}\n")
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.Path.home",
+                return_value=tmp_path,
+            ),
+            patch(
+                "sase.running_field.get_workspace_directory",
+                side_effect=RuntimeError("workspace plugin unavailable"),
+            ),
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import (
+                _resolve_workspace_for_project,
+            )
+
+            assert _resolve_workspace_for_project("sase", "test") == str(workspace)
+
+    def test_run_bead_command_uses_resolved_cwd(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        workspace = tmp_path / "sase"
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={"ctx": {"prompt": "#gh:sase Fix", "created_at": 1}},
+            ),
+            patch(
+                "sase.running_field.get_workspace_directory",
+                return_value=str(workspace),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+
+            _run_bead_command(["show", "sase-13"])
+
+        assert run_mock.call_args[0][0] == ["sase", "bead", "show", "sase-13"]
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
+
+    def test_run_bead_command_falls_back_without_context(
+        self, monkeypatch: object
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={},
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+
+            _run_bead_command(["list"])
+
+        assert run_mock.call_args[0][0] == ["sase", "bead", "list"]
+        assert "cwd" not in run_mock.call_args.kwargs
+
+
 class TestMakeImageFilename:
     def test_format(self) -> None:
         filename = make_image_filename("ABCDEFghijklmnop")
@@ -1177,6 +1346,16 @@ class TestXpromptsCommand:
 
 class TestBeadCommand:
     """Tests for _handle_bead_command."""
+
+    def setup_method(self) -> None:
+        self._resolve_patcher = patch(
+            "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
+            return_value=None,
+        )
+        self._resolve_patcher.start()
+
+    def teardown_method(self) -> None:
+        self._resolve_patcher.stop()
 
     def test_missing_arg_shows_picker(self) -> None:
         stdout = (
