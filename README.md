@@ -60,7 +60,7 @@ Installing sase-telegram adds the following commands:
 - **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
 - **Copy-text buttons** — Resume, Wait, Kill, and Retry buttons copy pre-filled prompts to your clipboard
 - **Photo/document handling** — send images to launch agents with visual context
-- **Slash commands** — `/list`, `/listx`, `/kill [<name>]`, `/resume`, `/xprompts` for agent management from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/xprompts` for agent management from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
 - **PDF attachments** — long plans are converted to PDF via pandoc for readability
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -103,7 +103,7 @@ keyboard callbacks (approve/reject/select/epic), handles two-step feedback flows
 text message), and writes response files for sase to pick up. Text messages that don't complete a feedback flow are
 dispatched as follows:
 
-- **Slash commands** (`/list`, `/listx`, `/kill [<name>]`, `/resume`, `/xprompts`) — agent management
+- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/xprompts`) — agent management
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
