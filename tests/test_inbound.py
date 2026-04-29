@@ -1175,6 +1175,105 @@ class TestXpromptsCommand:
         tc_mock.send_document.assert_not_called()
 
 
+class TestBeadCommand:
+    """Tests for _handle_bead_command."""
+
+    def test_missing_arg_sends_usage(self) -> None:
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("")
+
+        tc_mock.send_message.assert_called_once()
+        args, _ = tc_mock.send_message.call_args
+        assert args[0] == "12345"
+        assert "Usage: /bead" in args[1]
+
+    def test_success_renders_markdown(self) -> None:
+        stdout = (
+            "○ sase-13 · DELTAS ChangeSpec Field   [OPEN]\n"
+            "Type: plan · Owner: bryanbugyi34@gmail.com\n"
+            "\n"
+            "CHILDREN\n"
+            "  ✓ sase-13.1: Phase 1\n"
+        )
+        completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("sase-13")
+
+        run_mock.assert_called_once()
+        cmd = run_mock.call_args[0][0]
+        assert cmd == ["sase", "bead", "show", "sase-13"]
+        tc_mock.send_message.assert_called_once()
+        _args, kwargs = tc_mock.send_message.call_args
+        assert kwargs.get("parse_mode") == "MarkdownV2"
+        body = tc_mock.send_message.call_args[0][1]
+        # markdown_to_telegram_v2 escapes punctuation; check the bead id is present.
+        assert "sase\\-13" in body
+        assert "Children" in body or "CHILDREN" in body
+
+    def test_subprocess_error_forwards_stderr(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1, stdout="", stderr="Error: issue not found: bogus\n"
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ),
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("bogus")
+
+        tc_mock.send_message.assert_called_once()
+        _args, kwargs = tc_mock.send_message.call_args
+        assert kwargs.get("parse_mode") == "MarkdownV2"
+        body = tc_mock.send_message.call_args[0][1]
+        assert body.startswith("```\n")
+        assert body.endswith("\n```")
+        assert "issue not found: bogus" in body
+
+    def test_strips_extra_whitespace_and_takes_first_token(self) -> None:
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout="○ sase-1 · X   [OPEN]\nType: phase · Owner: x@y\n",
+            stderr="",
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("  sase-1   extra args\n")
+
+        cmd = run_mock.call_args[0][0]
+        assert cmd == ["sase", "bead", "show", "sase-1"]
+
+
 class TestFindExternallyHandled:
     """Tests for find_externally_handled() — detecting TUI-handled actions."""
 

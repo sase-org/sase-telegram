@@ -6,16 +6,18 @@ import argparse
 import json
 import logging
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
+from sase_telegram.bead_format import bead_show_to_markdown
 from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
-from sase_telegram.formatting import escape_markdown_v2
+from sase_telegram.formatting import escape_markdown_v2, markdown_to_telegram_v2
 from sase_telegram.inbound import (
     IMAGES_DIR,
     ResponseAction,
@@ -605,6 +607,8 @@ def _handle_command(text: str) -> None:
         _handle_resume_command()
     elif command == "xprompts":
         _handle_xprompts_command()
+    elif command == "bead":
+        _handle_bead_command(args)
     # Unknown commands (e.g. /start) are silently ignored
 
 
@@ -991,6 +995,48 @@ def _handle_xprompts_command() -> None:
     )
 
 
+def _handle_bead_command(args: str) -> None:
+    """Handle /bead <id> — render bead details as a Telegram message."""
+    chat_id = credentials.get_chat_id()
+    parts = args.strip().split()
+    bead_id = parts[0] if parts else ""
+    if not bead_id:
+        telegram_client.send_message(
+            chat_id,
+            "Usage: /bead <bead_id> — example: /bead sase-13.1",
+        )
+        return
+
+    try:
+        result = subprocess.run(
+            ["sase", "bead", "show", bead_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
+        return
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or "sase bead show failed"
+        # Inside ``` code blocks only `\` and `` ` `` need escaping.
+        escaped = err.replace("\\", "\\\\").replace("`", "\\`")
+        telegram_client.send_message(
+            chat_id,
+            f"```\n{escaped}\n```",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    md = bead_show_to_markdown(result.stdout)
+    telegram_client.send_message(
+        chat_id,
+        markdown_to_telegram_v2(md),
+        parse_mode="MarkdownV2",
+    )
+
+
 def _send_confirmation(response: ResponseAction, message_id: int) -> None:
     """Send a confirmation reply to the user's feedback/answer message."""
     try:
@@ -1041,6 +1087,7 @@ _SLASH_COMMANDS = [
     ("listx", "Show done/undismissed agents"),
     ("resume", "Copy resume text for an agent"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
+    ("bead", "Show a bead's details as Markdown"),
 ]
 
 
