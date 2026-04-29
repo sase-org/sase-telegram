@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from textwrap import dedent
 
-from sase_telegram.bead_format import bead_show_to_markdown
+from sase_telegram.bead_format import (
+    BeadListEntry,
+    bead_show_to_markdown,
+    parse_bead_list_output,
+)
 
 
 def test_plan_bead_with_children_and_plan() -> None:
@@ -152,3 +156,70 @@ def test_description_multiline_reflow() -> None:
     )
     md = bead_show_to_markdown(raw)
     assert "first line\nsecond line" in md
+
+
+class TestParseBeadListOutput:
+    """Tests for parse_bead_list_output."""
+
+    def test_typical_list(self) -> None:
+        raw = dedent(
+            """\
+            ○ sase-13 · DELTAS ChangeSpec Field
+            ◐ sase-13.5 · Phase 5: Lifecycle Wiring ← sase-13
+            ✓ sase-13.1 · Phase 1: Data Model ← sase-13
+            """
+        )
+        entries = parse_bead_list_output(raw)
+        assert entries == [
+            BeadListEntry(
+                icon="○",
+                bead_id="sase-13",
+                title="DELTAS ChangeSpec Field",
+                parent_id=None,
+            ),
+            BeadListEntry(
+                icon="◐",
+                bead_id="sase-13.5",
+                title="Phase 5: Lifecycle Wiring",
+                parent_id="sase-13",
+            ),
+            BeadListEntry(
+                icon="✓",
+                bead_id="sase-13.1",
+                title="Phase 1: Data Model",
+                parent_id="sase-13",
+            ),
+        ]
+
+    def test_empty_no_issues_found(self) -> None:
+        assert parse_bead_list_output("No issues found.\n") == []
+
+    def test_blank_input(self) -> None:
+        assert parse_bead_list_output("") == []
+        assert parse_bead_list_output("\n\n") == []
+
+    def test_unicode_icons_preserved(self) -> None:
+        raw = "⊘ sase-9 · Cancelled\n"
+        entries = parse_bead_list_output(raw)
+        assert len(entries) == 1
+        assert entries[0].icon == "⊘"
+        assert entries[0].bead_id == "sase-9"
+        assert entries[0].title == "Cancelled"
+        assert entries[0].parent_id is None
+
+    def test_malformed_lines_skipped(self) -> None:
+        raw = dedent(
+            """\
+            this line has no separator
+            ○ sase-1 · Real Bead
+            another bogus line
+            """
+        )
+        entries = parse_bead_list_output(raw)
+        assert len(entries) == 1
+        assert entries[0].bead_id == "sase-1"
+
+    def test_id_with_colon_skipped(self) -> None:
+        raw = "○ bad:id · Title\n○ sase-2 · Good\n"
+        entries = parse_bead_list_output(raw)
+        assert [e.bead_id for e in entries] == ["sase-2"]

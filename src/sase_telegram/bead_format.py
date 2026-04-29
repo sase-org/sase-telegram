@@ -8,6 +8,7 @@ MarkdownV2 escaping before being sent to Telegram.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 # Header line: "<icon> <id> · <title>   [STATUS]"
 _HEADER_RE = re.compile(
@@ -243,3 +244,47 @@ def bead_show_to_markdown(raw: str) -> str:
             blank_run = 0
         rendered.append(line)
     return "\n".join(rendered).rstrip() + "\n"
+
+
+@dataclass(frozen=True)
+class BeadListEntry:
+    """A single row from ``sase bead list`` output."""
+
+    icon: str
+    bead_id: str
+    title: str
+    parent_id: str | None
+
+
+_BEAD_LIST_LINE_RE = re.compile(
+    r"^(?P<icon>\S+)\s+(?P<id>\S+)\s+·\s+(?P<title>.+?)"
+    r"(?:\s+←\s+(?P<parent>\S+))?$"
+)
+
+
+def parse_bead_list_output(raw: str) -> list[BeadListEntry]:
+    """Parse the plain-text output of ``sase bead list`` into entries.
+
+    Skips blank lines, the literal ``No issues found.`` sentinel, and any
+    unparseable lines (forward-compat with future format additions).
+    """
+    entries: list[BeadListEntry] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped == "No issues found.":
+            continue
+        m = _BEAD_LIST_LINE_RE.match(stripped)
+        if not m:
+            continue
+        bead_id = m.group("id")
+        if ":" in bead_id:
+            continue
+        entries.append(
+            BeadListEntry(
+                icon=m.group("icon"),
+                bead_id=bead_id,
+                title=m.group("title").strip(),
+                parent_id=m.group("parent"),
+            )
+        )
+    return entries

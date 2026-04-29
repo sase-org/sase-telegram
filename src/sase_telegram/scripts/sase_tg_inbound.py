@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sase_telegram import credentials, pending_actions, telegram_client
-from sase_telegram.bead_format import bead_show_to_markdown
+from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_output
 from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -123,6 +123,9 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             return
         if cb.action_type == "retry":
             _handle_retry_from_callback(callback_query, cb.notif_id_prefix)
+            return
+        if cb.action_type == "bead":
+            _handle_bead_callback(callback_query, cb.notif_id_prefix)
             return
     except ValueError:
         pass
@@ -995,17 +998,86 @@ def _handle_xprompts_command() -> None:
     )
 
 
-def _handle_bead_command(args: str) -> None:
-    """Handle /bead <id> — render bead details as a Telegram message."""
-    chat_id = credentials.get_chat_id()
-    parts = args.strip().split()
-    bead_id = parts[0] if parts else ""
-    if not bead_id:
+_BEAD_PICKER_LIMIT = 80
+_BEAD_BUTTON_LABEL_MAX = 60
+
+
+def _show_bead_selection(chat_id: str) -> None:
+    """Render an inline keyboard with one button per open bead."""
+    try:
+        result = subprocess.run(
+            ["sase", "bead", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
+        return
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or "sase bead list failed"
+        escaped = err.replace("\\", "\\\\").replace("`", "\\`")
         telegram_client.send_message(
             chat_id,
-            "Usage: /bead <bead_id> — example: /bead sase-13.1",
+            f"```\n{escaped}\n```",
+            parse_mode="MarkdownV2",
         )
         return
+
+    entries = parse_bead_list_output(result.stdout)
+    if not entries:
+        telegram_client.send_message(chat_id, "No open beads.")
+        return
+
+    truncated = len(entries) > _BEAD_PICKER_LIMIT
+    shown = entries[:_BEAD_PICKER_LIMIT]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for entry in shown:
+        label = f"{entry.icon} {entry.bead_id}: {entry.title}"
+        if len(label) > _BEAD_BUTTON_LABEL_MAX:
+            label = label[: _BEAD_BUTTON_LABEL_MAX - 1] + "…"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=encode("bead", entry.bead_id, "show"),
+                )
+            ]
+        )
+
+    header = f"<b>Open beads ({len(entries)}):</b>"
+    if truncated:
+        text = (
+            f"{header}\n"
+            f"<i>(showing first {_BEAD_PICKER_LIMIT} of {len(entries)} — "
+            f"refine with /bead &lt;id&gt;)</i>"
+        )
+    else:
+        text = header
+
+    telegram_client.send_message(
+        chat_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+def _handle_bead_callback(callback_query: Any, bead_id: str) -> None:
+    """Handle a tap on an open-beads picker button."""
+    telegram_client.answer_callback_query(callback_query.id, f"Loading {bead_id}…")
+    _handle_bead_command(bead_id)
+
+
+def _handle_bead_command(args: str) -> None:
+    """Handle /bead [<id>] — render bead details, or show open-beads picker."""
+    chat_id = credentials.get_chat_id()
+    parts = args.strip().split()
+    if not parts:
+        _show_bead_selection(chat_id)
+        return
+    bead_id = parts[0]
 
     try:
         result = subprocess.run(

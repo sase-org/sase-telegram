@@ -1178,10 +1178,74 @@ class TestXpromptsCommand:
 class TestBeadCommand:
     """Tests for _handle_bead_command."""
 
-    def test_missing_arg_sends_usage(self) -> None:
+    def test_missing_arg_shows_picker(self) -> None:
+        stdout = (
+            "○ sase-13 · DELTAS ChangeSpec Field\n"
+            "◐ sase-13.5 · Phase 5: Lifecycle Wiring ← sase-13\n"
+            "✓ sase-13.1 · Phase 1: Data Model ← sase-13\n"
+        )
+        completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         with (
             patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
             patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("")
+
+        run_mock.assert_called_once()
+        assert run_mock.call_args[0][0] == ["sase", "bead", "list"]
+        tc_mock.send_message.assert_called_once()
+        args, kwargs = tc_mock.send_message.call_args
+        assert args[0] == "12345"
+        assert kwargs.get("parse_mode") == "HTML"
+
+        keyboard = kwargs.get("reply_markup")
+        assert keyboard is not None
+        rows = keyboard.inline_keyboard
+        assert len(rows) == 3
+
+        from sase_telegram.callback_data import decode
+
+        assert decode(rows[0][0].callback_data) == ("bead", "sase-13", "show")
+        assert decode(rows[1][0].callback_data) == ("bead", "sase-13.5", "show")
+        assert decode(rows[2][0].callback_data) == ("bead", "sase-13.1", "show")
+
+    def test_missing_arg_empty_list(self) -> None:
+        completed = SimpleNamespace(
+            returncode=0, stdout="No issues found.\n", stderr=""
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ),
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("")
+
+        tc_mock.send_message.assert_called_once_with("12345", "No open beads.")
+
+    def test_missing_arg_subprocess_error(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1, stdout="", stderr="Error: db locked\n"
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
             from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
@@ -1189,9 +1253,36 @@ class TestBeadCommand:
             _handle_bead_command("")
 
         tc_mock.send_message.assert_called_once()
-        args, _ = tc_mock.send_message.call_args
-        assert args[0] == "12345"
-        assert "Usage: /bead" in args[1]
+        _args, kwargs = tc_mock.send_message.call_args
+        assert kwargs.get("parse_mode") == "MarkdownV2"
+        body = tc_mock.send_message.call_args[0][1]
+        assert body.startswith("```\n")
+        assert body.endswith("\n```")
+        assert "db locked" in body
+
+    def test_callback_invokes_bead_show(self) -> None:
+        show_completed = SimpleNamespace(
+            returncode=0,
+            stdout="○ sase-13 · DELTAS   [OPEN]\nType: plan · Owner: x@y\n",
+            stderr="",
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=show_completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+            cb = SimpleNamespace(id="cb1", data="bead:sase-13:show")
+            _handle_callback(cb, {})
+
+        tc_mock.answer_callback_query.assert_called_once_with("cb1", "Loading sase-13…")
+        run_mock.assert_called_once()
+        assert run_mock.call_args[0][0] == ["sase", "bead", "show", "sase-13"]
 
     def test_success_renders_markdown(self) -> None:
         stdout = (
