@@ -20,6 +20,7 @@ from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
     _is_diff_file,
     _is_image_file,
+    _is_pdf_file,
     _run_outbound,
 )
 
@@ -173,6 +174,17 @@ class TestIsImageFile:
         assert not _is_image_file("/path/to/file.diff")
 
 
+class TestIsPdfFile:
+    def test_pdf_extension(self):
+        assert _is_pdf_file("/path/to/report.pdf")
+
+    def test_case_insensitive(self):
+        assert _is_pdf_file("/path/to/report.PDF")
+
+    def test_non_pdf_extension(self):
+        assert not _is_pdf_file("/path/to/report.md")
+
+
 class TestAppendDiffToMarkdown:
     def test_appends_diff_content(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as resp:
@@ -224,6 +236,54 @@ class TestAppendDiffToMarkdown:
 
 
 class TestRunOutboundAttachments:
+    def test_workflow_complete_pdf_sends_document_without_conversion(self):
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as pdf:
+            pdf.write(b"%PDF-1.4\n")
+            pdf_path = pdf.name
+
+        notification = Notification(
+            id="pdf00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: pdf-update"],
+            files=[pdf_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_photo") as send_photo,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_document.assert_called_once_with("chat-1", pdf_path)
+        send_photo.assert_not_called()
+        md_to_pdf.assert_not_called()
+
+        Path(pdf_path).unlink()
+
     def test_workflow_complete_image_sends_photo_not_document(self):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image:
             image.write(b"\x89PNG\r\n\x1a\n")
@@ -272,7 +332,7 @@ class TestRunOutboundAttachments:
 
         Path(image_path).unlink()
 
-    def test_mixed_chat_diff_and_image_sends_response_pdf_and_photo(self):
+    def test_mixed_chat_diff_pdf_and_image_sends_expected_attachments(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             chat_dir = tmp / "chats"
@@ -285,6 +345,8 @@ class TestRunOutboundAttachments:
             response_pdf.write_bytes(b"%PDF-1.4\n")
             diff_file = tmp / "changes.diff"
             diff_file.write_text("diff --git a/foo.py b/foo.py\n-old\n+new\n")
+            generated_pdf = tmp / "notes.pdf"
+            generated_pdf.write_bytes(b"%PDF-1.4\n")
             image_file = tmp / "screenshot.jpg"
             image_file.write_bytes(b"\xff\xd8\xff")
 
@@ -293,7 +355,12 @@ class TestRunOutboundAttachments:
                 timestamp=datetime.now(UTC).isoformat(),
                 sender="user-agent",
                 notes=["Agent completed: mixed-update"],
-                files=[str(chat_file), str(diff_file), str(image_file)],
+                files=[
+                    str(chat_file),
+                    str(diff_file),
+                    str(generated_pdf),
+                    str(image_file),
+                ],
             )
 
             with (
@@ -342,5 +409,50 @@ class TestRunOutboundAttachments:
 
             assert result == 0
             md_to_pdf.assert_called_once_with(str(response_file))
-            send_document.assert_called_once_with("chat-1", str(response_pdf))
+            send_document.assert_any_call("chat-1", str(response_pdf))
+            send_document.assert_any_call("chat-1", str(generated_pdf))
+            assert send_document.call_count == 2
             send_photo.assert_called_once_with("chat-1", str(image_file))
+
+    def test_dry_run_lists_pdf_attachment_without_research_section(self, capsys):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            diff_file = tmp / "changes.diff"
+            diff_file.write_text(
+                "\n".join(
+                    [
+                        "diff --git a/research/example.md b/research/example.md",
+                        "new file mode 100644",
+                        "index 0000000..1111111",
+                        "--- /dev/null",
+                        "+++ b/research/example.md",
+                        "@@ -0,0 +1 @@",
+                        "+# Research",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            generated_pdf = tmp / "example.pdf"
+            generated_pdf.write_bytes(b"%PDF-1.4\n")
+
+            notification = Notification(
+                id="dry00000-0000-0000-0000-000000000000",
+                timestamp=datetime.now(UTC).isoformat(),
+                sender="user-agent",
+                notes=["Agent completed: research-update"],
+                files=[str(diff_file), str(generated_pdf)],
+            )
+
+            with (
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                    return_value=[notification],
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            ):
+                result = _run_outbound(argparse.Namespace(dry_run=True))
+
+        assert result == 0
+        captured = capsys.readouterr()
+        assert str(generated_pdf) in captured.out
+        assert "Research files:" not in captured.out

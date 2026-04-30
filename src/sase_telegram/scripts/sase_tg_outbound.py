@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import re
 import sys
 import tempfile
 import time
@@ -79,6 +78,11 @@ def _is_image_file(file_path: str) -> bool:
     return Path(file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
+def _is_pdf_file(file_path: str) -> bool:
+    """Check if a file path points to a PDF."""
+    return Path(file_path).suffix.lower() == ".pdf"
+
+
 def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None:
     """Append formatted diff content to a response markdown file.
 
@@ -124,112 +128,6 @@ def _prepend_commit_message_to_markdown(
         if not commit_message.endswith("\n"):
             f.write("\n")
         f.write("```\n")
-
-
-_RESEARCH_MD_PATH_RE = re.compile(r"^research/.+\.md$")
-
-
-def _parse_research_sections(
-    diff_content: str,
-) -> tuple[list[tuple[str, str]], str]:
-    """Parse a unified diff for newly added research/*.md files.
-
-    Returns ``(research_files, filtered_diff)`` where *research_files* is a
-    list of ``(filename, content)`` tuples and *filtered_diff* is the original
-    diff with the research file sections removed.
-    """
-    research_files: list[tuple[str, str]] = []
-    filtered_parts: list[str] = []
-
-    # Split into per-file sections by "diff --git" header
-    sections = re.split(r"(?=^diff --git )", diff_content, flags=re.MULTILINE)
-
-    for section in sections:
-        if not section.strip():
-            continue
-
-        header_match = re.match(r"^diff --git a/.+ b/(.+)$", section, re.MULTILINE)
-        if not header_match:
-            filtered_parts.append(section)
-            continue
-
-        file_path = header_match.group(1)
-        # Only strip *new* research markdown files — detect "new file mode"
-        # before the first hunk header.
-        preamble = section.split("\n@@")[0] if "\n@@" in section else section
-        is_new = "new file mode" in preamble
-        is_research_md = bool(_RESEARCH_MD_PATH_RE.match(file_path))
-
-        if is_new and is_research_md:
-            content = _extract_new_file_content(section)
-            filename = Path(file_path).name
-            research_files.append((filename, content))
-        else:
-            filtered_parts.append(section)
-
-    return research_files, "".join(filtered_parts)
-
-
-def _extract_new_file_content(diff_section: str) -> str:
-    """Extract the full text of a newly added file from its diff section."""
-    lines = diff_section.split("\n")
-    content_lines: list[str] = []
-    in_hunk = False
-
-    for line in lines:
-        if line.startswith("@@"):
-            in_hunk = True
-            continue
-        if in_hunk:
-            if line.startswith("+"):
-                content_lines.append(line[1:])
-            elif line.startswith("\\"):
-                continue  # "\ No newline at end of file"
-
-    return "\n".join(content_lines)
-
-
-def _extract_research_from_diffs(
-    diff_paths: list[str],
-) -> tuple[list[tuple[str, str]], list[Path], bool]:
-    """Analyze diff files for new research/*.md additions.
-
-    Returns ``(research_entries, filtered_diff_temps, has_non_research)``:
-
-    - *research_entries*: ``[(filename, content), ...]`` for each new
-      research markdown file found in the diffs.
-    - *filtered_diff_temps*: temp ``.diff`` files with research sections
-      stripped (empty list when no non-research changes remain).
-    - *has_non_research*: ``True`` if any non-research changes exist.
-    """
-    research_entries: list[tuple[str, str]] = []
-    filtered_diff_temps: list[Path] = []
-    has_non_research = False
-
-    for dp in diff_paths:
-        try:
-            content = Path(dp).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if not content.strip():
-            continue
-
-        entries, filtered = _parse_research_sections(content)
-        research_entries.extend(entries)
-        if filtered.strip():
-            has_non_research = True
-            tmp = tempfile.NamedTemporaryFile(
-                prefix="filtered-diff-",
-                suffix=".diff",
-                delete=False,
-                mode="w",
-                encoding="utf-8",
-            )
-            tmp.write(filtered)
-            tmp.close()
-            filtered_diff_temps.append(Path(tmp.name))
-
-    return research_entries, filtered_diff_temps, has_non_research
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -353,23 +251,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
             wait = rate_limit.wait_time()
             time.sleep(wait)
 
-        # --- Analyse diffs for new research/*.md files ---
-        raw_diff_paths = [
-            f for f in n.files if _is_diff_file(f) and Path(f).expanduser().exists()
-        ]
-        research_entries: list[tuple[str, str]] = []
-        filtered_diff_temps: list[Path] = []
-        has_non_research = False
-        if raw_diff_paths:
-            research_entries, filtered_diff_temps, has_non_research = (
-                _extract_research_from_diffs(raw_diff_paths)
-            )
-
-        text, keyboard, attachments = format_notification(
-            n,
-            has_research=bool(research_entries),
-            has_non_research_diff=has_non_research if raw_diff_paths else None,
-        )
+        text, keyboard, attachments = format_notification(n)
 
         if args.dry_run:
             print(f"--- Notification {n.id} ---")
@@ -378,14 +260,10 @@ def _run_outbound(args: argparse.Namespace) -> int:
                 print(f"Keyboard: {keyboard.inline_keyboard}")
             if attachments:
                 print(f"Attachments: {attachments}")
-            if research_entries:
-                print(f"Research files: {[name for name, _ in research_entries]}")
             print()
             # Advance high-water mark after each notification to prevent
             # re-sending if a later notification fails.
             mark_sent([n])
-            for p in filtered_diff_temps:
-                p.unlink(missing_ok=True)
             continue
 
         msg = None
@@ -404,8 +282,6 @@ def _run_outbound(args: argparse.Namespace) -> int:
             )
 
         if msg is None:
-            for p in filtered_diff_temps:
-                p.unlink(missing_ok=True)
             continue
 
         # Save pending action IMMEDIATELY after send so the inbound
@@ -427,14 +303,8 @@ def _run_outbound(args: argparse.Namespace) -> int:
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []
-        research_temps: list[Path] = []
 
-        # Use filtered diffs (research sections stripped) when available;
-        # otherwise fall back to the raw diff attachments.
-        if raw_diff_paths:
-            diff_paths = [str(p) for p in filtered_diff_temps]
-        else:
-            diff_paths = [f for f in attachments if _is_diff_file(f)]
+        diff_paths = [f for f in attachments if _is_diff_file(f)]
         non_diff_paths = [f for f in attachments if not _is_diff_file(f)]
         diff_embedded = False
 
@@ -463,6 +333,11 @@ def _run_outbound(args: argparse.Namespace) -> int:
 
                 if _is_image_file(actual_path):
                     send_photo(chat_id, actual_path)
+                    rate_limit.record_send()
+                    continue
+
+                if _is_pdf_file(actual_path):
+                    send_document(chat_id, actual_path)
                     rate_limit.record_send()
                     continue
 
@@ -495,37 +370,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
                         exc_info=True,
                     )
 
-        # Send each new research file as its own PDF attachment
-        for filename, content in research_entries:
-            try:
-                md_tmp = tempfile.NamedTemporaryFile(
-                    prefix=f"research-{Path(filename).stem}-",
-                    suffix=".md",
-                    delete=False,
-                    mode="w",
-                    encoding="utf-8",
-                )
-                md_tmp.write(content)
-                md_tmp.close()
-                md_path = Path(md_tmp.name)
-                research_temps.append(md_path)
-
-                pdf = md_to_pdf(str(md_path))
-                if pdf:
-                    research_temps.append(Path(pdf))
-                    send_document(chat_id, pdf)
-                else:
-                    send_document(chat_id, str(md_path))
-                rate_limit.record_send()
-            except Exception:
-                log.warning(
-                    "Failed to send research file %s for notification %s",
-                    filename,
-                    n.id[:8],
-                    exc_info=True,
-                )
-
-        for p in pdf_temps + response_temps + filtered_diff_temps + research_temps:
+        for p in pdf_temps + response_temps:
             p.unlink(missing_ok=True)
 
     return 0
