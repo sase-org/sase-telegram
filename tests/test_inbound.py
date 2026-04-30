@@ -441,7 +441,8 @@ class TestChangesCommand:
         call_args = mock_tg.send_message.call_args
         assert call_args.args[:2] == (
             "12345",
-            "Active ChangeSpecs (2)\nSkipped 1 with unavailable workflow type.",
+            "Active ChangeSpecs (2)\n"
+            "Skipped 1 active ChangeSpec with unavailable workflow metadata.",
         )
         keyboard = call_args.kwargs["reply_markup"]
         buttons = keyboard.inline_keyboard
@@ -471,6 +472,10 @@ class TestChangesCommand:
         ):
             _handle_changes_command("sase")
 
+        assert mock_tg.send_message.call_args.args[:2] == (
+            "12345",
+            "Active ChangeSpecs for sase (1)",
+        )
         keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].text == "foo"

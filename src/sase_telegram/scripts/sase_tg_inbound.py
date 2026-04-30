@@ -1006,19 +1006,23 @@ def _handle_changes_command(args: str) -> None:
             else f"No active ChangeSpecs for {project}."
         )
         if skipped:
-            message += f"\nSkipped {len(skipped)} with unavailable workflow type."
+            message += f"\n{_format_changespec_skipped_note(len(skipped))}"
         telegram_client.send_message(chat_id, message)
         return
 
     total = len(entries)
     for start in range(0, total, _CHANGES_BUTTON_CHUNK_SIZE):
         chunk = entries[start : start + _CHANGES_BUTTON_CHUNK_SIZE]
-        header = f"Active ChangeSpecs ({total})"
+        header = (
+            f"Active ChangeSpecs for {project} ({total})"
+            if project is not None
+            else f"Active ChangeSpecs ({total})"
+        )
         if total > _CHANGES_BUTTON_CHUNK_SIZE:
             end = start + len(chunk)
             header += f"\nShowing {start + 1}-{end} of {total}"
         if skipped and start == 0:
-            header += f"\nSkipped {len(skipped)} with unavailable workflow type."
+            header += f"\n{_format_changespec_skipped_note(len(skipped))}"
 
         buttons = [
             [
@@ -1034,6 +1038,14 @@ def _handle_changes_command(args: str) -> None:
             header,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
+
+
+def _format_changespec_skipped_note(skipped_count: int) -> str:
+    plural = "" if skipped_count == 1 else "s"
+    return (
+        f"Skipped {skipped_count} active ChangeSpec{plural} "
+        "with unavailable workflow metadata."
+    )
 
 
 def _changes_button_label(entry: Any, *, filtered: bool) -> str:
