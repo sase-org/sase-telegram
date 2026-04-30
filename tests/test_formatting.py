@@ -493,6 +493,26 @@ class TestFormatWorkflowComplete:
         assert button.copy_text is not None
         assert button.copy_text.text == "#gh:sase #resume:c "
 
+    def test_preserves_workflow_complete_image_attachments(self):
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as png:
+            png.write(b"\x89PNG\r\n\x1a\n")
+            png_file = png.name
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as jpg:
+            jpg.write(b"\xff\xd8\xff")
+            jpg_file = jpg.name
+
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: image-update"],
+            files=[png_file, jpg_file, "/missing/not-attached.gif"],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [png_file, jpg_file]
+
+        Path(png_file).unlink()
+        Path(jpg_file).unlink()
+
 
 class TestFormatErrorDigest:
     def test_with_digest_file(self):

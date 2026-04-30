@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +20,7 @@ from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
     _is_diff_file,
     _is_image_file,
+    _run_outbound,
 )
 
 LAST_SENT_TEST_FILE = Path("/tmp/test_last_sent_ts")
@@ -218,3 +221,126 @@ class TestAppendDiffToMarkdown:
         assert result == "Response content."
 
         Path(resp.name).unlink()
+
+
+class TestRunOutboundAttachments:
+    def test_workflow_complete_image_sends_photo_not_document(self):
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image:
+            image.write(b"\x89PNG\r\n\x1a\n")
+            image_path = image.name
+
+        notification = Notification(
+            id="img00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: image-update"],
+            files=[image_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_photo") as send_photo,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_photo.assert_called_once_with("chat-1", image_path)
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+
+        Path(image_path).unlink()
+
+    def test_mixed_chat_diff_and_image_sends_response_pdf_and_photo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_dir = tmp / "chats"
+            chat_dir.mkdir()
+            chat_file = chat_dir / "chat.md"
+            chat_file.write_text("full chat", encoding="utf-8")
+            response_file = tmp / "response.md"
+            response_file.write_text("# Response\n\nDone.", encoding="utf-8")
+            response_pdf = tmp / "response.pdf"
+            response_pdf.write_bytes(b"%PDF-1.4\n")
+            diff_file = tmp / "changes.diff"
+            diff_file.write_text("diff --git a/foo.py b/foo.py\n-old\n+new\n")
+            image_file = tmp / "screenshot.jpg"
+            image_file.write_bytes(b"\xff\xd8\xff")
+
+            notification = Notification(
+                id="mix00000-0000-0000-0000-000000000000",
+                timestamp=datetime.now(UTC).isoformat(),
+                sender="user-agent",
+                notes=["Agent completed: mixed-update"],
+                files=[str(chat_file), str(diff_file), str(image_file)],
+            )
+
+            with (
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                    return_value=[notification],
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                    return_value="chat-1",
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.is_idle",
+                    return_value=True,
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                    return_value=True,
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+                patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_message",
+                    return_value=SimpleNamespace(message_id=123),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound._make_response_only_file",
+                    return_value=(response_file, "Done."),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound._get_chats_dir",
+                    return_value=str(chat_dir),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.md_to_pdf",
+                    return_value=str(response_pdf),
+                ) as md_to_pdf,
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_photo"
+                ) as send_photo,
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_document"
+                ) as send_document,
+            ):
+                result = _run_outbound(argparse.Namespace(dry_run=False))
+
+            assert result == 0
+            md_to_pdf.assert_called_once_with(str(response_file))
+            send_document.assert_called_once_with("chat-1", str(response_pdf))
+            send_photo.assert_called_once_with("chat-1", str(image_file))
