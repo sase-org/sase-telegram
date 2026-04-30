@@ -45,6 +45,7 @@ _COMMANDS_REGISTERED_PATH = (
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
+_CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
 _VCS_PROJECT_RE = re.compile(
     r"^#(?P<workflow>[A-Za-z][A-Za-z0-9_-]*(?:!!|\?\?)?)"
@@ -188,6 +189,12 @@ def _run_bead_command(args: list[str]) -> subprocess.CompletedProcess[str]:
         check=False,
         cwd=cwd,
     )
+
+
+def _list_changespec_xprompt_tags(project: str | None = None) -> Any:
+    from sase.integrations.changespec_tags import list_changespec_xprompt_tags
+
+    return list_changespec_xprompt_tags(project)
 
 
 def _write_response(response: ResponseAction) -> None:
@@ -732,6 +739,8 @@ def _handle_command(text: str) -> None:
         _handle_list_command()
     elif command == "resume":
         _handle_resume_command()
+    elif command == "changes":
+        _handle_changes_command(args)
     elif command == "xprompts":
         _handle_xprompts_command()
     elif command == "bead":
@@ -977,6 +986,63 @@ def _handle_resume_command() -> None:
     )
 
 
+def _handle_changes_command(args: str) -> None:
+    """Handle /changes [project] — show copy buttons for ChangeSpec tags."""
+    chat_id = credentials.get_chat_id()
+    project_parts = args.split()
+    if len(project_parts) > 1:
+        telegram_client.send_message(chat_id, "Usage: /changes [project]")
+        return
+
+    project = project_parts[0] if project_parts else None
+    listing = _list_changespec_xprompt_tags(project)
+    entries = list(listing.entries)
+    skipped = list(listing.skipped)
+
+    if not entries:
+        message = (
+            "No active ChangeSpecs."
+            if project is None
+            else f"No active ChangeSpecs for {project}."
+        )
+        if skipped:
+            message += f"\nSkipped {len(skipped)} with unavailable workflow type."
+        telegram_client.send_message(chat_id, message)
+        return
+
+    total = len(entries)
+    for start in range(0, total, _CHANGES_BUTTON_CHUNK_SIZE):
+        chunk = entries[start : start + _CHANGES_BUTTON_CHUNK_SIZE]
+        header = f"Active ChangeSpecs ({total})"
+        if total > _CHANGES_BUTTON_CHUNK_SIZE:
+            end = start + len(chunk)
+            header += f"\nShowing {start + 1}-{end} of {total}"
+        if skipped and start == 0:
+            header += f"\nSkipped {len(skipped)} with unavailable workflow type."
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    _changes_button_label(entry, filtered=project is not None),
+                    copy_text=CopyTextButton(text=entry.tag),
+                )
+            ]
+            for entry in chunk
+        ]
+        telegram_client.send_message(
+            chat_id,
+            header,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+
+def _changes_button_label(entry: Any, *, filtered: bool) -> str:
+    label = entry.name if filtered else f"{entry.project}/{entry.name}"
+    if len(label) <= 64:
+        return label
+    return label[:61] + "..."
+
+
 def _format_xprompts_caption(stats: Any) -> str:
     """Format an HTML caption summarising a CatalogStats object."""
     import html
@@ -1218,6 +1284,7 @@ _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
     ("list", "Show all running agents"),
     ("resume", "Copy resume text for an agent"),
+    ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
 ]

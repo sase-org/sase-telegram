@@ -57,6 +57,7 @@ Text messages are dispatched in priority order:
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Retry button on success)
    - `/resume` — Shows resume copy buttons for running + done agents
+   - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
 3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
@@ -78,3 +79,15 @@ When a text message or photo triggers an agent launch:
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts
   them using Telegram's entity metadata
 - **Launch confirmation**: A message is sent back with Resume, Wait, and Kill copy-text buttons
+
+## ChangeSpec Tags
+
+`/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. `/changes <project>` filters by
+exact project name. Each listed ChangeSpec gets a copy-text button containing only the workflow tag, for example
+`#hg:foobar`.
+
+If workflow detection fails for some entries, the command still shows the entries it can resolve and includes a skipped
+count. Large result sets are split across multiple Telegram messages without dropping entries.
+
+When deploying command registration changes, delete `~/.sase/telegram/commands_registered_ts` to force immediate
+registration instead of waiting for the hourly refresh.

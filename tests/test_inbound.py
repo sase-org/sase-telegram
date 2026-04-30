@@ -331,6 +331,190 @@ class TestHandleTextMessageAgentLaunch:
             mock_launch.assert_not_called()
 
 
+class TestChangesCommand:
+    """Tests for the /changes slash command."""
+
+    def test_handle_command_dispatches_changes(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_changes_command"
+        ) as mock_handler:
+            _handle_command("/changes project")
+
+        mock_handler.assert_called_once_with("project")
+
+    def test_changes_registered_as_slash_command(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+
+        assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_rejects_multiple_args(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags"
+        ) as mock_list:
+            _handle_changes_command("one two")
+
+        mock_list.assert_not_called()
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "Usage: /changes [project]"
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_empty_without_project(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(entries=[], skipped=[])
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            return_value=listing,
+        ) as mock_list:
+            _handle_changes_command("")
+
+        mock_list.assert_called_once_with(None)
+        mock_tg.send_message.assert_called_once_with("12345", "No active ChangeSpecs.")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_project_filter_empty(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(entries=[], skipped=[])
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            return_value=listing,
+        ) as mock_list:
+            _handle_changes_command("sase")
+
+        mock_list.assert_called_once_with("sase")
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "No active ChangeSpecs for sase."
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_entries_use_copy_text_buttons(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(
+            entries=[
+                SimpleNamespace(project="sase", name="foo", tag="#hg:foo"),
+                SimpleNamespace(project="sase-telegram", name="bar", tag="#git:bar"),
+            ],
+            skipped=["broken/missing: could not detect workflow type"],
+        )
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            return_value=listing,
+        ):
+            _handle_changes_command("")
+
+        call_args = mock_tg.send_message.call_args
+        assert call_args.args[:2] == (
+            "12345",
+            "Active ChangeSpecs (2)\nSkipped 1 with unavailable workflow type.",
+        )
+        keyboard = call_args.kwargs["reply_markup"]
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "sase/foo"
+        assert buttons[0][0].copy_text.text == "#hg:foo"
+        assert buttons[1][0].text == "sase-telegram/bar"
+        assert buttons[1][0].copy_text.text == "#git:bar"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_project_filter_uses_short_labels(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(
+            entries=[SimpleNamespace(project="sase", name="foo", tag="#hg:foo")],
+            skipped=[],
+        )
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            return_value=listing,
+        ):
+            _handle_changes_command("sase")
+
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "foo"
+        assert buttons[0][0].copy_text.text == "#hg:foo"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_chunks_large_result_sets(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(
+            entries=[
+                SimpleNamespace(project="sase", name=f"c{i}", tag=f"#gh:c{i}")
+                for i in range(51)
+            ],
+            skipped=[],
+        )
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            return_value=listing,
+        ):
+            _handle_changes_command("")
+
+        assert mock_tg.send_message.call_count == 2
+        first = mock_tg.send_message.call_args_list[0]
+        second = mock_tg.send_message.call_args_list[1]
+        assert first.args[:2] == (
+            "12345",
+            "Active ChangeSpecs (51)\nShowing 1-50 of 51",
+        )
+        assert second.args[:2] == (
+            "12345",
+            "Active ChangeSpecs (51)\nShowing 51-51 of 51",
+        )
+        assert len(first.kwargs["reply_markup"].inline_keyboard) == 50
+        assert len(second.kwargs["reply_markup"].inline_keyboard) == 1
+
+
 class TestLaunchAgent:
     """Tests for the _launch_agent helper (script module)."""
 
