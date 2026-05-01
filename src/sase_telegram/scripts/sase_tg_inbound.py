@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -746,25 +747,25 @@ def _handle_command(text: str) -> None:
         _handle_xprompts_command()
     elif command == "bead":
         _handle_bead_command(args)
-    elif command == "install":
-        _handle_install_command()
+    elif command == "update":
+        _handle_update_command()
     # Unknown commands (e.g. /start) are silently ignored
 
 
-def _handle_install_command() -> None:
-    """Start the detached SASE install worker and acknowledge in Telegram."""
+def _handle_update_command() -> None:
+    """Start the detached SASE update worker and acknowledge in Telegram."""
     chat_id = credentials.get_chat_id()
     result = start_chat_install_worker()
-    telegram_client.send_message(chat_id, _format_install_ack(result))
+    telegram_client.send_message(chat_id, _format_update_ack(result))
 
 
-def _format_install_ack(result: Any) -> str:
+def _format_update_ack(result: Any) -> str:
     if result.status == "config_missing_command":
-        return "Install not started: chat_install.command is not configured."
+        return "Update not started: chat_install.command is not configured."
     if result.status == "workspace_resolution_failed":
-        return "Install not started: could not resolve the primary SASE workspace."
+        return "Update not started: could not resolve the primary SASE workspace."
     if result.status == "already_running":
-        return "Install already running."
+        return "Update already running."
     if result.status == "launched":
         return result.message
     return result.message
@@ -1341,29 +1342,61 @@ _SLASH_COMMANDS = [
     ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
-    ("install", "Update SASE and restart axe"),
+    ("update", "Update SASE and restart axe"),
 ]
+
+
+def _slash_commands_fingerprint(commands: list[tuple[str, str]] | None = None) -> str:
+    """Return a stable fingerprint for the registered Telegram command list."""
+    payload = json.dumps(
+        commands if commands is not None else _SLASH_COMMANDS,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _commands_registration_is_current(now: float) -> bool:
+    try:
+        payload = json.loads(_COMMANDS_REGISTERED_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return False
+    if payload.get("fingerprint") != _slash_commands_fingerprint():
+        return False
+    try:
+        last_ts = float(payload["timestamp"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return now - last_ts < _COMMANDS_REGISTER_INTERVAL
 
 
 def _register_commands_if_needed() -> None:
     """Register slash commands with Telegram, at most once per hour.
 
-    Uses a file-based timestamp to avoid calling ``set_my_commands`` on every
-    tick (every 5 seconds), which triggers Telegram rate limits and blocks
-    the entire inbound chop for 20+ minutes.
+    Uses a file-based timestamp and command fingerprint to avoid calling
+    ``set_my_commands`` on every tick (every 5 seconds), while still picking up
+    command list changes before the normal hourly interval expires.
     """
-    try:
-        if _COMMANDS_REGISTERED_PATH.exists():
-            last_ts = float(_COMMANDS_REGISTERED_PATH.read_text().strip())
-            if time.time() - last_ts < _COMMANDS_REGISTER_INTERVAL:
-                return
-    except (ValueError, OSError):
-        pass  # Corrupted file — re-register
+    now = time.time()
+    if _COMMANDS_REGISTERED_PATH.exists() and _commands_registration_is_current(now):
+        return
 
     try:
         telegram_client.set_my_commands(_SLASH_COMMANDS)
         _COMMANDS_REGISTERED_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _COMMANDS_REGISTERED_PATH.write_text(str(time.time()))
+        _COMMANDS_REGISTERED_PATH.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "timestamp": now,
+                    "fingerprint": _slash_commands_fingerprint(),
+                },
+                sort_keys=True,
+            )
+        )
         log.info("Registered Telegram slash commands")
     except Exception:
         log.warning(

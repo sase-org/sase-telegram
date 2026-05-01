@@ -350,32 +350,43 @@ class TestChangesCommandDispatch:
         assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
 
 
-class TestInstallCommand:
-    """Tests for the /install slash command."""
+class TestUpdateCommand:
+    """Tests for the /update slash command."""
 
-    def test_handle_command_dispatches_install(self) -> None:
+    def test_handle_command_dispatches_update(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _handle_command
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_install_command"
+            "sase_telegram.scripts.sase_tg_inbound._handle_update_command"
         ) as mock_handler:
-            _handle_command("/install")
+            _handle_command("/update")
 
         mock_handler.assert_called_once_with()
 
-    def test_install_registered_as_slash_command(self) -> None:
+    def test_install_is_not_handled(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_update_command"
+        ) as mock_handler:
+            _handle_command("/install")
+
+        mock_handler.assert_not_called()
+
+    def test_update_registered_as_slash_command(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
 
-        assert ("install", "Update SASE and restart axe") in _SLASH_COMMANDS
+        assert ("update", "Update SASE and restart axe") in _SLASH_COMMANDS
+        assert not any(command == "install" for command, _desc in _SLASH_COMMANDS)
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_install_acknowledges_missing_config(
+    def test_update_acknowledges_missing_config(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(status="config_missing_command", message="missing")
@@ -383,22 +394,22 @@ class TestInstallCommand:
             "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
             return_value=result,
         ) as launcher:
-            _handle_install_command()
+            _handle_update_command()
 
         launcher.assert_called_once_with()
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            "Install not started: chat_install.command is not configured.",
+            "Update not started: chat_install.command is not configured.",
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_install_acknowledges_workspace_failure(
+    def test_update_acknowledges_workspace_failure(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(status="workspace_resolution_failed", message="no ws")
@@ -406,21 +417,21 @@ class TestInstallCommand:
             "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
             return_value=result,
         ):
-            _handle_install_command()
+            _handle_update_command()
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            "Install not started: could not resolve the primary SASE workspace.",
+            "Update not started: could not resolve the primary SASE workspace.",
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_install_acknowledges_already_running(
+    def test_update_acknowledges_already_running(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(status="already_running", message="busy")
@@ -428,35 +439,73 @@ class TestInstallCommand:
             "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
             return_value=result,
         ):
-            _handle_install_command()
+            _handle_update_command()
 
-        mock_tg.send_message.assert_called_once_with(
-            "12345", "Install already running."
-        )
+        mock_tg.send_message.assert_called_once_with("12345", "Update already running.")
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_install_acknowledges_launched_with_log(
+    def test_update_acknowledges_launched_with_log(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(
-            status="launched", message="Install worker started; log: /tmp/log"
+            status="launched", message="Update worker started; log: /tmp/log"
         )
         with patch(
             "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
             return_value=result,
         ):
-            _handle_install_command()
+            _handle_update_command()
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            "Install worker started; log: /tmp/log",
+            "Update worker started; log: /tmp/log",
         )
+
+    def test_command_fingerprint_change_forces_registration(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        cache_path = tmp_path / "commands_registered_ts"
+        cache_path.write_text(
+            json.dumps(
+                {"version": 1, "timestamp": 1000.0, "fingerprint": "old-fingerprint"}
+            )
+        )
+
+        with (
+            patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
+            patch.object(inbound.time, "time", return_value=1001.0),
+            patch.object(inbound.telegram_client, "set_my_commands") as set_commands,
+        ):
+            inbound._register_commands_if_needed()
+
+        set_commands.assert_called_once_with(inbound._SLASH_COMMANDS)
+        payload = json.loads(cache_path.read_text())
+        assert payload["version"] == 1
+        assert payload["timestamp"] == 1001.0
+        assert payload["fingerprint"] == inbound._slash_commands_fingerprint()
+
+    def test_legacy_timestamp_cache_forces_registration(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        cache_path = tmp_path / "commands_registered_ts"
+        cache_path.write_text("1000.0")
+
+        with (
+            patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
+            patch.object(inbound.time, "time", return_value=1001.0),
+            patch.object(inbound.telegram_client, "set_my_commands") as set_commands,
+        ):
+            inbound._register_commands_if_needed()
+
+        set_commands.assert_called_once_with(inbound._SLASH_COMMANDS)
 
 
 class TestChangesCommand:

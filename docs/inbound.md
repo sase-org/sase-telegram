@@ -64,7 +64,7 @@ Text messages are dispatched in priority order:
    - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
    - `/bead [<id>]` — Shows open beads as picker buttons, or renders `sase bead show <id>` output in chat
-   - `/install` — Starts the detached SASE install/update worker and replies with its log path
+   - `/update` — Starts the detached SASE update worker and replies with its log path
 3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
 
@@ -104,12 +104,12 @@ Bead commands run in the current process context by default. If `SASE_TELEGRAM_B
 resolved to a workspace and used as the subprocess working directory. Without the override, pending Telegram prompts
 are scanned for a leading workflow tag and the first resolvable project workspace is used.
 
-## Install
+## Update
 
-`/install` calls the shared SASE chat-install launcher. The inbound handler does not stop axe or run the install inline;
+`/update` calls the shared SASE chat-install launcher. The inbound handler does not stop axe or run the update inline;
 it only starts a detached worker, then posts an acknowledgement that distinguishes missing configuration, workspace
 resolution failure, an already-running worker, or a launched worker with a log path. The worker restarts axe in its
 cleanup path even if sync or the configured install command fails.
 
-When deploying command registration changes, delete `~/.sase/telegram/commands_registered_ts` to force immediate
-registration instead of waiting for the hourly refresh.
+Command registration is cached in `~/.sase/telegram/commands_registered_ts`; the cache includes a command-list
+fingerprint so deploys with command changes re-register immediately instead of waiting for the hourly refresh.

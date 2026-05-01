@@ -60,7 +60,7 @@ Installing sase-telegram adds the following commands:
 - **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
 - **Copy-text buttons** — Resume, Wait, Retry, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos or image documents to launch agents with visual context
-- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/install` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -103,7 +103,7 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/install`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
@@ -117,13 +117,12 @@ filter by exact project name. Each result has a copy-text button for the bare wo
 MarkdownV2, and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, or a pending Telegram prompt
 contains a workflow tag, bead commands run from the resolved project workspace.
 
-`/install` starts the shared SASE chat install worker in a detached process and immediately replies with the worker log
+`/update` starts the shared SASE chat update worker in a detached process and immediately replies with the worker log
 path. The worker stops axe, syncs the primary SASE workspace, runs `chat_install.command` from that workspace, and
 attempts to start axe again even when sync or install fails.
 
-After deploying a new version with slash command changes, delete
-`~/.sase/telegram/commands_registered_ts` to force Telegram command registration immediately instead of waiting for the
-hourly refresh.
+Slash command registration is cached in `~/.sase/telegram/commands_registered_ts`, but the cache includes a fingerprint
+of the command list so renamed commands are registered immediately after deployment.
 
 ### State Files
 
@@ -138,7 +137,7 @@ State files are stored under `~/.sase/telegram/`:
 | `last_sent_ts`              | High-water mark for outbound notifications    |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
-| `commands_registered_ts`    | Cached timestamp for Telegram slash command registration |
+| `commands_registered_ts`    | Cached timestamp and fingerprint for Telegram slash command registration |
 | `images/`                   | Downloaded photos from Telegram messages       |
 
 ## Requirements
