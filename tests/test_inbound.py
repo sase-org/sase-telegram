@@ -331,7 +331,7 @@ class TestHandleTextMessageAgentLaunch:
             mock_launch.assert_not_called()
 
 
-class TestChangesCommand:
+class TestChangesCommandDispatch:
     """Tests for the /changes slash command."""
 
     def test_handle_command_dispatches_changes(self) -> None:
@@ -348,6 +348,119 @@ class TestChangesCommand:
         from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
 
         assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
+
+
+class TestInstallCommand:
+    """Tests for the /install slash command."""
+
+    def test_handle_command_dispatches_install(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_install_command"
+        ) as mock_handler:
+            _handle_command("/install")
+
+        mock_handler.assert_called_once_with()
+
+    def test_install_registered_as_slash_command(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+
+        assert ("install", "Update SASE and restart axe") in _SLASH_COMMANDS
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_install_acknowledges_missing_config(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(status="config_missing_command", message="missing")
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            return_value=result,
+        ) as launcher:
+            _handle_install_command()
+
+        launcher.assert_called_once_with()
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "Install not started: chat_install.command is not configured.",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_install_acknowledges_workspace_failure(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(status="workspace_resolution_failed", message="no ws")
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            return_value=result,
+        ):
+            _handle_install_command()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "Install not started: could not resolve the primary SASE workspace.",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_install_acknowledges_already_running(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(status="already_running", message="busy")
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            return_value=result,
+        ):
+            _handle_install_command()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "Install already running."
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_install_acknowledges_launched_with_log(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_install_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(
+            status="launched", message="Install worker started; log: /tmp/log"
+        )
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            return_value=result,
+        ):
+            _handle_install_command()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "Install worker started; log: /tmp/log",
+        )
+
+
+class TestChangesCommand:
+    """Tests for the /changes slash command."""
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")

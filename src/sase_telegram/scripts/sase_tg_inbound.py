@@ -18,6 +18,7 @@ from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_out
 from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
+from sase.integrations.chat_install import start_chat_install_worker
 from sase_telegram.formatting import escape_markdown_v2, markdown_to_telegram_v2
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -745,7 +746,28 @@ def _handle_command(text: str) -> None:
         _handle_xprompts_command()
     elif command == "bead":
         _handle_bead_command(args)
+    elif command == "install":
+        _handle_install_command()
     # Unknown commands (e.g. /start) are silently ignored
+
+
+def _handle_install_command() -> None:
+    """Start the detached SASE install worker and acknowledge in Telegram."""
+    chat_id = credentials.get_chat_id()
+    result = start_chat_install_worker()
+    telegram_client.send_message(chat_id, _format_install_ack(result))
+
+
+def _format_install_ack(result: Any) -> str:
+    if result.status == "config_missing_command":
+        return "Install not started: chat_install.command is not configured."
+    if result.status == "workspace_resolution_failed":
+        return "Install not started: could not resolve the primary SASE workspace."
+    if result.status == "already_running":
+        return "Install already running."
+    if result.status == "launched":
+        return result.message
+    return result.message
 
 
 def _format_agent_description(
@@ -1319,6 +1341,7 @@ _SLASH_COMMANDS = [
     ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
+    ("install", "Update SASE and restart axe"),
 ]
 
 
