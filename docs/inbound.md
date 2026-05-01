@@ -5,15 +5,15 @@ The inbound script (`sase_chop_tg_inbound`) polls Telegram for user responses an
 ## CLI Usage
 
 ```bash
-sase_chop_tg_inbound              # Long-polling mode (runs continuously)
-sase_chop_tg_inbound --once       # Process pending updates and exit
+sase_chop_tg_inbound              # Process pending updates and exit
+sase_chop_tg_inbound --once       # Compatibility flag; also processes pending updates and exits
 sase_chop_tg_inbound --context X  # Pass context string for logging
 ```
 
 ## Update Processing
 
-The inbound script fetches updates from Telegram starting from the stored offset in `update_offset.txt`, then
-dispatches each update by type.
+The inbound script fetches updates from Telegram starting from the stored offset in `update_offset.txt`, saves the next
+offset before handling them, then dispatches each update by type.
 
 ### Callback Queries (Button Presses)
 
@@ -24,25 +24,29 @@ format is:
 {action_type}:{notif_id_prefix}:{choice}
 ```
 
-- **action_type**: `plan`, `hitl`, `question`, `kill`, `retry`
+- **action_type**: `plan`, `hitl`, `question`, `kill`, `retry`, `bead`
 - **notif_id_prefix**: First N characters of the notification ID (enough to match uniquely)
-- **choice**: `approve`, `reject`, `epic`, `feedback`, `accept`, `0`/`1`/`2`/... (question options), etc.
+- **choice**: `approve`, `run`, `reject`, `epic`, `feedback`, `accept`, `0`/`1`/`2`/... (question options), etc.
 
 The 64-byte total limit (Telegram API constraint) is enforced at encoding time.
 
 #### Direct Actions
 
-For most choices (`approve`, `reject`, `accept`, question option numbers), the callback is matched against
+For most choices (`approve`, `run`, `reject`, `accept`, question option numbers), the callback is matched against
 `pending_actions.json`, the response is written to the notification's response file, and the pending action is removed.
 The inline keyboard is also edited to show the selected action.
+
+Plan `run` writes an approval response with `commit_plan: false` and `run_coder: true`.
 
 #### Two-Step Actions
 
 For `feedback` and `custom` choices, the flow is:
 
 1. The callback is saved to `awaiting_feedback.json` with the pending action context
-2. Telegram sends a confirmation message asking the user to type their response
-3. The next text message from the user completes the action:
+2. The entry is keyed by the originating Telegram `message_id`, so multiple feedback flows can be active at once
+3. Telegram answers the button tap with a prompt to send feedback and removes the original inline keyboard
+4. The next reply to that Telegram message completes the action; if only one feedback flow exists, a plain text
+   message can complete it as a compatibility fallback:
    - The feedback/custom text is written to the response file
    - `awaiting_feedback.json` is cleared
    - The pending action is removed
@@ -59,13 +63,14 @@ Text messages are dispatched in priority order:
    - `/resume` — Shows resume copy buttons for running + done agents
    - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
+   - `/bead [<id>]` — Shows open beads as picker buttons, or renders `sase bead show <id>` output in chat
 3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
 
-### Photos and Documents
+### Photos and Image Documents
 
-Photos sent to the bot are:
-1. Downloaded to `~/.sase/telegram/images/` as `{timestamp}_{file_id_prefix}.jpg`
+Photos or image documents sent to the bot are:
+1. Downloaded to `~/.sase/telegram/images/` with a timestamped filename
 2. Used to build an agent prompt that references the downloaded image path
 3. A new sase agent is launched with the visual context
 
@@ -78,7 +83,7 @@ When a text message or photo triggers an agent launch:
 - **Auto-naming**: Agents launched from Telegram are automatically assigned names
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts
   them using Telegram's entity metadata
-- **Launch confirmation**: A message is sent back with Resume, Wait, and Kill copy-text buttons
+- **Launch confirmation**: A message is sent back with Resume and Wait copy-text buttons, plus Kill and Retry controls
 
 ## ChangeSpec Tags
 
@@ -88,6 +93,15 @@ exact project name. Each listed ChangeSpec gets a copy-text button containing on
 
 If workflow detection fails for some entries, the command still shows the entries it can resolve and includes a skipped
 count. Large result sets are split across multiple Telegram messages without dropping entries.
+
+## Beads
+
+`/bead` runs `sase bead list`, parses open beads, and shows up to 80 picker buttons. `/bead <id>` runs
+`sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
+
+Bead commands run in the current process context by default. If `SASE_TELEGRAM_BEAD_PROJECT` is set, that project is
+resolved to a workspace and used as the subprocess working directory. Without the override, pending Telegram prompts
+are scanned for a leading workflow tag and the first resolvable project workspace is used.
 
 When deploying command registration changes, delete `~/.sase/telegram/commands_registered_ts` to force immediate
 registration instead of waiting for the hourly refresh.

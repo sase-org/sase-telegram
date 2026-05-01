@@ -39,18 +39,18 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan Approval      | Shows plan content with Approve / Reject / Epic / Feedback buttons                          |
+| Plan Approval      | Shows plan content with Approve / Run / Epic / Reject / Feedback buttons                    |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat attachments and a Resume copy button                 |
-| Agent Launched      | Shows provider/model label, workspace number, prompt snippet, and Resume / Wait / Kill buttons |
+| Agent Launched      | Shows provider/model label, workspace number, prompt snippet, and Resume / Wait / Kill / Retry buttons |
 | Agent Killed        | Confirms termination with a Retry copy button to re-launch with the same prompt             |
 | Error Digest       | Sends error summary with digest file attachments                                            |
 | Image Generated    | Sends model name and generated image inline                                                 |
 
 ### Features
 
-- **Activity-aware sending** — only sends when you've been inactive (configurable threshold)
+- **Activity-aware sending** — only sends when SASE's TUI idle state says you're inactive
 - **Rate limiting** — sliding-window rate limiter prevents message flooding
 - **Exclusive outbound locking** — prevents concurrent outbound runs from duplicating sends
 - **Two-step feedback** — press a Feedback/Custom button, then type your response
@@ -58,10 +58,10 @@ Installing sase-telegram adds the following commands:
 - **Auto-naming** — agents launched from Telegram automatically get assigned names
 - **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
 - **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
-- **Copy-text buttons** — Resume, Wait, Kill, and Retry buttons copy pre-filled prompts to your clipboard
-- **Photo/document handling** — send images to launch agents with visual context
-- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts` for agent management and ChangeSpec workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
-- **PDF attachments** — long plans are converted to PDF via pandoc for readability
+- **Copy-text buttons** — Resume, Wait, Retry, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
+- **Photo/document handling** — send photos or image documents to launch agents with visual context
+- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]` for agent management, ChangeSpec, xprompt, and bead workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
 - **Parse mode fallback** — falls back to plain text if MarkdownV2 rendering fails
@@ -92,26 +92,30 @@ this state — there is no separate inactivity threshold to configure in sase-te
 The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), checks if
 you're inactive (via sase's TUI activity tracking), loads unsent notifications using a high-water mark timestamp, and
 formats them as Telegram MarkdownV2 messages with inline keyboards. Long plans are wrapped in expandable blockquotes
-or converted to PDF attachments. Chat file attachments are trimmed to just the response portion, with diffs embedded
-into the response PDF. Actionable notifications (plan approvals, HITL requests, user questions) are saved as pending
-actions for the inbound script to match against.
+or truncated and paired with a document attachment. Chat file attachments are trimmed to just the response portion,
+with commit messages and diffs embedded into the response PDF when possible. Actionable notifications (plan approvals,
+HITL requests, user questions) are saved as pending actions for the inbound script to match against.
 
 ### Inbound
 
-The inbound script polls Telegram for button presses, text messages, and photo/document uploads. It processes inline
-keyboard callbacks (approve/reject/select/epic), handles two-step feedback flows (Feedback/Custom button followed by a
-text message), and writes response files for sase to pick up. Text messages that don't complete a feedback flow are
-dispatched as follows:
+The inbound script fetches Telegram button presses, text messages, and photo/document uploads. It processes inline
+keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pickers), handles two-step feedback flows
+(Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
+up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`) — agent management and ChangeSpec workflow tag lookup
+- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, and bead inspection
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
-messages include Resume, Wait, and Kill copy-text buttons for quick follow-up actions.
+messages include Resume and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 
 `/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
+
+`/bead` lists open beads as picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the output to Telegram
+MarkdownV2, and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, or a pending Telegram prompt
+contains a workflow tag, bead commands run from the resolved project workspace.
 
 After deploying a new version with slash command changes, delete
 `~/.sase/telegram/commands_registered_ts` to force Telegram command registration immediately instead of waiting for the
@@ -123,13 +127,14 @@ State files are stored under `~/.sase/telegram/`:
 
 | File                        | Purpose                                      |
 | --------------------------- | -------------------------------------------- |
-| `pending_actions.json`      | Actionable notifications awaiting response    |
+| `pending_actions.json`      | Pending notification, kill, retry, and bead callback context |
 | `rate_limit.json`           | Sliding-window send timestamps                |
 | `update_offset.txt`         | Last processed Telegram update ID             |
-| `awaiting_feedback.json`    | Active two-step feedback flow state           |
+| `awaiting_feedback.json`    | Active two-step feedback flow state, keyed by Telegram message |
 | `last_sent_ts`              | High-water mark for outbound notifications    |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
+| `commands_registered_ts`    | Cached timestamp for Telegram slash command registration |
 | `images/`                   | Downloaded photos from Telegram messages       |
 
 ## Requirements
@@ -138,8 +143,7 @@ State files are stored under `~/.sase/telegram/`:
 - [sase](https://github.com/sase-org/sase) >= 0.1.0
 - [python-telegram-bot](https://python-telegram-bot.org/) >= 21.0
 - [pass](https://www.passwordstore.org/) (for bot token retrieval)
-- [pandoc](https://pandoc.org/) (optional, for PDF generation)
-- PDF engine (optional, one of): [wkhtmltopdf](https://wkhtmltopdf.org/) (preferred), xelatex, or pdflatex
+- PDF tooling supported by SASE's shared Markdown renderer (optional, for PDF generation)
 
 ## Development
 
@@ -162,12 +166,13 @@ src/sase_telegram/
 ├── credentials.py           # Bot token (via pass), chat ID and username (env vars)
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling
+├── bead_format.py           # Convert `sase bead` output to Markdown for Telegram rendering
 ├── outbound.py              # High-water mark tracking, exclusive lock, unsent detection
 ├── pending_actions.py       # Persist pending actions to JSON (24h stale cleanup)
 ├── rate_limit.py            # Sliding-window rate limiter (configurable via env var)
 ├── telegram_client.py       # Sync wrapper with retry/backoff and message splitting
-├── pdf_convert.py           # Markdown to PDF via pandoc (wkhtmltopdf → xelatex → pdflatex)
-├── pdf_style.css            # CSS styling for wkhtmltopdf PDF output
+├── pdf_convert.py           # Markdown to PDF via SASE's shared renderer
+├── pdf_style.css            # CSS styling for rendered PDF output
 └── scripts/
     ├── __init__.py           # Re-exports inbound_main and outbound_main
     ├── sase_tg_outbound.py   # Outbound entry point (--dry-run, --context)
