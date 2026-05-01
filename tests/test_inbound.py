@@ -1417,6 +1417,108 @@ class TestSendKillResult:
         assert btn.callback_data == "retry:a:go"
 
 
+def _running_agent(
+    name: str | None,
+    *,
+    project: str = "proj",
+    pid: int | None = 1234,
+    model: str = "opus-4-7",
+    workspace_num: int | None = 1,
+    duration: str = "5m",
+    approve: bool = False,
+    prompt: str | None = None,
+    status: str = "RUNNING",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        project=project,
+        pid=pid,
+        model=model,
+        provider="claude",
+        workspace_num=workspace_num,
+        duration=duration,
+        approve=approve,
+        prompt=prompt,
+        status=status,
+    )
+
+
+class TestHandleListCommand:
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_empty_result(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        with patch("sase.agent.running.list_running_agents", return_value=[]):
+            _handle_list_command()
+
+        mock_tg.send_message.assert_called_once_with("12345", "No running agents.")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_running_group_with_details_and_html_escaping(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [
+            _running_agent(
+                "<alpha>",
+                project="sase&core",
+                model="opus<4>",
+                prompt="do <thing>\nnow",
+                approve=True,
+            )
+        ]
+        with patch("sase.agent.running.list_running_agents", return_value=agents):
+            _handle_list_command()
+
+        mock_tg.send_message.assert_called_once()
+        args = mock_tg.send_message.call_args.args
+        kwargs = mock_tg.send_message.call_args.kwargs
+        text = args[1]
+        assert kwargs["parse_mode"] == "HTML"
+        assert text.startswith("<b>1 Running Agent(s)</b>")
+        assert "<b>▶ Running (1)</b>" in text
+        assert "<b>&lt;alpha&gt;</b>  opus&lt;4&gt;, 5m" in text
+        assert "sase&amp;core · ws#1 · PID 1234 · autonomous" in text
+        assert "<i>do &lt;thing&gt; now</i>" in text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_multiple_statuses_use_bucket_order_and_preserve_agent_order(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [
+            _running_agent("run-1", status="RUNNING"),
+            _running_agent("done-1", status="DONE"),
+            _running_agent("run-2", status="RUNNING"),
+            _running_agent("question-1", status="QUESTION"),
+        ]
+        with patch("sase.agent.running.list_running_agents", return_value=agents):
+            _handle_list_command()
+
+        text = mock_tg.send_message.call_args.args[1]
+        needs_idx = text.index("<b>▲ Needs Attention (1)</b>")
+        running_idx = text.index("<b>▶ Running (2)</b>")
+        done_idx = text.index("<b>✓ Done (1)</b>")
+        assert needs_idx < running_idx < done_idx
+        assert text.index("run-1") < text.index("run-2")
+
+
 class TestHandleRetryFromCallback:
     """Tests for _handle_retry_from_callback."""
 

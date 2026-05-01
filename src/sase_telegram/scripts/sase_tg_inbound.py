@@ -770,6 +770,44 @@ def _format_agent_description(
     return line
 
 
+def _format_agent_list_block(agent: Any) -> str:
+    """Format one agent block for the informational /list response."""
+    import html
+
+    name = agent.name if isinstance(agent.name, str) and agent.name else "(unnamed)"
+    model_value = agent.model if isinstance(agent.model, str) and agent.model else "?"
+    duration_value = (
+        agent.duration if isinstance(agent.duration, str) and agent.duration else "?"
+    )
+    label = html.escape(name)
+    model = html.escape(model_value)
+    duration = html.escape(duration_value)
+
+    details: list[str] = []
+    project = getattr(agent, "project", None)
+    if isinstance(project, str) and project:
+        details.append(html.escape(project))
+    workspace_num = getattr(agent, "workspace_num", None)
+    if isinstance(workspace_num, int):
+        details.append(f"ws#{workspace_num}")
+    pid = getattr(agent, "pid", None)
+    if isinstance(pid, int):
+        details.append(f"PID {pid}")
+    if getattr(agent, "approve", False) is True:
+        details.append("autonomous")
+
+    block = f"<b>{label}</b>  {model}, {duration}"
+    if details:
+        block += f"\n{' · '.join(details)}"
+    prompt = getattr(agent, "prompt", None)
+    if isinstance(prompt, str) and prompt:
+        snippet = prompt.replace("\n", " ").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:120] + "…"
+        block += f"\n<i>{html.escape(snippet)}</i>"
+    return block
+
+
 def _show_kill_selection(chat_id: str) -> None:
     """Show an inline keyboard of running agents to kill."""
     from sase.agent.running import list_running_agents
@@ -829,9 +867,11 @@ def _handle_kill_command(args: str) -> None:
 
 def _handle_list_command() -> None:
     """Handle /list — show all currently running agents."""
-    import html
-
     from sase.agent.running import list_running_agents
+    from sase.integrations.agent_status_groups import (
+        group_agent_statuses,
+        status_bucket_header,
+    )
 
     chat_id = credentials.get_chat_id()
     agents = list_running_agents()
@@ -841,29 +881,9 @@ def _handle_list_command() -> None:
         return
 
     blocks: list[str] = [f"<b>{len(agents)} Running Agent(s)</b>"]
-    for a in agents:
-        label = html.escape(a.name or "(unnamed)")
-        model = html.escape(a.model or "?")
-
-        details: list[str] = []
-        if a.project:
-            details.append(html.escape(a.project))
-        if a.workspace_num is not None:
-            details.append(f"ws#{a.workspace_num}")
-        if a.pid is not None:
-            details.append(f"PID {a.pid}")
-        if a.approve:
-            details.append("autonomous")
-
-        block = f"<b>{label}</b>  {model}, {a.duration}"
-        if details:
-            block += f"\n{' · '.join(details)}"
-        if a.prompt:
-            snippet = a.prompt.replace("\n", " ")
-            if len(snippet) > 120:
-                snippet = snippet[:120] + "…"
-            block += f"\n<i>{html.escape(snippet)}</i>"
-        blocks.append(block)
+    for group in group_agent_statuses(agents):
+        blocks.append(f"<b>{status_bucket_header(group.bucket, len(group.agents))}</b>")
+        blocks.extend(_format_agent_list_block(agent) for agent in group.agents)
 
     telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
 
