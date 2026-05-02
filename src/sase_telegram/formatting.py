@@ -532,7 +532,11 @@ def _format_workflow_complete(
         name_line = f"  _@{escaped_name}_"
     else:
         name_line = ""
-    text = f"{icon} *{label} Complete*{name_line}\n\n{notes_text}"
+    header = f"{icon} *{label} Complete*{name_line}"
+    bead_display = n.action_data.get("bead_display")
+    if bead_display:
+        header += f"\n*Bead:* {escape_markdown_v2(bead_display)}"
+    text = f"{header}\n\n{notes_text}"
 
     pr_url = n.action_data.get("pr_url")
     if pr_url:

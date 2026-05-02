@@ -413,6 +413,35 @@ class TestFormatWorkflowComplete:
         assert button.copy_text is not None
         assert button.copy_text.text == "#resume:c "
 
+    def test_includes_bead_display_and_resume_button(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "agent_name": "sase-x.3",
+                "bead_display": "sase-x.3 - Fix the thing",
+            },
+        )
+        text, keyboard, _ = format_notification(n)
+
+        assert "*Bead:* sase\\-x\\.3 \\- Fix the thing" in text
+        assert text.index("_@sase\\-x\\.3_") < text.index("*Bead:*")
+        assert text.index("*Bead:*") < text.index("Agent completed")
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#resume:sase-x.3 "
+
+    def test_omits_bead_display_line_when_absent(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={"agent_name": "sase-x.3"},
+        )
+        text, _, _ = format_notification(n)
+
+        assert "*Bead:*" not in text
+
     def test_shows_provider_model_label(self):
         n = _make_notification(
             sender="user-agent",
