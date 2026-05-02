@@ -39,7 +39,7 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan Approval      | Shows plan content with Tale / Run / Epic / Legend / Reject / Feedback buttons              |
+| Plan Approval      | Shows plan content with Tale / Quest / Epic / Legend / Reject / Feedback buttons            |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat attachments and a Resume copy button                 |
