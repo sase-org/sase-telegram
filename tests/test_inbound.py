@@ -366,6 +366,20 @@ class TestChangesCommandDispatch:
         assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
 
 
+class TestBeadCommandDispatch:
+    """Tests for /bead command dispatch aliases."""
+
+    def test_handle_command_dispatches_plural_beads_alias(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_bead_command"
+        ) as mock_handler:
+            _handle_command("/beads")
+
+        mock_handler.assert_called_once_with("")
+
+
 class TestUpdateCommand:
     """Tests for the /update slash command."""
 
@@ -1863,6 +1877,34 @@ class TestBeadCommand:
         assert decode(rows[0][0].callback_data) == ("bead", "sase-13", "show")
         assert decode(rows[1][0].callback_data) == ("bead", "sase-13.5", "show")
         assert decode(rows[2][0].callback_data) == ("bead", "sase-13.1", "show")
+
+    def test_missing_arg_list_uses_resolved_bead_cwd(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "sase"
+        workspace.mkdir()
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout="○ sase-13 · DELTAS ChangeSpec Field\n",
+            stderr="",
+        )
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
+                return_value=str(workspace),
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+
+            _handle_bead_command("")
+
+        assert run_mock.call_args[0][0] == ["sase", "bead", "list"]
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
 
     def test_missing_arg_empty_list(self) -> None:
         completed = SimpleNamespace(

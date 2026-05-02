@@ -745,7 +745,7 @@ def _handle_command(text: str) -> None:
         _handle_changes_command(args)
     elif command == "xprompts":
         _handle_xprompts_command()
-    elif command == "bead":
+    elif command in {"bead", "beads"}:
         _handle_bead_command(args)
     elif command == "update":
         _handle_update_command()
