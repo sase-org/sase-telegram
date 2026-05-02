@@ -39,7 +39,7 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan Approval      | Shows plan content with Approve / Run / Epic / Reject / Feedback buttons                    |
+| Plan Approval      | Shows plan content with Approve / Run / Epic / Legend / Reject / Feedback buttons           |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat attachments and a Resume copy button                 |
@@ -99,7 +99,7 @@ HITL requests, user questions) are saved as pending actions for the inbound scri
 ### Inbound
 
 The inbound script fetches Telegram button presses, text messages, and photo/document uploads. It processes inline
-keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pickers), handles two-step feedback flows
+keyboard callbacks (approve/run/reject/select/epic/legend, agent controls, and bead pickers), handles two-step feedback flows
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 

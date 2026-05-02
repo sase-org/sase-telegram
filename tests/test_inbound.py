@@ -127,6 +127,22 @@ class TestProcessCallbackPlan:
         assert result.answer_text == "Running coder (no commit)"
         assert result.response_path == tmp_path / "plan_response.json"
 
+    def test_epic(self, tmp_path: Path) -> None:
+        response_dir = str(tmp_path)
+        pending = _make_pending_plan("abcd1234", response_dir)
+        result = process_callback("plan:abcd1234:epic", pending)
+        assert result is not None
+        assert result.response_data == {"action": "epic"}
+        assert result.answer_text == "Epic created"
+
+    def test_legend(self, tmp_path: Path) -> None:
+        response_dir = str(tmp_path)
+        pending = _make_pending_plan("abcd1234", response_dir)
+        result = process_callback("plan:abcd1234:legend", pending)
+        assert result is not None
+        assert result.response_data == {"action": "legend"}
+        assert result.answer_text == "Legend created"
+
     def test_unknown_pending(self) -> None:
         result = process_callback("plan:unknown1:approve", {})
         assert result is None

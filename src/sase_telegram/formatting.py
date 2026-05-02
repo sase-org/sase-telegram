@@ -413,6 +413,10 @@ def _format_plan_approval(
     ]
     row2 = [
         InlineKeyboardButton(
+            "🗺️ Legend",
+            callback_data=callback_data.encode("plan", prefix, "legend"),
+        ),
+        InlineKeyboardButton(
             "❌ Reject",
             callback_data=callback_data.encode("plan", prefix, "reject"),
         ),
