@@ -200,10 +200,10 @@ class TestFormatPlanApproval:
         assert "Some content here" in text
         assert keyboard is not None
         assert len(keyboard.inline_keyboard) == 2
-        assert len(keyboard.inline_keyboard[0]) == 3  # Tale + Quest + Epic
+        assert len(keyboard.inline_keyboard[0]) == 3  # Tale + Approve + Epic
         assert "Tale" in keyboard.inline_keyboard[0][0].text
         assert keyboard.inline_keyboard[0][0].callback_data.endswith(":approve")
-        assert "Quest" in keyboard.inline_keyboard[0][1].text
+        assert keyboard.inline_keyboard[0][1].text == "Approve"
         assert keyboard.inline_keyboard[0][1].callback_data == "plan:" + (
             keyboard.inline_keyboard[0][0].callback_data.split(":")[1] + ":run"
         )

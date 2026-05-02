@@ -48,7 +48,7 @@ Each notification is formatted as a Telegram message with:
 
 | Type | Body Content | Buttons |
 |---|---|---|
-| Plan Approval | Plan text + optional model/agent label | Tale, Quest, Epic, Legend, Reject, Feedback |
+| Plan Approval | Plan text + optional model/agent label | Tale, Approve, Epic, Legend, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Resume (copy-text) |
@@ -57,8 +57,8 @@ Each notification is formatted as a Telegram message with:
 | Error Digest | Error summary | — |
 | Image Generated | Model name | Sends image inline |
 
-The plan **Quest** button approves the plan with `commit_plan: false` and `run_coder: true`, which starts coder work
-without committing the plan first.
+The visible plan **Approve** button maps to the internal `run` payload for compatibility. It approves the plan with
+`commit_plan: false` and `run_coder: true`, which starts coder work without committing the plan first.
 
 ### Attachments
 
