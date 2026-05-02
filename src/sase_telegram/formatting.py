@@ -399,7 +399,7 @@ def _format_plan_approval(
 
     row1 = [
         InlineKeyboardButton(
-            "✅ Approve",
+            "📖 Tale",
             callback_data=callback_data.encode("plan", prefix, "approve"),
         ),
         InlineKeyboardButton(
