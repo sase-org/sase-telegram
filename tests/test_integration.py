@@ -21,6 +21,7 @@ PENDING_TEST_FILE = Path("/tmp/test_integration_pending.json")
 RATE_LIMIT_TEST_FILE = Path("/tmp/test_integration_rate_limit.json")
 OFFSET_TEST_FILE = Path("/tmp/test_integration_offset.txt")
 AWAITING_TEST_FILE = Path("/tmp/test_integration_awaiting.json")
+OUTBOUND_LOCK_TEST_FILE = Path("/tmp/test_integration_outbound.lock")
 
 
 def _cleanup_files() -> None:
@@ -30,6 +31,7 @@ def _cleanup_files() -> None:
         RATE_LIMIT_TEST_FILE,
         OFFSET_TEST_FILE,
         AWAITING_TEST_FILE,
+        OUTBOUND_LOCK_TEST_FILE,
     ]:
         f.unlink(missing_ok=True)
 
@@ -61,6 +63,7 @@ def _patch_paths():
     """Redirect all file paths to temp locations for isolation."""
     patchers = [
         patch("sase_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE),
+        patch("sase_telegram.outbound.OUTBOUND_LOCK_FILE", OUTBOUND_LOCK_TEST_FILE),
         patch("sase_telegram.pending_actions.PENDING_ACTIONS_PATH", PENDING_TEST_FILE),
         patch("sase_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
         patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
