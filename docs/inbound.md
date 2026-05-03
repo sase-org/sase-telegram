@@ -63,7 +63,7 @@ Text messages are dispatched in priority order:
    - `/resume` — Shows resume copy buttons for running + done agents
    - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
-   - `/bead [<id>]` — Shows open beads as picker buttons, or renders `sase bead show <id>` output in chat
+   - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
    - `/update` — Starts the detached SASE update worker and replies with its log path
 3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
@@ -99,9 +99,9 @@ count. Large result sets are split across multiple Telegram messages without dro
 
 ## Beads
 
-`/bead` runs `sase bead list --status=open` across known workspaces from `~/.sase/projects/*/<project>.gp`, parses open
-beads, and shows up to 80 picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the plain-text output to
-Markdown, then escapes it for Telegram MarkdownV2.
+`/bead` runs `sase bead list` across known workspaces from `~/.sase/projects/*/<project>.gp`, parses active beads
+(`open` and `in_progress`), and shows up to 80 picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the
+plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
 
 If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project workspace. Without the override,
 picker callbacks carry the source project when possible, and manual detail lookup searches known projects after trying

@@ -113,7 +113,7 @@ messages include Resume and Wait copy-text buttons plus Kill and Retry controls 
 `/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
 
-`/bead` lists open beads across all known SASE projects as picker buttons. `/bead <id>` runs `sase bead show <id>`,
+`/bead` lists active beads across all known SASE projects as picker buttons. `/bead <id>` runs `sase bead show <id>`,
 converts the output to Telegram MarkdownV2, and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set,
 bead commands are narrowed to that project workspace. Without the override, detail lookup searches known projects and
 prefers the chat-scoped project remembered from recent Telegram launch context.

@@ -1998,7 +1998,6 @@ class TestBeadCommand:
         stdout = (
             "○ sase-13 · DELTAS ChangeSpec Field\n"
             "◐ sase-13.5 · Phase 5: Lifecycle Wiring ← sase-13\n"
-            "✓ sase-13.1 · Phase 1: Data Model ← sase-13\n"
         )
         completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         with (
@@ -2024,13 +2023,12 @@ class TestBeadCommand:
         keyboard = kwargs.get("reply_markup")
         assert keyboard is not None
         rows = keyboard.inline_keyboard
-        assert len(rows) == 3
+        assert len(rows) == 2
 
         from sase_telegram.callback_data import decode
 
         assert decode(rows[0][0].callback_data) == ("bead", "sase-13", "show")
         assert decode(rows[1][0].callback_data) == ("bead", "sase-13.5", "show")
-        assert decode(rows[2][0].callback_data) == ("bead", "sase-13.1", "show")
 
     def test_missing_arg_lists_all_known_project_beads(
         self, monkeypatch: object, tmp_path: Path
@@ -2060,7 +2058,7 @@ class TestBeadCommand:
             check: bool,
             cwd: str | None = None,
         ) -> SimpleNamespace:
-            assert cmd == ["sase", "bead", "list", "--status=open"]
+            assert cmd == ["sase", "bead", "list"]
             assert capture_output is True
             assert text is True
             assert check is False
@@ -2105,6 +2103,7 @@ class TestBeadCommand:
 
         assert rows[0][0].text == "○ zorg-1: Build all-project bead picker"
         assert decode(rows[0][0].callback_data) == ("bead", "zorg/zorg-1", "show")
+        assert rows[1][0].text == "◐ zorg-2: Follow-up routing"
         assert decode(rows[1][0].callback_data) == ("bead", "zorg/zorg-2", "show")
 
     def test_missing_arg_list_uses_resolved_bead_cwd(self, tmp_path: Path) -> None:
@@ -2152,7 +2151,7 @@ class TestBeadCommand:
 
             _handle_bead_command("")
 
-        tc_mock.send_message.assert_called_once_with("12345", "No open beads.")
+        tc_mock.send_message.assert_called_once_with("12345", "No active beads.")
 
     def test_missing_arg_subprocess_error(self) -> None:
         completed = SimpleNamespace(

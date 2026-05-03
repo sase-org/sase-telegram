@@ -1383,7 +1383,7 @@ def _project_bead_entries(
     errors: list[str] = []
     for project in projects:
         result = _run_bead_command(
-            ["list", "--status=open"],
+            ["list"],
             cwd=project.workspace,
         )
         if result.returncode != 0:
@@ -1425,7 +1425,7 @@ def _render_bead_selection(
     skipped_error_count: int = 0,
 ) -> None:
     if not entries:
-        telegram_client.send_message(chat_id, "No open beads.")
+        telegram_client.send_message(chat_id, "No active beads.")
         return
 
     bead_id_counts: dict[str, int] = {}
@@ -1451,7 +1451,7 @@ def _render_bead_selection(
 
         buttons.append([InlineKeyboardButton(label, callback_data=callback_data)])
 
-    header = f"<b>Open beads ({len(entries)}):</b>"
+    header = f"<b>Active beads ({len(entries)}):</b>"
     notes: list[str] = []
     if truncated:
         notes.append(
@@ -1473,7 +1473,7 @@ def _render_bead_selection(
 
 
 def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
-    """Render an inline keyboard with one button per open bead."""
+    """Render an inline keyboard with one button per active bead."""
     try:
         if _bead_project_override():
             result = _run_bead_command(["list"], message=message)
@@ -1556,14 +1556,14 @@ def _bead_show_result(
 
 
 def _handle_bead_callback(callback_query: Any, bead_token: str) -> None:
-    """Handle a tap on an open-beads picker button."""
+    """Handle a tap on an active-beads picker button."""
     _project, bead_id = _split_project_bead_token(bead_token)
     telegram_client.answer_callback_query(callback_query.id, f"Loading {bead_id}…")
     _handle_bead_command(bead_token, message=getattr(callback_query, "message", None))
 
 
 def _handle_bead_command(args: str, message: Any | None = None) -> None:
-    """Handle /bead [<id>] — render bead details, or show open-beads picker."""
+    """Handle /bead [<id>] — render bead details, or show active-beads picker."""
     chat_id = credentials.get_chat_id()
     parts = args.strip().split()
     if not parts:
