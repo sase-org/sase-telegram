@@ -99,13 +99,13 @@ count. Large result sets are split across multiple Telegram messages without dro
 
 ## Beads
 
-`/bead` runs `sase bead list`, parses open beads, and shows up to 80 picker buttons. `/bead <id>` runs
-`sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
+`/bead` runs `sase bead list --status=open` across known workspaces from `~/.sase/projects/*/<project>.gp`, parses open
+beads, and shows up to 80 picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the plain-text output to
+Markdown, then escapes it for Telegram MarkdownV2.
 
-Bead commands run in the current process context by default. If `SASE_TELEGRAM_BEAD_PROJECT` is set, that project is
-resolved to a workspace and used as the subprocess working directory. Without the override, the bot first uses the
-remembered project for the current Telegram chat, then scans pending Telegram prompts for the same chat, then falls back
-to scanning all pending prompts for compatibility.
+If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project workspace. Without the override,
+picker callbacks carry the source project when possible, and manual detail lookup searches known projects after trying
+the remembered Telegram chat context first.
 
 ## Update
 

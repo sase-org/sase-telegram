@@ -1983,9 +1983,15 @@ class TestBeadCommand:
             "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
             return_value=None,
         )
+        self._known_projects_patcher = patch(
+            "sase_telegram.scripts.sase_tg_inbound._iter_known_project_workspaces",
+            return_value=[],
+        )
         self._resolve_patcher.start()
+        self._known_projects_patcher.start()
 
     def teardown_method(self) -> None:
+        self._known_projects_patcher.stop()
         self._resolve_patcher.stop()
 
     def test_missing_arg_shows_picker(self) -> None:
@@ -2025,6 +2031,81 @@ class TestBeadCommand:
         assert decode(rows[0][0].callback_data) == ("bead", "sase-13", "show")
         assert decode(rows[1][0].callback_data) == ("bead", "sase-13.5", "show")
         assert decode(rows[2][0].callback_data) == ("bead", "sase-13.1", "show")
+
+    def test_missing_arg_lists_all_known_project_beads(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        sase_workspace = tmp_path / "sase"
+        zorg_workspace = tmp_path / "zorg"
+        sase_workspace.mkdir()
+        zorg_workspace.mkdir()
+
+        projects = [
+            inbound._KnownProjectWorkspace("sase", str(sase_workspace)),
+            inbound._KnownProjectWorkspace("zorg", str(zorg_workspace)),
+        ]
+
+        def fake_run(
+            cmd: list[str],
+            *,
+            capture_output: bool,
+            text: bool,
+            check: bool,
+            cwd: str | None = None,
+        ) -> SimpleNamespace:
+            assert cmd == ["sase", "bead", "list", "--status=open"]
+            assert capture_output is True
+            assert text is True
+            assert check is False
+            if cwd == str(sase_workspace):
+                return SimpleNamespace(
+                    returncode=0, stdout="No issues found.\n", stderr=""
+                )
+            if cwd == str(zorg_workspace):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        "○ zorg-1 · Build all-project bead picker\n"
+                        "◐ zorg-2 · Follow-up routing\n"
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected cwd: {cwd}")
+
+        with (
+            patch.object(
+                inbound, "_iter_known_project_workspaces", return_value=projects
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                side_effect=fake_run,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            inbound._handle_bead_command("")
+
+        assert run_mock.call_count == 2
+        tc_mock.send_message.assert_called_once()
+        _args, kwargs = tc_mock.send_message.call_args
+        keyboard = kwargs.get("reply_markup")
+        assert keyboard is not None
+        rows = keyboard.inline_keyboard
+        assert len(rows) == 2
+
+        from sase_telegram.callback_data import decode
+
+        assert rows[0][0].text == "○ zorg-1: Build all-project bead picker"
+        assert decode(rows[0][0].callback_data) == ("bead", "zorg/zorg-1", "show")
+        assert decode(rows[1][0].callback_data) == ("bead", "zorg/zorg-2", "show")
 
     def test_missing_arg_list_uses_resolved_bead_cwd(self, tmp_path: Path) -> None:
         workspace = tmp_path / "sase"
@@ -2121,6 +2202,40 @@ class TestBeadCommand:
         tc_mock.answer_callback_query.assert_called_once_with("cb1", "Loading sase-13…")
         run_mock.assert_called_once()
         assert run_mock.call_args[0][0] == ["sase", "bead", "show", "sase-13"]
+
+    def test_project_aware_callback_invokes_bead_show_in_project(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "zorg"
+        workspace.mkdir()
+        show_completed = SimpleNamespace(
+            returncode=0,
+            stdout="○ zorg-1 · Routing   [OPEN]\nType: plan · Owner: x@y\n",
+            stderr="",
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_workspace_for_project",
+                return_value=str(workspace),
+            ) as resolve_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                return_value=show_completed,
+            ) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+            cb = SimpleNamespace(id="cb1", data="bead:zorg/zorg-1:show")
+            _handle_callback(cb, {})
+
+        tc_mock.answer_callback_query.assert_called_once_with("cb1", "Loading zorg-1…")
+        resolve_mock.assert_called_once_with("zorg", "bead callback")
+        run_mock.assert_called_once()
+        assert run_mock.call_args[0][0] == ["sase", "bead", "show", "zorg-1"]
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
 
     def test_success_renders_markdown(self) -> None:
         stdout = (

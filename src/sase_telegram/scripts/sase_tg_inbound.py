@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -60,6 +61,21 @@ _VCS_PROJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
+
+
+@dataclass(frozen=True)
+class _KnownProjectWorkspace:
+    project: str
+    workspace: str
+
+
+@dataclass(frozen=True)
+class _ProjectBeadEntry:
+    project: str | None
+    workspace: str | None
+    icon: str
+    bead_id: str
+    title: str
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -220,8 +236,7 @@ def _iter_pending_prompts(chat_id: str | None = None) -> list[str]:
     return prompts
 
 
-def _resolve_workspace_from_project_file(project: str) -> str | None:
-    project_file = Path.home() / ".sase" / "projects" / project / f"{project}.gp"
+def _workspace_from_project_file(project_file: Path) -> str | None:
     try:
         for line in project_file.read_text().splitlines():
             if not line.startswith("WORKSPACE_DIR:"):
@@ -233,6 +248,31 @@ def _resolve_workspace_from_project_file(project: str) -> str | None:
     except OSError:
         return None
     return None
+
+
+def _resolve_workspace_from_project_file(project: str) -> str | None:
+    project_file = Path.home() / ".sase" / "projects" / project / f"{project}.gp"
+    return _workspace_from_project_file(project_file)
+
+
+def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
+    """Return valid workspaces from ``~/.sase/projects/*/<project>.gp``."""
+    projects_root = Path.home() / ".sase" / "projects"
+    try:
+        project_dirs = sorted(item for item in projects_root.iterdir() if item.is_dir())
+    except OSError:
+        return []
+
+    projects: list[_KnownProjectWorkspace] = []
+    seen_workspaces: set[str] = set()
+    for project_dir in project_dirs:
+        project = project_dir.name
+        workspace = _workspace_from_project_file(project_dir / f"{project}.gp")
+        if not workspace or workspace in seen_workspaces:
+            continue
+        seen_workspaces.add(workspace)
+        projects.append(_KnownProjectWorkspace(project=project, workspace=workspace))
+    return projects
 
 
 def _resolve_workspace_for_project(project: str, source: str) -> str | None:
@@ -255,9 +295,14 @@ def _resolve_workspace_for_project(project: str, source: str) -> str | None:
         return None
 
 
+def _bead_project_override() -> str | None:
+    override = os.environ.get(_BEAD_PROJECT_ENV, "").strip()
+    return override or None
+
+
 def _resolve_bead_cwd(message: Any | None = None) -> str | None:
     """Resolve the working directory for ``sase bead`` subprocesses."""
-    override = os.environ.get(_BEAD_PROJECT_ENV, "").strip()
+    override = _bead_project_override()
     if override:
         return _resolve_workspace_for_project(override, _BEAD_PROJECT_ENV)
 
@@ -285,11 +330,11 @@ def _resolve_bead_cwd(message: Any | None = None) -> str | None:
 
 
 def _run_bead_command(
-    args: list[str], message: Any | None = None
+    args: list[str], message: Any | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run ``sase bead`` in the resolved project context when available."""
     cmd = ["sase", "bead", *args]
-    cwd = _resolve_bead_cwd(message=message)
+    cwd = cwd or _resolve_bead_cwd(message=message)
     if cwd is None:
         return subprocess.run(
             cmd,
@@ -1309,54 +1354,115 @@ _BEAD_PICKER_LIMIT = 80
 _BEAD_BUTTON_LABEL_MAX = 60
 
 
-def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
-    """Render an inline keyboard with one button per open bead."""
-    try:
-        result = _run_bead_command(["list"], message=message)
-    except FileNotFoundError:
-        telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
-        return
+def _project_bead_token(project: str | None, bead_id: str) -> str:
+    if project:
+        return f"{project}/{bead_id}"
+    return bead_id
 
-    if result.returncode != 0:
-        err = result.stderr.strip() or "sase bead list failed"
-        escaped = err.replace("\\", "\\\\").replace("`", "\\`")
-        telegram_client.send_message(
-            chat_id,
-            f"```\n{escaped}\n```",
-            parse_mode="MarkdownV2",
+
+def _split_project_bead_token(token: str) -> tuple[str | None, str]:
+    project, sep, bead_id = token.partition("/")
+    if sep and project.strip() and bead_id.strip():
+        return project.strip(), bead_id.strip()
+    return None, token.strip()
+
+
+def _send_bead_subprocess_error(chat_id: str, err: str) -> None:
+    escaped = err.replace("\\", "\\\\").replace("`", "\\`")
+    telegram_client.send_message(
+        chat_id,
+        f"```\n{escaped}\n```",
+        parse_mode="MarkdownV2",
+    )
+
+
+def _project_bead_entries(
+    projects: list[_KnownProjectWorkspace],
+) -> tuple[list[_ProjectBeadEntry], list[str]]:
+    entries: list[_ProjectBeadEntry] = []
+    errors: list[str] = []
+    for project in projects:
+        result = _run_bead_command(
+            ["list", "--status=open"],
+            cwd=project.workspace,
         )
-        return
+        if result.returncode != 0:
+            err = result.stderr.strip() or "sase bead list failed"
+            errors.append(f"{project.project}: {err}")
+            continue
+        for entry in parse_bead_list_output(result.stdout):
+            entries.append(
+                _ProjectBeadEntry(
+                    project=project.project,
+                    workspace=project.workspace,
+                    icon=entry.icon,
+                    bead_id=entry.bead_id,
+                    title=entry.title,
+                )
+            )
+    return entries, errors
 
-    entries = parse_bead_list_output(result.stdout)
+
+def _legacy_bead_entries(
+    result: subprocess.CompletedProcess[str],
+) -> list[_ProjectBeadEntry]:
+    return [
+        _ProjectBeadEntry(
+            project=None,
+            workspace=None,
+            icon=entry.icon,
+            bead_id=entry.bead_id,
+            title=entry.title,
+        )
+        for entry in parse_bead_list_output(result.stdout)
+    ]
+
+
+def _render_bead_selection(
+    chat_id: str,
+    entries: list[_ProjectBeadEntry],
+    *,
+    skipped_error_count: int = 0,
+) -> None:
     if not entries:
         telegram_client.send_message(chat_id, "No open beads.")
         return
+
+    bead_id_counts: dict[str, int] = {}
+    for entry in entries:
+        bead_id_counts[entry.bead_id] = bead_id_counts.get(entry.bead_id, 0) + 1
 
     truncated = len(entries) > _BEAD_PICKER_LIMIT
     shown = entries[:_BEAD_PICKER_LIMIT]
     buttons: list[list[InlineKeyboardButton]] = []
     for entry in shown:
-        label = f"{entry.icon} {entry.bead_id}: {entry.title}"
+        label_id = entry.bead_id
+        if entry.project and bead_id_counts.get(entry.bead_id, 0) > 1:
+            label_id = f"{entry.project}/{entry.bead_id}"
+        label = f"{entry.icon} {label_id}: {entry.title}"
         if len(label) > _BEAD_BUTTON_LABEL_MAX:
             label = label[: _BEAD_BUTTON_LABEL_MAX - 1] + "…"
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    label,
-                    callback_data=encode("bead", entry.bead_id, "show"),
-                )
-            ]
-        )
+
+        callback_token = _project_bead_token(entry.project, entry.bead_id)
+        try:
+            callback_data = encode("bead", callback_token, "show")
+        except ValueError:
+            callback_data = encode("bead", entry.bead_id, "show")
+
+        buttons.append([InlineKeyboardButton(label, callback_data=callback_data)])
 
     header = f"<b>Open beads ({len(entries)}):</b>"
+    notes: list[str] = []
     if truncated:
-        text = (
-            f"{header}\n"
-            f"<i>(showing first {_BEAD_PICKER_LIMIT} of {len(entries)} — "
-            f"refine with /bead &lt;id&gt;)</i>"
+        notes.append(
+            f"showing first {_BEAD_PICKER_LIMIT} of {len(entries)}; "
+            "refine with /bead &lt;id&gt;"
         )
-    else:
-        text = header
+    if skipped_error_count:
+        notes.append(f"skipped {skipped_error_count} project(s) with list errors")
+    text = header
+    if notes:
+        text = f"{header}\n<i>({'; '.join(notes)})</i>"
 
     telegram_client.send_message(
         chat_id,
@@ -1366,10 +1472,94 @@ def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
     )
 
 
-def _handle_bead_callback(callback_query: Any, bead_id: str) -> None:
+def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
+    """Render an inline keyboard with one button per open bead."""
+    try:
+        if _bead_project_override():
+            result = _run_bead_command(["list"], message=message)
+            if result.returncode != 0:
+                err = result.stderr.strip() or "sase bead list failed"
+                _send_bead_subprocess_error(chat_id, err)
+                return
+            _render_bead_selection(chat_id, _legacy_bead_entries(result))
+            return
+
+        projects = _iter_known_project_workspaces()
+        if projects:
+            entries, errors = _project_bead_entries(projects)
+            if errors and not entries:
+                _send_bead_subprocess_error(chat_id, "\n".join(errors))
+                return
+            _render_bead_selection(
+                chat_id,
+                entries,
+                skipped_error_count=len(errors),
+            )
+            return
+
+        result = _run_bead_command(["list"], message=message)
+    except FileNotFoundError:
+        telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
+        return
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or "sase bead list failed"
+        _send_bead_subprocess_error(chat_id, err)
+        return
+
+    _render_bead_selection(chat_id, _legacy_bead_entries(result))
+
+
+def _bead_show_result(
+    bead_token: str, message: Any | None = None
+) -> tuple[str, subprocess.CompletedProcess[str]]:
+    project, bead_id = _split_project_bead_token(bead_token)
+    if project:
+        cwd = _resolve_workspace_for_project(project, "bead callback")
+        if cwd is None:
+            return bead_id, subprocess.CompletedProcess(
+                ["sase", "bead", "show", bead_id],
+                1,
+                "",
+                f"Unable to resolve bead project: {project}",
+            )
+        return bead_id, _run_bead_command(["show", bead_id], cwd=cwd)
+
+    if _bead_project_override():
+        return bead_id, _run_bead_command(["show", bead_id], message=message)
+
+    candidate_cwds: list[str | None] = []
+    context_cwd = _resolve_bead_cwd(message=message)
+    if context_cwd:
+        candidate_cwds.append(context_cwd)
+
+    seen_cwds = {cwd for cwd in candidate_cwds if cwd}
+    for known_project in _iter_known_project_workspaces():
+        if known_project.workspace in seen_cwds:
+            continue
+        seen_cwds.add(known_project.workspace)
+        candidate_cwds.append(known_project.workspace)
+
+    if not candidate_cwds:
+        return bead_id, _run_bead_command(["show", bead_id], message=message)
+
+    first_result: subprocess.CompletedProcess[str] | None = None
+    for cwd in candidate_cwds:
+        result = _run_bead_command(["show", bead_id], cwd=cwd)
+        if first_result is None:
+            first_result = result
+        if result.returncode == 0:
+            return bead_id, result
+
+    assert first_result is not None
+    return bead_id, first_result
+
+
+def _handle_bead_callback(callback_query: Any, bead_token: str) -> None:
     """Handle a tap on an open-beads picker button."""
+    _project, bead_id = _split_project_bead_token(bead_token)
     telegram_client.answer_callback_query(callback_query.id, f"Loading {bead_id}…")
-    _handle_bead_command(bead_id, message=getattr(callback_query, "message", None))
+    _handle_bead_command(bead_token, message=getattr(callback_query, "message", None))
 
 
 def _handle_bead_command(args: str, message: Any | None = None) -> None:
@@ -1379,23 +1569,17 @@ def _handle_bead_command(args: str, message: Any | None = None) -> None:
     if not parts:
         _show_bead_selection(chat_id, message=message)
         return
-    bead_id = parts[0]
+    bead_token = parts[0]
 
     try:
-        result = _run_bead_command(["show", bead_id], message=message)
+        _bead_id, result = _bead_show_result(bead_token, message=message)
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return
 
     if result.returncode != 0:
         err = result.stderr.strip() or "sase bead show failed"
-        # Inside ``` code blocks only `\` and `` ` `` need escaping.
-        escaped = err.replace("\\", "\\\\").replace("`", "\\`")
-        telegram_client.send_message(
-            chat_id,
-            f"```\n{escaped}\n```",
-            parse_mode="MarkdownV2",
-        )
+        _send_bead_subprocess_error(chat_id, err)
         return
 
     md = bead_show_to_markdown(result.stdout)
