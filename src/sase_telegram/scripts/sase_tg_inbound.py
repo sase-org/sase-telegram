@@ -49,9 +49,15 @@ _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
+_PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.json"
+_KNOWN_VCS_WORKFLOWS = ("gh", "git", "hg", "jj", "p4")
 _VCS_PROJECT_RE = re.compile(
-    r"^#(?P<workflow>[A-Za-z][A-Za-z0-9_-]*(?:!!|\?\?)?)"
-    r"(?:(?::|_)(?P<ref>[A-Za-z0-9][A-Za-z0-9_.-]*)|\((?P<paren>[^)\s]+)\))"
+    rf"(?:^|(?<=\s)|(?<=[(\"']))#(?P<workflow>{'|'.join(_KNOWN_VCS_WORKFLOWS)})"
+    r"(?:!!|\?\?)?"
+    r"(?:(?::|_)(?P<ref>[A-Za-z0-9][A-Za-z0-9_.~/-]*)|"
+    r"\((?P<paren>[A-Za-z0-9][A-Za-z0-9_.~/-]*)\))"
+    r"(?=\s|$)",
+    re.IGNORECASE,
 )
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 
@@ -75,13 +81,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _extract_project_from_prompt(prompt: str) -> str | None:
-    """Extract a project name from a leading VCS workflow tag in *prompt*."""
+    """Extract a project name from the first VCS workflow tag in *prompt*."""
     text = prompt.lstrip()
     directive_match = _DIRECTIVE_PREFIX_RE.match(text)
     if directive_match:
         text = text[directive_match.end() :]
 
-    match = _VCS_PROJECT_RE.match(text)
+    match = _VCS_PROJECT_RE.search(text)
     if not match:
         return None
 
@@ -91,7 +97,98 @@ def _extract_project_from_prompt(prompt: str) -> str | None:
     return project
 
 
-def _iter_pending_prompts() -> list[str]:
+def _message_chat_id(message: Any | None) -> str | None:
+    if message is None:
+        return None
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None) if chat is not None else None
+    if chat_id is None:
+        chat_id = getattr(message, "chat_id", None)
+    return str(chat_id) if chat_id is not None else None
+
+
+def _configured_chat_id() -> str | None:
+    try:
+        chat_id = credentials.get_chat_id()
+    except Exception:
+        return None
+    return str(chat_id) if chat_id is not None else None
+
+
+def _context_chat_id(message: Any | None) -> str | None:
+    return _message_chat_id(message) or _configured_chat_id()
+
+
+def _load_project_context() -> dict[str, Any]:
+    try:
+        data = json.loads(_PROJECT_CONTEXT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        log.warning("Failed to load Telegram project context", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_project_context(context: dict[str, Any]) -> None:
+    try:
+        _PROJECT_CONTEXT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PROJECT_CONTEXT_PATH.write_text(
+            json.dumps(context, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning("Failed to save Telegram project context", exc_info=True)
+
+
+def _record_project_context(
+    prompt: str, message: Any | None, *, source: str = "launch_prompt"
+) -> None:
+    chat_id = _context_chat_id(message)
+    if not chat_id:
+        return
+
+    project = _extract_project_from_prompt(prompt)
+    if not project:
+        return
+
+    workspace = _resolve_workspace_for_project(project, source) or ""
+    context = _load_project_context()
+    context[chat_id] = {
+        "project": project,
+        "workspace": workspace,
+        "updated_at": time.time(),
+        "source": source,
+    }
+    _save_project_context(context)
+
+
+def _workspace_from_context_entry(entry: Any) -> str | None:
+    if not isinstance(entry, dict):
+        return None
+
+    workspace = entry.get("workspace")
+    if isinstance(workspace, str) and workspace and Path(workspace).is_dir():
+        return workspace
+
+    project = entry.get("project")
+    if isinstance(project, str) and project.strip():
+        return _resolve_workspace_for_project(
+            project.strip(), "Telegram project context"
+        )
+    return None
+
+
+def _pending_action_chat_id(action: dict[str, Any]) -> str | None:
+    chat_id = action.get("chat_id")
+    if chat_id is None:
+        action_data = action.get("action_data")
+        if isinstance(action_data, dict):
+            chat_id = action_data.get("chat_id")
+    return str(chat_id) if chat_id is not None else None
+
+
+def _iter_pending_prompts(chat_id: str | None = None) -> list[str]:
     """Return pending Telegram prompts, newest first."""
     try:
         pending = pending_actions.list_all()
@@ -106,6 +203,8 @@ def _iter_pending_prompts() -> list[str]:
         reverse=True,
     ):
         if not isinstance(action, dict):
+            continue
+        if chat_id is not None and _pending_action_chat_id(action) != chat_id:
             continue
 
         prompt = action.get("prompt")
@@ -156,27 +255,41 @@ def _resolve_workspace_for_project(project: str, source: str) -> str | None:
         return None
 
 
-def _resolve_bead_cwd() -> str | None:
+def _resolve_bead_cwd(message: Any | None = None) -> str | None:
     """Resolve the working directory for ``sase bead`` subprocesses."""
     override = os.environ.get(_BEAD_PROJECT_ENV, "").strip()
     if override:
         return _resolve_workspace_for_project(override, _BEAD_PROJECT_ENV)
 
-    for prompt in _iter_pending_prompts():
-        project = _extract_project_from_prompt(prompt)
-        if not project:
-            continue
-        cwd = _resolve_workspace_for_project(project, "pending Telegram prompt")
+    chat_id = _context_chat_id(message)
+    if chat_id:
+        cwd = _workspace_from_context_entry(_load_project_context().get(chat_id))
         if cwd:
             return cwd
+
+    pending_prompt_sets = (
+        [_iter_pending_prompts(chat_id), _iter_pending_prompts()]
+        if chat_id
+        else [_iter_pending_prompts()]
+    )
+    for prompts in pending_prompt_sets:
+        for prompt in prompts:
+            project = _extract_project_from_prompt(prompt)
+            if not project:
+                continue
+            cwd = _resolve_workspace_for_project(project, "pending Telegram prompt")
+            if cwd:
+                return cwd
 
     return None
 
 
-def _run_bead_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_bead_command(
+    args: list[str], message: Any | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run ``sase bead`` in the resolved project context when available."""
     cmd = ["sase", "bead", *args]
-    cwd = _resolve_bead_cwd()
+    cwd = _resolve_bead_cwd(message=message)
     if cwd is None:
         return subprocess.run(
             cmd,
@@ -700,6 +813,7 @@ def _handle_photo_message(message: Any) -> None:
         else message.caption
     )
     prompt = build_photo_prompt(dest, caption)
+    _record_project_context(prompt, message)
     _launch_agent(prompt)
 
 
@@ -726,10 +840,11 @@ def _handle_document_image(message: Any) -> None:
         else message.caption
     )
     prompt = build_photo_prompt(dest, caption)
+    _record_project_context(prompt, message)
     _launch_agent(prompt)
 
 
-def _handle_command(text: str) -> None:
+def _handle_command(text: str, message: Any | None = None) -> None:
     """Dispatch a slash command (e.g. '/kill agent') to the appropriate handler."""
     parts = text.split(None, 1)
     command = parts[0][1:].split("@")[0].lower()  # strip prefix and @bot suffix
@@ -746,7 +861,7 @@ def _handle_command(text: str) -> None:
     elif command == "xprompts":
         _handle_xprompts_command()
     elif command in {"bead", "beads"}:
-        _handle_bead_command(args)
+        _handle_bead_command(args, message=message)
     elif command == "update":
         _handle_update_command()
     # Unknown commands (e.g. /start) are silently ignored
@@ -1194,10 +1309,10 @@ _BEAD_PICKER_LIMIT = 80
 _BEAD_BUTTON_LABEL_MAX = 60
 
 
-def _show_bead_selection(chat_id: str) -> None:
+def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
     """Render an inline keyboard with one button per open bead."""
     try:
-        result = _run_bead_command(["list"])
+        result = _run_bead_command(["list"], message=message)
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return
@@ -1254,20 +1369,20 @@ def _show_bead_selection(chat_id: str) -> None:
 def _handle_bead_callback(callback_query: Any, bead_id: str) -> None:
     """Handle a tap on an open-beads picker button."""
     telegram_client.answer_callback_query(callback_query.id, f"Loading {bead_id}…")
-    _handle_bead_command(bead_id)
+    _handle_bead_command(bead_id, message=getattr(callback_query, "message", None))
 
 
-def _handle_bead_command(args: str) -> None:
+def _handle_bead_command(args: str, message: Any | None = None) -> None:
     """Handle /bead [<id>] — render bead details, or show open-beads picker."""
     chat_id = credentials.get_chat_id()
     parts = args.strip().split()
     if not parts:
-        _show_bead_selection(chat_id)
+        _show_bead_selection(chat_id, message=message)
         return
     bead_id = parts[0]
 
     try:
-        result = _run_bead_command(["show", bead_id])
+        result = _run_bead_command(["show", bead_id], message=message)
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return
@@ -1328,10 +1443,11 @@ def _handle_text_message(message: Any) -> None:
 
     # Dispatch slash commands (e.g. "/kill agent")
     if text.startswith("/"):
-        _handle_command(text)
+        _handle_command(text, message)
         return
 
     # Launch a new agent with this text as the prompt
+    _record_project_context(text, message)
     _launch_agent(text)
 
 

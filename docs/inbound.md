@@ -84,6 +84,8 @@ When a text message or photo triggers an agent launch:
 - **Auto-naming**: Agents launched from Telegram are automatically assigned names
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts
   them using Telegram's entity metadata
+- **Project context**: If the launch prompt contains a VCS project tag like `#gh:sase`, the bot remembers that
+  chat-scoped project in `~/.sase/telegram/project_context.json` for later `/bead` commands
 - **Launch confirmation**: A message is sent back with Resume and Wait copy-text buttons, plus Kill and Retry controls
 
 ## ChangeSpec Tags
@@ -101,8 +103,9 @@ count. Large result sets are split across multiple Telegram messages without dro
 `sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
 
 Bead commands run in the current process context by default. If `SASE_TELEGRAM_BEAD_PROJECT` is set, that project is
-resolved to a workspace and used as the subprocess working directory. Without the override, pending Telegram prompts
-are scanned for a leading workflow tag and the first resolvable project workspace is used.
+resolved to a workspace and used as the subprocess working directory. Without the override, the bot first uses the
+remembered project for the current Telegram chat, then scans pending Telegram prompts for the same chat, then falls back
+to scanning all pending prompts for compatibility.
 
 ## Update
 

@@ -377,7 +377,7 @@ class TestBeadCommandDispatch:
         ) as mock_handler:
             _handle_command("/beads")
 
-        mock_handler.assert_called_once_with("")
+        mock_handler.assert_called_once_with("", message=None)
 
 
 class TestUpdateCommand:
@@ -1246,8 +1246,144 @@ class TestBeadProjectContext:
         assert _extract_project_from_prompt("#git(sase-telegram) Fix it") == (
             "sase-telegram"
         )
+        assert _extract_project_from_prompt("#resume:foo #gh:zorg Continue") == "zorg"
+        assert _extract_project_from_prompt("#sase__research #gh:zorg Fix") == "zorg"
         assert _extract_project_from_prompt("#gh:@foo Continue work") is None
         assert _extract_project_from_prompt("plain prompt") is None
+
+    def test_extract_project_from_wrapped_image_prompt(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+
+        assert (
+            _extract_project_from_prompt(
+                build_photo_prompt(tmp_path / "photo.jpg", "#gh_sase Fix the bug")
+            )
+            == "sase"
+        )
+        assert (
+            _extract_project_from_prompt(
+                build_photo_prompt(tmp_path / "photo.jpg", "#gh:zorg Fix the bug")
+            )
+            == "zorg"
+        )
+
+    def test_records_project_context_for_chat(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        workspace = tmp_path / "zorg"
+        workspace.mkdir()
+        context_path = tmp_path / "project_context.json"
+        message = SimpleNamespace(chat=SimpleNamespace(id=12345))
+
+        with (
+            patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
+            patch.object(inbound.time, "time", return_value=1777770889.0),
+            patch.object(
+                inbound, "_resolve_workspace_for_project", return_value=str(workspace)
+            ) as resolve_workspace,
+        ):
+            inbound._record_project_context("#gh:zorg Fix the bug", message)
+
+        resolve_workspace.assert_called_once_with("zorg", "launch_prompt")
+        payload = json.loads(context_path.read_text())
+        assert payload == {
+            "12345": {
+                "project": "zorg",
+                "workspace": str(workspace),
+                "updated_at": 1777770889.0,
+                "source": "launch_prompt",
+            }
+        }
+
+    def test_persisted_chat_context_beats_newer_pending_prompt(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        zorg_workspace = tmp_path / "zorg"
+        zorg_workspace.mkdir()
+        context_path = tmp_path / "project_context.json"
+        context_path.write_text(
+            json.dumps(
+                {
+                    "12345": {
+                        "project": "zorg",
+                        "workspace": str(zorg_workspace),
+                        "updated_at": 1.0,
+                        "source": "launch_prompt",
+                    }
+                }
+            )
+        )
+        message = SimpleNamespace(chat=SimpleNamespace(id=12345))
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={
+                    "newer": {
+                        "prompt": "#gh:sase Newer unrelated prompt",
+                        "chat_id": "12345",
+                        "created_at": 2,
+                    }
+                },
+            ) as list_all_mock,
+            patch.object(inbound, "_resolve_workspace_for_project") as resolve_mock,
+        ):
+            assert inbound._resolve_bead_cwd(message=message) == str(zorg_workspace)
+
+        list_all_mock.assert_not_called()
+        resolve_mock.assert_not_called()
+
+    def test_pending_prompt_resolution_is_chat_scoped(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        zorg_workspace = tmp_path / "zorg"
+        zorg_workspace.mkdir()
+        sase_workspace = tmp_path / "sase"
+        sase_workspace.mkdir()
+        context_path = tmp_path / "missing_context.json"
+        message = SimpleNamespace(chat=SimpleNamespace(id=12345))
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        def fake_workspace(project: str, _slot: int) -> str:
+            return str(tmp_path / project)
+
+        with (
+            patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                return_value={
+                    "other-chat-newer": {
+                        "prompt": "#gh:sase Newer unrelated prompt",
+                        "chat_id": "999",
+                        "created_at": 2,
+                    },
+                    "same-chat-older": {
+                        "prompt": "#gh:zorg Older relevant prompt",
+                        "chat_id": "12345",
+                        "created_at": 1,
+                    },
+                },
+            ),
+            patch(
+                "sase.running_field.get_workspace_directory",
+                side_effect=fake_workspace,
+            ) as get_workspace,
+        ):
+            assert inbound._resolve_bead_cwd(message=message) == str(zorg_workspace)
+
+        get_workspace.assert_called_once_with("zorg", 1)
 
     def test_env_project_takes_precedence(
         self, monkeypatch: object, tmp_path: Path
@@ -1307,6 +1443,10 @@ class TestBeadProjectContext:
                 },
             ),
             patch(
+                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                tmp_path / "missing_context.json",
+            ),
+            patch(
                 "sase.running_field.get_workspace_directory",
                 return_value=str(workspace),
             ) as get_workspace_mock,
@@ -1362,6 +1502,10 @@ class TestBeadProjectContext:
                 return_value={"ctx": {"prompt": "#gh:sase Fix", "created_at": 1}},
             ),
             patch(
+                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                tmp_path / "missing_context.json",
+            ),
+            patch(
                 "sase.running_field.get_workspace_directory",
                 return_value=str(workspace),
             ),
@@ -1390,6 +1534,10 @@ class TestBeadProjectContext:
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
                 return_value={},
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                Path("/tmp/missing_sase_telegram_project_context.json"),
             ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.subprocess.run",

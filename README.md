@@ -114,8 +114,9 @@ messages include Resume and Wait copy-text buttons plus Kill and Retry controls 
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
 
 `/bead` lists open beads as picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the output to Telegram
-MarkdownV2, and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, or a pending Telegram prompt
-contains a workflow tag, bead commands run from the resolved project workspace.
+MarkdownV2, and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands run from that
+project workspace. Otherwise the bot uses the chat-scoped project remembered from the most recent Telegram launch, then
+falls back to pending prompt workflow tags.
 
 `/update` starts the shared SASE chat update worker in a detached process and immediately replies with the worker log
 path. The worker stops axe, syncs the primary SASE workspace, runs `chat_install.command` from that workspace, and
