@@ -403,7 +403,7 @@ def _format_plan_approval(
             callback_data=callback_data.encode("plan", prefix, "approve"),
         ),
         InlineKeyboardButton(
-            "Approve",
+            "✅ Approve",
             callback_data=callback_data.encode("plan", prefix, "run"),
         ),
         InlineKeyboardButton(

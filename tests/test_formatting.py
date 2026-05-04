@@ -203,7 +203,7 @@ class TestFormatPlanApproval:
         assert len(keyboard.inline_keyboard[0]) == 3  # Tale + Approve + Epic
         assert "Tale" in keyboard.inline_keyboard[0][0].text
         assert keyboard.inline_keyboard[0][0].callback_data.endswith(":approve")
-        assert keyboard.inline_keyboard[0][1].text == "Approve"
+        assert keyboard.inline_keyboard[0][1].text == "✅ Approve"
         assert keyboard.inline_keyboard[0][1].callback_data == "plan:" + (
             keyboard.inline_keyboard[0][0].callback_data.split(":")[1] + ":run"
         )
