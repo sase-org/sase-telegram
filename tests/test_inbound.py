@@ -303,25 +303,36 @@ class TestHandleTextMessageAgentLaunch:
         )
 
         msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-        ) as mock_launch:
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
             _handle_text_message(msg)
+            mock_record.assert_called_once_with("List all open beads", msg)
             mock_launch.assert_called_once_with("List all open beads")
 
-    def test_slash_command_ignored(self) -> None:
+    def test_plain_text_launch_disabled_by_empty_env_value(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
         )
 
-        msg = SimpleNamespace(text="/start", entities=None, message_id=101)
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-        ) as mock_launch:
+        msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
+        with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": ""}),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
             _handle_text_message(msg)
+            mock_record.assert_not_called()
             mock_launch.assert_not_called()
 
-    def test_feedback_flow_does_not_launch_agent(self, tmp_path: Path) -> None:
+    def test_feedback_flow_still_completes_when_launches_disabled(
+        self, tmp_path: Path
+    ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
         )
@@ -338,12 +349,89 @@ class TestHandleTextMessageAgentLaunch:
             reply_to_message=SimpleNamespace(message_id=42),
         )
         with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
             patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch("sase_telegram.scripts.sase_tg_inbound._write_response"),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._write_response"
+            ) as mock_write,
             patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
             patch("sase_telegram.scripts.sase_tg_inbound._send_confirmation"),
         ):
             _handle_text_message(msg)
+            mock_write.assert_called_once()
+            mock_launch.assert_not_called()
+
+    def test_slash_command_dispatches_when_launches_disabled(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        msg = SimpleNamespace(text="/list", entities=None, message_id=101)
+        with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_command"
+            ) as mock_handle,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_text_message(msg)
+            mock_handle.assert_called_once_with("/list", msg)
+            mock_launch.assert_not_called()
+
+    def test_slash_command_ignored(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        msg = SimpleNamespace(text="/start", entities=None, message_id=101)
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
+        ) as mock_launch:
+            _handle_text_message(msg)
+            mock_launch.assert_not_called()
+
+
+class TestHandleImageMessageLaunchDisabled:
+    """Tests launch-disabled behavior for image message handlers."""
+
+    def test_photo_returns_before_download_when_launches_disabled(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+
+        msg = SimpleNamespace()
+        with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+            ) as mock_download,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_photo_message(msg)
+            mock_download.assert_not_called()
+            mock_record.assert_not_called()
+            mock_launch.assert_not_called()
+
+    def test_document_image_returns_before_download_when_launches_disabled(
+        self,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_document_image
+
+        msg = SimpleNamespace()
+        with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+            ) as mock_download,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_document_image(msg)
+            mock_download.assert_not_called()
+            mock_record.assert_not_called()
             mock_launch.assert_not_called()
 
 

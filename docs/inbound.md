@@ -68,12 +68,19 @@ Text messages are dispatched in priority order:
 3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
 4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
 
+If `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present in the environment, step 4 is skipped. Two-step completions and
+slash commands still run normally, but free-form text that would launch an agent is logged and ignored without sending a
+Telegram acknowledgement. The check is presence-based, so an empty value still disables launches.
+
 ### Photos and Image Documents
 
 Photos or image documents sent to the bot are:
 1. Downloaded to `~/.sase/telegram/images/` with a timestamped filename
 2. Used to build an agent prompt that references the downloaded image path
 3. A new sase agent is launched with the visual context
+
+When `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present, photos and image documents are ignored before file download, so
+disabled hosts do not call Telegram's file API or create local image files for launch prompts.
 
 ## Agent Launching
 

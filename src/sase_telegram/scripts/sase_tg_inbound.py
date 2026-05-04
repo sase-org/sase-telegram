@@ -64,6 +64,7 @@ _VCS_PROJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
+_LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional context string for lumberjack compatibility",
     )
     return parser.parse_args(argv)
+
+
+def _telegram_agent_launches_disabled() -> bool:
+    return _LAUNCH_AGENTS_DISABLED_ENV in os.environ
 
 
 def _extract_project_from_prompt(prompt: str) -> str | None:
@@ -840,6 +845,10 @@ def _launch_multi_model_agents(model_prompts: list[str]) -> None:
 
 def _handle_photo_message(message: Any) -> None:
     """Handle a photo message: download and launch agent."""
+    if _telegram_agent_launches_disabled():
+        log.info("Ignoring Telegram photo launch because agent launches are disabled")
+        return
+
     photo = message.photo[-1]  # highest resolution
     file_id: str = photo.file_id
     filename = make_image_filename(file_id)
@@ -867,6 +876,12 @@ def _handle_photo_message(message: Any) -> None:
 
 def _handle_document_image(message: Any) -> None:
     """Handle an image sent as a document: download and launch agent."""
+    if _telegram_agent_launches_disabled():
+        log.info(
+            "Ignoring Telegram document image launch because agent launches are disabled"
+        )
+        return
+
     doc = message.document
     file_id: str = doc.file_id
     original_name = doc.file_name or "image.jpg"
@@ -1736,6 +1751,10 @@ def _handle_text_message(message: Any) -> None:
     # Dispatch slash commands (e.g. "/kill agent")
     if text.startswith("/"):
         _handle_command(text, message)
+        return
+
+    if _telegram_agent_launches_disabled():
+        log.info("Ignoring Telegram text launch because agent launches are disabled")
         return
 
     # Launch a new agent with this text as the prompt

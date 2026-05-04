@@ -78,9 +78,10 @@ Installing sase-telegram adds the following commands:
 
 ### Environment Variables
 
-| Variable                         | Default | Description                                |
-| -------------------------------- | ------- | ------------------------------------------ |
-| `SASE_TELEGRAM_RATE_LIMIT`       | `8/15`  | Rate limit as `max_messages/window_seconds` |
+| Variable                                 | Default | Description |
+| ---------------------------------------- | ------- | ----------- |
+| `SASE_TELEGRAM_RATE_LIMIT`               | `8/15`  | Rate limit as `max_messages/window_seconds` |
+| `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED`  | unset   | When present with any value, inbound callbacks, feedback, and slash commands still work, but plain text/photo/image-document messages do not launch agents. |
 
 Note: Idle detection is handled by sase's TUI process (which writes an idle state file). The outbound script reads
 this state — there is no separate inactivity threshold to configure in sase-telegram.
@@ -109,6 +110,10 @@ up. Text messages that don't complete a feedback flow are dispatched as follows:
 
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
 messages include Resume and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
+
+Set `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` on hosts that should process Telegram callbacks, feedback, and slash commands
+without launching new agents from free-form text, photos, or image documents. The check is presence-based, so an empty
+value still disables launches; ignored launch messages are logged without a Telegram acknowledgement.
 
 `/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
