@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 _COMMANDS_REGISTERED_PATH = (
     Path.home() / ".sase" / "telegram" / "commands_registered_ts"
 )
+_UPDATE_COMPLETION_PENDING_DIR = (
+    Path.home() / ".sase" / "telegram" / "update_completions"
+)
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
 _CHANGES_BUTTON_CHUNK_SIZE = 50
@@ -916,6 +919,8 @@ def _handle_update_command() -> None:
     """Start the detached SASE update worker and acknowledge in Telegram."""
     chat_id = credentials.get_chat_id()
     result = start_chat_install_worker()
+    if result.status == "launched":
+        _persist_update_completion_pending(result, chat_id)
     telegram_client.send_message(chat_id, _format_update_ack(result))
 
 
@@ -929,6 +934,109 @@ def _format_update_ack(result: Any) -> str:
     if result.status == "launched":
         return result.message
     return result.message
+
+
+def _persist_update_completion_pending(result: Any, chat_id: str) -> None:
+    job_id = getattr(result, "job_id", None)
+    status_path = getattr(result, "status_path", None)
+    if not job_id or status_path is None:
+        return
+
+    record = {
+        "job_id": str(job_id),
+        "chat_id": str(chat_id),
+        "status_path": str(status_path),
+        "log_path": str(getattr(result, "log_path", "") or ""),
+        "created_at": time.time(),
+    }
+    pending_path = _UPDATE_COMPLETION_PENDING_DIR / f"{job_id}.json"
+    try:
+        _UPDATE_COMPLETION_PENDING_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(pending_path, record)
+    except OSError:
+        log.warning(
+            "Failed to persist Telegram update completion context", exc_info=True
+        )
+
+
+def _send_ready_update_completions() -> None:
+    try:
+        pending_paths = sorted(_UPDATE_COMPLETION_PENDING_DIR.glob("*.json"))
+    except OSError:
+        log.warning("Failed to scan Telegram update completion context", exc_info=True)
+        return
+
+    for pending_path in pending_paths:
+        pending = _load_json_file(pending_path)
+        if not isinstance(pending, dict):
+            pending_path.unlink(missing_ok=True)
+            continue
+
+        status_path_raw = pending.get("status_path")
+        chat_id = pending.get("chat_id")
+        if not isinstance(status_path_raw, str) or not isinstance(chat_id, str):
+            pending_path.unlink(missing_ok=True)
+            continue
+
+        status_path = Path(status_path_raw).expanduser()
+        if not status_path.exists():
+            continue
+
+        completion = _load_json_file(status_path)
+        if not isinstance(completion, dict):
+            continue
+
+        text = _format_update_completion(completion, pending)
+        try:
+            telegram_client.send_message(chat_id, text)
+        except Exception:
+            log.warning(
+                "Failed to send Telegram update completion for %s",
+                pending.get("job_id") or pending_path.name,
+                exc_info=True,
+            )
+            continue
+        pending_path.unlink(missing_ok=True)
+
+
+def _format_update_completion(
+    completion: dict[str, Any], pending: dict[str, Any]
+) -> str:
+    log_path = completion.get("log_path") or pending.get("log_path") or ""
+    log_text = _shorten_home(str(log_path)) if log_path else "(unknown)"
+    exit_code = completion.get("exit_code")
+
+    if completion.get("status") == "success" and exit_code == 0:
+        return f"Update completed successfully; log: {log_text}"
+
+    if isinstance(exit_code, int):
+        return f"Update failed with exit code {exit_code}; log: {log_text}"
+
+    return f"Update failed; log: {log_text}"
+
+
+def _load_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        log.warning("Failed to load JSON file: %s", path, exc_info=True)
+        return None
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temp_path.write_text(
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
+def _shorten_home(path: str) -> str:
+    home = str(Path.home())
+    return "~" + path[len(home) :] if path.startswith(home + os.sep) else path
 
 
 def _format_agent_description(
@@ -1720,6 +1828,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Clean up stale pending actions
     pending_actions.cleanup_stale()
+    _send_ready_update_completions()
 
     pending = pending_actions.list_all()
     offset = get_last_offset()

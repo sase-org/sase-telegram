@@ -497,6 +497,185 @@ class TestUpdateCommand:
             "Update worker started; log: /tmp/log",
         )
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_update_launched_persists_completion_delivery_context(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(
+            status="launched",
+            message="Update worker started; log: /tmp/log",
+            job_id="job-1",
+            status_path=tmp_path / "core" / "job-1.json",
+            log_path=tmp_path / "log.txt",
+        )
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+                return_value=result,
+            ),
+            patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", tmp_path / "tg"),
+        ):
+            inbound._handle_update_command()
+
+        pending_path = tmp_path / "tg" / "job-1.json"
+        payload = json.loads(pending_path.read_text())
+        assert payload["job_id"] == "job-1"
+        assert payload["chat_id"] == "12345"
+        assert payload["status_path"] == str(tmp_path / "core" / "job-1.json")
+        assert payload["log_path"] == str(tmp_path / "log.txt")
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "Update worker started; log: /tmp/log",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_update_completion_scan_sends_success_once(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        status_path = tmp_path / "completion.json"
+        log_path = tmp_path / "worker.log"
+        (pending_dir / "job-1.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "job-1",
+                    "chat_id": "12345",
+                    "status_path": str(status_path),
+                    "log_path": str(log_path),
+                }
+            )
+        )
+        status_path.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-1",
+                    "status": "success",
+                    "exit_code": 0,
+                    "log_path": str(log_path),
+                }
+            )
+        )
+
+        with patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", pending_dir):
+            inbound._send_ready_update_completions()
+            inbound._send_ready_update_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            f"Update completed successfully; log: {log_path}",
+        )
+        assert not (pending_dir / "job-1.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_update_completion_scan_sends_failure(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        status_path = tmp_path / "completion.json"
+        log_path = tmp_path / "worker.log"
+        (pending_dir / "job-2.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "job-2",
+                    "chat_id": "12345",
+                    "status_path": str(status_path),
+                    "log_path": str(log_path),
+                }
+            )
+        )
+        status_path.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-2",
+                    "status": "failed",
+                    "exit_code": 17,
+                    "log_path": str(log_path),
+                }
+            )
+        )
+
+        with patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", pending_dir):
+            inbound._send_ready_update_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            f"Update failed with exit code 17; log: {log_path}",
+        )
+        assert not (pending_dir / "job-2.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_update_completion_scan_waits_for_missing_completion(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        pending_path = pending_dir / "job-3.json"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-3",
+                    "chat_id": "12345",
+                    "status_path": str(tmp_path / "missing.json"),
+                    "log_path": "/tmp/log",
+                }
+            )
+        )
+
+        with patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", pending_dir):
+            inbound._send_ready_update_completions()
+
+        mock_tg.send_message.assert_not_called()
+        assert pending_path.exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_update_completion_scan_keeps_pending_on_send_failure(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_tg.send_message.side_effect = RuntimeError("telegram down")
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        pending_path = pending_dir / "job-4.json"
+        status_path = tmp_path / "completion.json"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-4",
+                    "chat_id": "12345",
+                    "status_path": str(status_path),
+                    "log_path": "/tmp/log",
+                }
+            )
+        )
+        status_path.write_text(
+            json.dumps({"status": "success", "exit_code": 0, "log_path": "/tmp/log"})
+        )
+
+        with patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", pending_dir):
+            inbound._send_ready_update_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "Update completed successfully; log: /tmp/log",
+        )
+        assert pending_path.exists()
+
     def test_command_fingerprint_change_forces_registration(
         self, tmp_path: Path
     ) -> None:
