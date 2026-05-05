@@ -87,6 +87,7 @@ disabled hosts do not call Telegram's file API or create local image files for l
 When a text message or photo triggers an agent launch:
 
 - **XPrompt expansion**: References like `#mentor` or `#gh(...)` in the message are expanded
+- **VCS shorthand**: Telegram launch prompts can use `#gh@sase`; it is normalized to `#gh:sase` before launch
 - **Multi-model directives**: `%m(opus,sonnet)` launches the prompt across multiple models
 - **Auto-naming**: Agents launched from Telegram are automatically assigned names
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts

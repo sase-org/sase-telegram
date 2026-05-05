@@ -7,11 +7,77 @@ and manages offset/feedback state. No Telegram API calls.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
+
+
+_LAUNCH_XPROMPT_AT_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
+_LAUNCH_XPROMPT_AT_REF_RE = re.compile(
+    rf"(?P<context>^|(?<=[\s([{{\"']))"
+    rf"#(?P<workflow>{'|'.join(_LAUNCH_XPROMPT_AT_WORKFLOWS)})"
+    r"(?P<marker>!!|\?\?)?"
+    r"@(?P<ref>[A-Za-z0-9][A-Za-z0-9_.~/-]*)"
+    r"(?=$|[\s)\]},.!?;:\"'])",
+    re.IGNORECASE,
+)
+
+
+def _code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Return Markdown inline/fenced code ranges in *text*."""
+    ranges: list[tuple[int, int]] = []
+    i = 0
+    while i < len(text):
+        if text.startswith("```", i):
+            start = i
+            close = text.find("```", i + 3)
+            if close == -1:
+                ranges.append((start, len(text)))
+                break
+            ranges.append((start, close + 3))
+            i = close + 3
+            continue
+
+        if text[i] == "`":
+            start = i
+            close = text.find("`", i + 1)
+            if close == -1:
+                i += 1
+                continue
+            ranges.append((start, close + 1))
+            i = close + 1
+            continue
+
+        i += 1
+    return ranges
+
+
+def _is_inside_ranges(index: int, ranges: Sequence[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in ranges)
+
+
+def normalize_launch_xprompt_at_refs(text: str) -> str:
+    """Normalize Telegram ``#workflow@ref`` launch shorthand to ``#workflow:ref``.
+
+    The rewrite is intentionally scoped to known workspace/VCS workflows and
+    skips Markdown code spans, which Telegram message entities reconstruct
+    before launch handling.
+    """
+    if "@" not in text or "#" not in text:
+        return text
+
+    code_ranges = _code_span_ranges(text)
+
+    def replace(match: re.Match[str]) -> str:
+        if _is_inside_ranges(match.start(), code_ranges):
+            return match.group(0)
+        marker = match.group("marker") or ""
+        return f"#{match.group('workflow')}{marker}:{match.group('ref')}"
+
+    return _LAUNCH_XPROMPT_AT_REF_RE.sub(replace, text)
 
 
 def reconstruct_code_markers(text: str, entities: Sequence[Any] | None) -> str:

@@ -16,6 +16,7 @@ from sase_telegram.inbound import (
     load_all_awaiting_feedback,
     load_awaiting_feedback,
     make_image_filename,
+    normalize_launch_xprompt_at_refs,
     process_callback,
     process_callback_twostep,
     process_text_message,
@@ -313,6 +314,26 @@ class TestHandleTextMessageAgentLaunch:
             mock_record.assert_called_once_with("List all open beads", msg)
             mock_launch.assert_called_once_with("List all open beads")
 
+    def test_normalizes_vcs_at_ref_before_launch(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        msg = SimpleNamespace(
+            text="%n:a #gh@sase Fix the bug",
+            entities=None,
+            message_id=100,
+        )
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_text_message(msg)
+            mock_record.assert_called_once_with("%n:a #gh:sase Fix the bug", msg)
+            mock_launch.assert_called_once_with("%n:a #gh:sase Fix the bug")
+
     def test_plain_text_launch_disabled_by_empty_env_value(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
@@ -360,6 +381,36 @@ class TestHandleTextMessageAgentLaunch:
             _handle_text_message(msg)
             mock_write.assert_called_once()
             mock_launch.assert_not_called()
+
+    def test_feedback_flow_keeps_raw_text(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        save_awaiting_feedback(
+            "42",
+            "hitl0001",
+            {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
+        )
+        msg = SimpleNamespace(
+            text="#gh@sase is only an example",
+            entities=None,
+            message_id=102,
+            reply_to_message=SimpleNamespace(message_id=42),
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._write_response"
+            ) as mock_write,
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
+            patch("sase_telegram.scripts.sase_tg_inbound._send_confirmation"),
+        ):
+            _handle_text_message(msg)
+
+        response = mock_write.call_args[0][0]
+        assert response.response_data["feedback"] == "#gh@sase is only an example"
+        mock_launch.assert_not_called()
 
     def test_slash_command_dispatches_when_launches_disabled(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -1509,6 +1560,7 @@ class TestBeadProjectContext:
         from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
 
         assert _extract_project_from_prompt("#gh:sase Fix the bug") == "sase"
+        assert _extract_project_from_prompt("#gh@sase Fix the bug") == "sase"
         assert _extract_project_from_prompt("%n:foo #gh_sase Fix the bug") == "sase"
         assert _extract_project_from_prompt("#git(sase-telegram) Fix it") == (
             "sase-telegram"
@@ -1883,6 +1935,43 @@ class TestReconstructCodeMarkers:
         assert reconstruct_code_markers("hello world", entities) == "hello world"
 
 
+class TestNormalizeLaunchXpromptAtRefs:
+    def test_normalizes_known_workspace_workflow_refs(self) -> None:
+        assert normalize_launch_xprompt_at_refs("#gh@sase Fix") == "#gh:sase Fix"
+        assert (
+            normalize_launch_xprompt_at_refs("%n:a #git@repo Fix")
+            == "%n:a #git:repo Fix"
+        )
+        assert normalize_launch_xprompt_at_refs("(#hg@change)") == "(#hg:change)"
+        assert (
+            normalize_launch_xprompt_at_refs('"#jj@workspace" #p4@client')
+            == '"#jj:workspace" #p4:client'
+        )
+        assert normalize_launch_xprompt_at_refs("#cd@repo Fix") == "#cd:repo Fix"
+
+    def test_preserves_existing_canonical_forms(self) -> None:
+        assert normalize_launch_xprompt_at_refs("#gh:sase Fix") == "#gh:sase Fix"
+        assert normalize_launch_xprompt_at_refs("#gh_sase Fix") == "#gh_sase Fix"
+
+    def test_does_not_rewrite_non_launch_text(self) -> None:
+        assert normalize_launch_xprompt_at_refs("@someone") == "@someone"
+        assert normalize_launch_xprompt_at_refs("name@example.com") == (
+            "name@example.com"
+        )
+        assert normalize_launch_xprompt_at_refs("/start@bot") == "/start@bot"
+        assert normalize_launch_xprompt_at_refs("#topic@sase") == "#topic@sase"
+        assert normalize_launch_xprompt_at_refs("word#gh@sase") == "word#gh@sase"
+
+    def test_skips_inline_and_fenced_code(self) -> None:
+        text = "run `#gh@sase` then #gh@zorg"
+        assert normalize_launch_xprompt_at_refs(text) == "run `#gh@sase` then #gh:zorg"
+
+        fenced = "```\n#gh@sase\n```\n#git@repo"
+        assert (
+            normalize_launch_xprompt_at_refs(fenced) == "```\n#gh@sase\n```\n#git:repo"
+        )
+
+
 class TestHandlePhotoMessage:
     """Tests for _handle_photo_message (script module)."""
 
@@ -1933,6 +2022,38 @@ class TestHandlePhotoMessage:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_normalizes_caption_before_wrapping_prompt(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+
+        mock_creds.get_chat_id.return_value = "12345"
+        photo = SimpleNamespace(file_id="photo_id_12345678")
+        message = SimpleNamespace(
+            photo=[photo],
+            caption="#gh@sase Describe this",
+            caption_entities=None,
+        )
+
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR", tmp_path),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_photo_message(message)
+
+        prompt = mock_launch.call_args[0][0]
+        assert "#gh:sase Describe this" in prompt
+        assert "#gh@sase" not in prompt
+        mock_record.assert_called_once_with(prompt, message)
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_download_failure_sends_error(
         self,
         mock_creds: MagicMock,
@@ -1964,6 +2085,40 @@ class TestHandlePhotoMessage:
         mock_tg.send_message.assert_called_once()
         error_msg = mock_tg.send_message.call_args[0][1]
         assert "Failed to download photo" in error_msg
+
+
+class TestHandleDocumentImage:
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_normalizes_caption_before_wrapping_prompt(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_document_image
+
+        mock_creds.get_chat_id.return_value = "12345"
+        doc = SimpleNamespace(file_id="doc_id_12345678", file_name="image.png")
+        message = SimpleNamespace(
+            document=doc,
+            caption="#git@repo Inspect this",
+            caption_entities=None,
+        )
+
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR", tmp_path),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            _handle_document_image(message)
+
+        prompt = mock_launch.call_args[0][0]
+        assert "#git:repo Inspect this" in prompt
+        assert "#git@repo" not in prompt
+        mock_record.assert_called_once_with(prompt, message)
 
 
 class TestSendKillResult:

@@ -32,6 +32,7 @@ from sase_telegram.inbound import (
     find_externally_handled,
     get_last_offset,
     make_image_filename,
+    normalize_launch_xprompt_at_refs,
     process_callback,
     process_callback_twostep,
     process_text_message,
@@ -54,7 +55,7 @@ _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
 _PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.json"
-_KNOWN_VCS_WORKFLOWS = ("gh", "git", "hg", "jj", "p4")
+_KNOWN_VCS_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
 _VCS_PROJECT_RE = re.compile(
     rf"(?:^|(?<=\s)|(?<=[(\"']))#(?P<workflow>{'|'.join(_KNOWN_VCS_WORKFLOWS)})"
     r"(?:!!|\?\?)?"
@@ -106,7 +107,7 @@ def _telegram_agent_launches_disabled() -> bool:
 
 def _extract_project_from_prompt(prompt: str) -> str | None:
     """Extract a project name from the first VCS workflow tag in *prompt*."""
-    text = prompt.lstrip()
+    text = normalize_launch_xprompt_at_refs(prompt).lstrip()
     directive_match = _DIRECTIVE_PREFIX_RE.match(text)
     if directive_match:
         text = text[directive_match.end() :]
@@ -653,6 +654,7 @@ def _handle_retry_from_callback(callback_query: Any, agent_name: str) -> None:
 
 def _launch_agent(prompt: str) -> None:
     """Launch a background sase agent from a Telegram prompt."""
+    prompt = normalize_launch_xprompt_at_refs(prompt)
     log.info("Launching agent for prompt: %s", prompt[:120])
 
     # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
@@ -869,6 +871,7 @@ def _handle_photo_message(message: Any) -> None:
         if message.caption
         else message.caption
     )
+    caption = normalize_launch_xprompt_at_refs(caption) if caption else caption
     prompt = build_photo_prompt(dest, caption)
     _record_project_context(prompt, message)
     _launch_agent(prompt)
@@ -902,6 +905,7 @@ def _handle_document_image(message: Any) -> None:
         if message.caption
         else message.caption
     )
+    caption = normalize_launch_xprompt_at_refs(caption) if caption else caption
     prompt = build_photo_prompt(dest, caption)
     _record_project_context(prompt, message)
     _launch_agent(prompt)
@@ -1758,6 +1762,7 @@ def _handle_text_message(message: Any) -> None:
         return
 
     # Launch a new agent with this text as the prompt
+    text = normalize_launch_xprompt_at_refs(text)
     _record_project_context(text, message)
     _launch_agent(text)
 
