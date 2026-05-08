@@ -373,7 +373,7 @@ def _write_response(response: ResponseAction) -> None:
 
 
 def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
-    """Send a confirmation message with a Plan copy button after approve/commit."""
+    """Send a confirmation message with a Plan copy button after plan actions."""
     plan_file = action.get("plan_file", "")
     if plan_file:
         project_dir = action.get("action_data", {}).get("project_dir")
@@ -389,7 +389,13 @@ def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
     else:
         rel = ""
 
-    label = "Plan approved" if choice == "approve" else "Plan committed"
+    labels = {
+        "approve": "Plan approved",
+        "commit": "Plan committed",
+        "epic": "Epic created",
+        "legend": "Legend created",
+    }
+    label = labels.get(choice, "Plan updated")
     text = escape_markdown_v2(label)
 
     if rel:
@@ -487,10 +493,12 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             action["chat_id"], action["message_id"], reply_markup=None
         )
 
-    # Send confirmation with Plan copy button for approve/commit
+    # Send confirmation with Plan copy button for completed plan actions.
     if response.action_type == "plan" and response.response_data.get("action") in (
         "approve",
         "commit",
+        "epic",
+        "legend",
     ):
         if action:
             _send_plan_confirmation(action, response.response_data["action"])

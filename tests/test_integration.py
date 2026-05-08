@@ -300,22 +300,22 @@ class TestOutboundIntegration:
 class TestInboundIntegration:
     """Integration tests for the inbound main() entry point."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_no_updates_exits_cleanly(self, mock_tg: MagicMock) -> None:
-        """When there are no Telegram updates, exits with 0."""
-        mock_tg.get_updates.return_value = []
-        result = inbound_main(["--once"])
-        assert result == 0
-
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_processes_plan_approve_callback(
-        self, mock_tg: MagicMock, tmp_path: Path
+    def _process_plan_callback(
+        self,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+        *,
+        choice: str,
+        expected_response: dict[str, Any],
+        expected_confirmation: str,
     ) -> None:
-        """Full flow: plan approve callback -> response file written."""
         response_dir = tmp_path / "responses"
         response_dir.mkdir()
+        project_dir = tmp_path / "project"
+        plan_file = project_dir / "sdd" / "tales" / "plan.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Plan\n")
 
-        # Set up pending action
         from sase_telegram import pending_actions
 
         pending_actions.add(
@@ -323,16 +323,19 @@ class TestInboundIntegration:
             {
                 "notification_id": "abcd1234-0000-0000-0000-000000000000",
                 "action": "PlanApproval",
-                "action_data": {"response_dir": str(response_dir)},
+                "action_data": {
+                    "response_dir": str(response_dir),
+                    "project_dir": str(project_dir),
+                },
+                "plan_file": str(plan_file),
                 "message_id": 42,
                 "chat_id": "12345",
             },
         )
 
-        # Create a mock callback query update
         callback_query = SimpleNamespace(
             id="cb_1",
-            data="plan:abcd1234:approve",
+            data=f"plan:abcd1234:{choice}",
             message=SimpleNamespace(message_id=42),
         )
         update = SimpleNamespace(
@@ -347,14 +350,66 @@ class TestInboundIntegration:
         result = inbound_main(["--once"])
         assert result == 0
 
-        # Verify response file was written
         response_file = response_dir / "plan_response.json"
         assert response_file.exists()
-        response_data = json.loads(response_file.read_text())
-        assert response_data == {"action": "approve"}
+        assert json.loads(response_file.read_text()) == expected_response
 
-        # Verify pending action was cleaned up
+        mock_tg.send_message.assert_called_once()
+        chat_id, text = mock_tg.send_message.call_args.args[:2]
+        assert chat_id == "12345"
+        assert text == expected_confirmation
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        copy_button = keyboard.inline_keyboard[0][0]
+        assert copy_button.text == "📋 Plan"
+        assert copy_button.copy_text.text == "sdd/tales/plan.md"
+
         assert pending_actions.get("abcd1234") is None
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_no_updates_exits_cleanly(self, mock_tg: MagicMock) -> None:
+        """When there are no Telegram updates, exits with 0."""
+        mock_tg.get_updates.return_value = []
+        result = inbound_main(["--once"])
+        assert result == 0
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_approve_callback(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Full flow: plan approve callback -> response file and copy button."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="approve",
+            expected_response={"action": "approve"},
+            expected_confirmation="Plan approved",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_epic_callback_sends_copy_confirmation(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Full flow: plan epic callback -> response file and copy button."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="epic",
+            expected_response={"action": "epic"},
+            expected_confirmation="Epic created",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_legend_callback_sends_copy_confirmation(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Full flow: plan legend callback -> response file and copy button."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="legend",
+            expected_response={"action": "legend"},
+            expected_confirmation="Legend created",
+        )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_hitl_accept_callback(
