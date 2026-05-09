@@ -661,29 +661,15 @@ def _handle_retry_from_callback(callback_query: Any, agent_name: str) -> None:
 
 
 def _launch_agent(prompt: str) -> None:
-    """Launch a background sase agent from a Telegram prompt."""
+    """Launch one or more background sase agents from a Telegram prompt.
+
+    Routes both single-agent and multi-model fan-out launches through the
+    canonical ``launch_agents_from_cwd`` pipeline, which handles workspace
+    allocation, naming, and retries through a single shared code path.
+    """
     prompt = normalize_launch_xprompt_at_refs(prompt)
     log.info("Launching agent for prompt: %s", prompt[:120])
-
-    # Expand xprompts to discover embedded directives (e.g. %model inside #mentor)
-    try:
-        from sase.xprompt import process_xprompt_references
-
-        expanded = process_xprompt_references(prompt)
-    except Exception:
-        log.warning("Failed to expand xprompts, using raw prompt", exc_info=True)
-        expanded = prompt
-
-    # Check for multi-model directive (e.g. %m(opus,sonnet))
-    from sase.xprompt.directives import split_prompt_for_models
-
-    model_prompts = split_prompt_for_models(expanded)
-    if model_prompts is not None:
-        log.info("Multi-model directive found, launching %d agents", len(model_prompts))
-        _launch_multi_model_agents(model_prompts)
-        return
-
-    _launch_single_agent(prompt, expanded)
+    _launch_agents_with_notifications(prompt)
 
 
 def _prompt_has_pr_xprompt(prompt: str) -> bool:
@@ -693,140 +679,51 @@ def _prompt_has_pr_xprompt(prompt: str) -> bool:
     return any(call.name == "pr" for call in extract_xprompt_calls(prompt))
 
 
-def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
-    """Launch a single background sase agent from a Telegram prompt."""
-    from sase.agent.launcher import launch_agent_from_cwd
+def _launch_agents_with_notifications(original_prompt: str) -> None:
+    """Launch one or more agents via the canonical pipeline and notify Telegram.
+
+    Unifies the single-agent and multi-model fan-out paths: ``%m(opus,sonnet)``
+    and friends are dispatched through ``launch_agents_from_cwd`` (plural) so
+    workspace allocation, naming, and retries follow the same retry-aware code
+    path as every other multi-model launch surface.  One Telegram notification
+    is emitted per spawned ``AgentLaunchResult``.
+    """
+    from sase.agent.launcher import launch_agents_from_cwd
     from sase.agent.names import get_next_auto_name
     from sase.agent.repeat_launcher import extract_repeat_and_name
-    from sase.llm_provider.registry import (
-        format_provider_model_label,
-        get_default_provider_name,
-        get_provider,
-        resolve_model_provider,
-    )
     from sase.xprompt.directives import extract_prompt_directives
 
-    if expanded is None:
-        try:
-            from sase.xprompt import process_xprompt_references
+    try:
+        from sase.xprompt import process_xprompt_references
 
-            expanded = process_xprompt_references(prompt)
-        except Exception:
-            expanded = prompt
+        expanded = process_xprompt_references(original_prompt)
+    except Exception:
+        log.warning("Failed to expand xprompts, using raw prompt", exc_info=True)
+        expanded = original_prompt
+
     _, directives = extract_prompt_directives(expanded)
-
-    # Save original prompt before modification (for kill-retry copy button)
-    original_prompt = prompt
 
     # A %r:N prompt fans out inside spawn_repeat_batch, which owns naming
     # for the whole batch. Prepending %n:<auto> here would turn the
     # auto-picked letter into an *explicit* base and force the strict
-    # collision path — wrong when the user never asked for a specific name.
+    # collision path.
     repeat_count, _, _ = extract_repeat_and_name(expanded)
     is_repeat = repeat_count is not None and repeat_count > 1
 
-    # Auto-assign a name if the user didn't provide one
+    # Auto-assign a name when none is supplied (and not a repeat). Injecting
+    # the base before the canonical pipeline keeps re-planning deterministic:
+    # ``apply_fanout_naming`` uses our base instead of allocating a new one.
+    prompt = original_prompt
     auto_name: str | None = None
     if directives.name is None and not is_repeat:
         auto_name = get_next_auto_name()
         prompt = f"%n:{auto_name} {prompt}"
 
-    # Resolve provider/model for the launch label
-    if directives.model:
-        provider, model = resolve_model_provider(directives.model)
-        provider = provider or get_default_provider_name()
-    else:
-        provider = get_default_provider_name()
-        model = get_provider().resolve_model_name()
-    label = format_provider_model_label(provider, model)
-
     chat_id = credentials.get_chat_id()
     try:
-        log.info(
-            "Calling launch_agent_from_cwd (model=%s, name=%s)",
-            label,
-            directives.name or auto_name,
-        )
-        result = launch_agent_from_cwd(prompt)
-        log.info(
-            "Agent launched: workspace #%s, PID %s", result.workspace_num, result.pid
-        )
-        display = prompt[:200] + ("..." if len(prompt) > 200 else "")
-        escaped_label = escape_markdown_v2(label)
-        agent_name = directives.name or auto_name
-        if agent_name:
-            escaped_name = escape_markdown_v2(agent_name)
-            name_line = f"  _@{escaped_name}_"
-        elif is_repeat:
-            name_line = f"  _repeat×{escape_markdown_v2(str(repeat_count))}_"
-        else:
-            name_line = ""
-        meta = escape_markdown_v2(f"workspace #{result.workspace_num}")
-        escaped_display = escape_markdown_v2(display)
-        keyboard: InlineKeyboardMarkup | None = None
-        if agent_name:
-            from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
-
-            vcs_prefix = ""
-            vcs_tag = extract_vcs_workflow_tag(prompt)
-            if vcs_tag:
-                if _prompt_has_pr_xprompt(prompt):
-                    vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
-                vcs_prefix = f"{vcs_tag}"
-            resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
-            wait_text = f"{vcs_prefix}%w:{agent_name} "
-            if len(original_prompt) <= _COPY_TEXT_MAX:
-                retry_button = InlineKeyboardButton(
-                    "🔄 Retry",
-                    copy_text=CopyTextButton(text=original_prompt),
-                )
-            else:
-                pending_actions.add(
-                    f"retry-{agent_name}",
-                    {"action": "retry", "prompt": original_prompt},
-                )
-                retry_button = InlineKeyboardButton(
-                    "🔄 Retry",
-                    callback_data=encode("retry", agent_name, "go"),
-                )
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "▶️ Resume",
-                            copy_text=CopyTextButton(text=resume_text),
-                        ),
-                        InlineKeyboardButton(
-                            "⏳ Wait",
-                            copy_text=CopyTextButton(text=wait_text),
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "🗡️ Kill",
-                            callback_data=encode("kill", agent_name, "go"),
-                        ),
-                        retry_button,
-                    ],
-                ]
-            )
-        msg = telegram_client.send_message(
-            chat_id,
-            f"🚀 *{escaped_label} Launched*{name_line}\n{meta}\n\n{escaped_display}",
-            parse_mode="MarkdownV2",
-            reply_markup=keyboard,
-        )
-        if agent_name:
-            pending_actions.add(
-                f"kill-{agent_name}",
-                {
-                    "action": "kill",
-                    "agent_name": agent_name,
-                    "prompt": original_prompt,
-                    "message_id": msg.message_id,
-                    "chat_id": chat_id,
-                },
-            )
+        log.info("Calling launch_agents_from_cwd")
+        results = launch_agents_from_cwd(prompt)
+        log.info("Spawned %d agent(s)", len(results))
     except Exception as e:
         log.error("Failed to launch agent: %s", e, exc_info=True)
         try:
@@ -836,21 +733,165 @@ def _launch_single_agent(prompt: str, expanded: str | None = None) -> None:
             )
         except Exception:
             log.error("Failed to send error message to Telegram", exc_info=True)
+        return
+
+    if not results:
+        return
+
+    # Recover per-slot prompts so each notification reflects the model and
+    # name actually launched. Re-running the planner is deterministic because
+    # the base name is fixed (either user-supplied or our injected %n:<auto>).
+    slot_prompts = _resolve_slot_prompts(prompt, len(results))
+
+    for result, slot_prompt in zip(results, slot_prompts, strict=True):
+        _send_launch_notification(
+            slot_prompt=slot_prompt,
+            original_prompt=original_prompt,
+            result=result,
+            chat_id=chat_id,
+            is_repeat=is_repeat,
+            repeat_count=repeat_count,
+            single_directives=directives if len(results) == 1 else None,
+            single_auto_name=auto_name if len(results) == 1 else None,
+        )
 
 
-def _launch_multi_model_agents(model_prompts: list[str]) -> None:
-    """Launch one agent per model for a multi-model directive.
+def _resolve_slot_prompts(prompt: str, expected_count: int) -> list[str]:
+    """Return per-slot prompts that match the launched ``AgentLaunchResult`` order.
 
-    Each prompt in *model_prompts* has the multi-model directive replaced
-    with a single ``%model:X``.  Each agent gets its own auto-name and
-    a separate Telegram notification.
+    Falls back to repeating *prompt* when fan-out planning yields a different
+    number of slots than were actually launched (defensive — the planner is
+    deterministic for a fixed base name, so this should only happen for
+    repeat or unknown launch shapes where the input prompt is what every
+    slot effectively saw).
     """
-    import time
+    from sase.xprompt.directives import plan_prompt_fanout_variants
 
-    for i, model_prompt in enumerate(model_prompts):
-        if i > 0:
-            time.sleep(1)
-        _launch_single_agent(model_prompt)
+    if expected_count <= 1:
+        return [prompt]
+
+    plan = plan_prompt_fanout_variants(prompt)
+    if plan is None or len(plan.slots) != expected_count:
+        return [prompt] * expected_count
+    return [slot.prompt for slot in plan.slots]
+
+
+def _send_launch_notification(
+    *,
+    slot_prompt: str,
+    original_prompt: str,
+    result: Any,
+    chat_id: str,
+    is_repeat: bool,
+    repeat_count: int | None,
+    single_directives: Any | None,
+    single_auto_name: str | None,
+) -> None:
+    """Send one Telegram launch notification for a spawned agent."""
+    from sase.llm_provider.registry import (
+        format_provider_model_label,
+        get_default_provider_name,
+        get_provider,
+        resolve_model_provider,
+    )
+    from sase.xprompt.directives import extract_prompt_directives
+
+    if single_directives is not None:
+        directives = single_directives
+        agent_name = single_directives.name or single_auto_name
+    else:
+        try:
+            _, directives = extract_prompt_directives(slot_prompt)
+        except Exception:
+            log.warning(
+                "Failed to extract per-slot directives, using fallbacks", exc_info=True
+            )
+            directives = None
+        agent_name = directives.name if directives is not None else None
+
+    if directives is not None and directives.model:
+        provider, model = resolve_model_provider(directives.model)
+        provider = provider or get_default_provider_name()
+    else:
+        provider = get_default_provider_name()
+        model = get_provider().resolve_model_name()
+    label = format_provider_model_label(provider, model)
+
+    display = slot_prompt[:200] + ("..." if len(slot_prompt) > 200 else "")
+    escaped_label = escape_markdown_v2(label)
+    if agent_name:
+        escaped_name = escape_markdown_v2(agent_name)
+        name_line = f"  _@{escaped_name}_"
+    elif is_repeat and repeat_count is not None:
+        name_line = f"  _repeat×{escape_markdown_v2(str(repeat_count))}_"
+    else:
+        name_line = ""
+    meta = escape_markdown_v2(f"workspace #{result.workspace_num}")
+    escaped_display = escape_markdown_v2(display)
+    keyboard: InlineKeyboardMarkup | None = None
+    if agent_name:
+        from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
+
+        vcs_prefix = ""
+        vcs_tag = extract_vcs_workflow_tag(slot_prompt)
+        if vcs_tag:
+            if _prompt_has_pr_xprompt(slot_prompt):
+                vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
+            vcs_prefix = f"{vcs_tag}"
+        resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
+        wait_text = f"{vcs_prefix}%w:{agent_name} "
+        if len(original_prompt) <= _COPY_TEXT_MAX:
+            retry_button = InlineKeyboardButton(
+                "🔄 Retry",
+                copy_text=CopyTextButton(text=original_prompt),
+            )
+        else:
+            pending_actions.add(
+                f"retry-{agent_name}",
+                {"action": "retry", "prompt": original_prompt},
+            )
+            retry_button = InlineKeyboardButton(
+                "🔄 Retry",
+                callback_data=encode("retry", agent_name, "go"),
+            )
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "▶️ Resume",
+                        copy_text=CopyTextButton(text=resume_text),
+                    ),
+                    InlineKeyboardButton(
+                        "⏳ Wait",
+                        copy_text=CopyTextButton(text=wait_text),
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🗡️ Kill",
+                        callback_data=encode("kill", agent_name, "go"),
+                    ),
+                    retry_button,
+                ],
+            ]
+        )
+    msg = telegram_client.send_message(
+        chat_id,
+        f"🚀 *{escaped_label} Launched*{name_line}\n{meta}\n\n{escaped_display}",
+        parse_mode="MarkdownV2",
+        reply_markup=keyboard,
+    )
+    if agent_name:
+        pending_actions.add(
+            f"kill-{agent_name}",
+            {
+                "action": "kill",
+                "agent_name": agent_name,
+                "prompt": original_prompt,
+                "message_id": msg.message_id,
+                "chat_id": chat_id,
+            },
+        )
 
 
 def _handle_photo_message(message: Any) -> None:

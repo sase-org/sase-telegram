@@ -1052,8 +1052,8 @@ class TestLaunchAgent:
         mock_result.workspace_num = 3
 
         with patch(
-            "sase.agent.launcher.launch_agent_from_cwd",
-            return_value=mock_result,
+            "sase.agent.launcher.launch_agents_from_cwd",
+            return_value=[mock_result],
         ):
             _launch_agent("List all open beads")
 
@@ -1079,7 +1079,7 @@ class TestLaunchAgent:
         mock_creds.get_chat_id.return_value = "12345"
 
         with patch(
-            "sase.agent.launcher.launch_agent_from_cwd",
+            "sase.agent.launcher.launch_agents_from_cwd",
             side_effect=RuntimeError("No workspace available"),
         ):
             _launch_agent("Do something")
@@ -1113,13 +1113,13 @@ class TestLaunchAgent:
                 return_value="c",
             ),
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ) as mock_launch,
         ):
             _launch_agent("List all open beads")
 
-        # The prompt passed to launch_agent_from_cwd should start with %n:c
+        # The prompt passed to launch_agents_from_cwd should start with %n:c
         launched_prompt = mock_launch.call_args[0][0]
         assert launched_prompt.startswith("%n:c ")
         assert "List all open beads" in launched_prompt
@@ -1143,8 +1143,8 @@ class TestLaunchAgent:
         mock_result.workspace_num = 3
 
         with patch(
-            "sase.agent.launcher.launch_agent_from_cwd",
-            return_value=mock_result,
+            "sase.agent.launcher.launch_agents_from_cwd",
+            return_value=[mock_result],
         ) as mock_launch:
             _launch_agent("%n:foo List all open beads")
 
@@ -1181,8 +1181,8 @@ class TestLaunchAgent:
                 return_value="c",
             ) as mock_auto,
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ) as mock_launch,
         ):
             _launch_agent("%r:3 List all open beads")
@@ -1216,8 +1216,8 @@ class TestLaunchAgent:
                 return_value="c",
             ),
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ),
         ):
             _launch_agent("List all open beads")
@@ -1264,8 +1264,8 @@ class TestLaunchAgent:
                 return_value="c",
             ),
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ),
         ):
             _launch_agent(long_prompt)
@@ -1292,7 +1292,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_single_agent,
+            _launch_agent,
         )
 
         mock_creds.get_chat_id.return_value = "12345"
@@ -1302,15 +1302,15 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ),
             patch(
                 "sase.xprompt.extract_vcs_workflow_tag",
                 return_value="#gh:sase ",
             ),
         ):
-            _launch_single_agent("%n:foo #gh:sase Fix a bug")
+            _launch_agent("%n:foo #gh:sase Fix a bug")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -1331,7 +1331,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_single_agent,
+            _launch_agent,
         )
 
         mock_creds.get_chat_id.return_value = "12345"
@@ -1341,8 +1341,8 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ),
             patch(
                 "sase.xprompt.extract_vcs_workflow_tag",
@@ -1357,7 +1357,7 @@ class TestLaunchAgent:
                 return_value="#gh:@foo ",
             ),
         ):
-            _launch_single_agent("%n:foo #gh:sase #pr(fix_bug) Fix a bug")
+            _launch_agent("%n:foo #gh:sase #pr(fix_bug) Fix a bug")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -1378,7 +1378,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_single_agent,
+            _launch_agent,
         )
 
         mock_creds.get_chat_id.return_value = "12345"
@@ -1388,8 +1388,8 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent.launcher.launch_agent_from_cwd",
-                return_value=mock_result,
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
             ),
             patch(
                 "sase.xprompt.extract_vcs_workflow_tag",
@@ -1400,7 +1400,7 @@ class TestLaunchAgent:
                 return_value=False,
             ),
         ):
-            _launch_single_agent("%n:foo #gh:sase Fix a bug without pr")
+            _launch_agent("%n:foo #gh:sase Fix a bug without pr")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -1408,6 +1408,146 @@ class TestLaunchAgent:
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_multi_model_launches_via_canonical_pipeline(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        # %m(opus,sonnet) must dispatch through ``launch_agents_from_cwd``
+        # ONCE — never per-model — so workspace allocation, naming, and
+        # retries all happen inside one shared execute_launch_plan invocation.
+        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result_opus = MagicMock()
+        result_opus.pid = 100
+        result_opus.workspace_num = 100
+        result_sonnet = MagicMock()
+        result_sonnet.pid = 101
+        result_sonnet.workspace_num = 101
+
+        slot_prompts = [
+            "%name:c.cld-opus %model:opus Do work",
+            "%name:c.cld-sonnet %model:sonnet Do work",
+        ]
+
+        with (
+            patch(
+                "sase.agent.names.get_next_auto_name",
+                return_value="c",
+            ),
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[result_opus, result_sonnet],
+            ) as mock_launch,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_slot_prompts",
+                return_value=slot_prompts,
+            ),
+        ):
+            _launch_agent("%m(opus,sonnet) Do work")
+
+        # The canonical pipeline must be called exactly once with the original
+        # multi-model prompt — not split per-model upstream.
+        assert mock_launch.call_count == 1
+        launched_prompt = mock_launch.call_args[0][0]
+        assert "%m(opus,sonnet)" in launched_prompt
+        assert "Do work" in launched_prompt
+
+        # One Telegram launch notification per spawned agent, with the
+        # correct workspace numbers preserved.
+        assert mock_tg.send_message.call_count == 2
+        first_call = mock_tg.send_message.call_args_list[0]
+        second_call = mock_tg.send_message.call_args_list[1]
+        # Workspace numbers are escaped for MarkdownV2 (``\#`` rather than ``#``).
+        assert "workspace \\#100" in first_call[0][1]
+        assert "workspace \\#101" in second_call[0][1]
+        # Per-slot agent names appear in their respective notifications.
+        assert "c\\.cld\\-opus" in first_call[0][1]
+        assert "c\\.cld\\-sonnet" in second_call[0][1]
+
+        # Two pending_actions kill entries registered with distinct names.
+        kill_keys = sorted(
+            call.args[0]
+            for call in mock_pa.add.call_args_list
+            if call.args and call.args[0].startswith("kill-")
+        )
+        assert kill_keys == ["kill-c.cld-opus", "kill-c.cld-sonnet"]
+        for call in mock_pa.add.call_args_list:
+            if call.args and call.args[0].startswith("kill-"):
+                # Retry button copies the original (multi-model) prompt so a
+                # single click re-launches the whole fan-out.
+                assert call.args[1]["prompt"] == "%m(opus,sonnet) Do work"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._record_project_context")
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_multi_model_photo_records_project_context_once(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+        mock_record: MagicMock,
+    ) -> None:
+        # Multi-model photo launches still record project context once per
+        # message and reference the photo file in the launched prompt.
+        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result_opus = MagicMock()
+        result_opus.pid = 100
+        result_opus.workspace_num = 100
+        result_sonnet = MagicMock()
+        result_sonnet.pid = 101
+        result_sonnet.workspace_num = 101
+
+        photo = MagicMock()
+        photo.file_id = "abc123"
+        message = MagicMock()
+        message.photo = [photo]
+        message.caption = "%m(opus,sonnet) describe this"
+        message.caption_entities = []
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+            ),
+            patch(
+                "sase.agent.names.get_next_auto_name",
+                return_value="c",
+            ),
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[result_opus, result_sonnet],
+            ) as mock_launch,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_slot_prompts",
+                return_value=[
+                    "%name:c.cld-opus %model:opus describe this",
+                    "%name:c.cld-sonnet %model:sonnet describe this",
+                ],
+            ),
+        ):
+            _handle_photo_message(message)
+
+        # Project context recorded once per inbound photo message — not per
+        # spawned agent.
+        assert mock_record.call_count == 1
+
+        # Single launch call references the downloaded photo file.
+        assert mock_launch.call_count == 1
+        launched_prompt = mock_launch.call_args[0][0]
+        assert "%m(opus,sonnet)" in launched_prompt
+        assert "describe this" in launched_prompt
+
+        # Two notifications, one per spawned agent.
+        assert mock_tg.send_message.call_count == 2
 
 
 class TestAwaitingFeedbackState:
