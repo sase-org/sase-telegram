@@ -689,7 +689,6 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
     is emitted per spawned ``AgentLaunchResult``.
     """
     from sase.agent.launcher import launch_agents_from_cwd
-    from sase.agent.names import get_next_auto_name
     from sase.agent.repeat_launcher import extract_repeat_and_name
     from sase.xprompt.directives import extract_prompt_directives
 
@@ -703,21 +702,13 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
 
     _, directives = extract_prompt_directives(expanded)
 
-    # A %r:N prompt fans out inside spawn_repeat_batch, which owns naming
-    # for the whole batch. Prepending %n:<auto> here would turn the
-    # auto-picked letter into an *explicit* base and force the strict
-    # collision path.
+    # Naming is owned by the core launch path. Telegram must not turn an
+    # internally generated name into an explicit launch directive before the
+    # child has claimed it.
     repeat_count, _, _ = extract_repeat_and_name(expanded)
     is_repeat = repeat_count is not None and repeat_count > 1
 
-    # Auto-assign a name when none is supplied (and not a repeat). Injecting
-    # the base before the canonical pipeline keeps re-planning deterministic:
-    # ``apply_fanout_naming`` uses our base instead of allocating a new one.
     prompt = original_prompt
-    auto_name: str | None = None
-    if directives.name is None and not is_repeat:
-        auto_name = get_next_auto_name()
-        prompt = f"%n:{auto_name} {prompt}"
 
     chat_id = credentials.get_chat_id()
     try:
@@ -738,12 +729,13 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
     if not results:
         return
 
-    # Recover per-slot prompts so each notification reflects the model and
-    # name actually launched. Re-running the planner is deterministic because
-    # the base name is fixed (either user-supplied or our injected %n:<auto>).
+    # Recover per-slot prompts so each notification reflects the model
+    # actually launched. Agent names come from the spawned artifact metadata
+    # so Telegram does not race the core name allocator.
     slot_prompts = _resolve_slot_prompts(prompt, len(results))
 
     for result, slot_prompt in zip(results, slot_prompts, strict=True):
+        resolved_agent_name = _resolve_launch_result_agent_name(result)
         _send_launch_notification(
             slot_prompt=slot_prompt,
             original_prompt=original_prompt,
@@ -752,7 +744,7 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
             is_repeat=is_repeat,
             repeat_count=repeat_count,
             single_directives=directives if len(results) == 1 else None,
-            single_auto_name=auto_name if len(results) == 1 else None,
+            resolved_agent_name=resolved_agent_name,
         )
 
 
@@ -760,10 +752,9 @@ def _resolve_slot_prompts(prompt: str, expected_count: int) -> list[str]:
     """Return per-slot prompts that match the launched ``AgentLaunchResult`` order.
 
     Falls back to repeating *prompt* when fan-out planning yields a different
-    number of slots than were actually launched (defensive — the planner is
-    deterministic for a fixed base name, so this should only happen for
-    repeat or unknown launch shapes where the input prompt is what every
-    slot effectively saw).
+    number of slots than were actually launched. This is only used to recover
+    per-slot model directives for notification labels; agent names are read
+    from launch artifacts.
     """
     from sase.xprompt.directives import plan_prompt_fanout_variants
 
@@ -776,6 +767,68 @@ def _resolve_slot_prompts(prompt: str, expected_count: int) -> list[str]:
     return [slot.prompt for slot in plan.slots]
 
 
+def _resolve_launch_result_agent_name(
+    result: Any,
+    *,
+    timeout: float = 3.0,
+    interval: float = 0.1,
+) -> str | None:
+    """Return the actual claimed agent name written to ``agent_meta.json``."""
+    artifacts_dir = _launch_result_artifacts_dir(result)
+    if artifacts_dir is None:
+        return None
+
+    meta_path = artifacts_dir / "agent_meta.json"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            time.sleep(interval)
+            continue
+
+        name = data.get("name") if isinstance(data, dict) else None
+        if isinstance(name, str) and name:
+            return name
+        time.sleep(interval)
+
+    return None
+
+
+def _launch_result_artifacts_dir(result: Any) -> Path | None:
+    """Best-effort artifact directory lookup for an ``AgentLaunchResult``."""
+    artifacts_dir = getattr(result, "artifacts_dir", None)
+    if isinstance(artifacts_dir, Path):
+        return artifacts_dir.expanduser()
+    if isinstance(artifacts_dir, str) and artifacts_dir:
+        return Path(artifacts_dir).expanduser()
+
+    project_name = getattr(result, "project_name", None)
+    timestamp = getattr(result, "timestamp", None)
+    if not isinstance(project_name, str) or not project_name:
+        return None
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+
+    try:
+        from sase.artifacts import convert_timestamp_to_artifacts_format
+
+        artifacts_timestamp = convert_timestamp_to_artifacts_format(timestamp)
+    except Exception:
+        log.warning("Failed to derive artifacts dir for launch result", exc_info=True)
+        return None
+
+    return (
+        Path.home()
+        / ".sase"
+        / "projects"
+        / project_name
+        / "artifacts"
+        / "ace-run"
+        / artifacts_timestamp
+    )
+
+
 def _send_launch_notification(
     *,
     slot_prompt: str,
@@ -785,7 +838,7 @@ def _send_launch_notification(
     is_repeat: bool,
     repeat_count: int | None,
     single_directives: Any | None,
-    single_auto_name: str | None,
+    resolved_agent_name: str | None,
 ) -> None:
     """Send one Telegram launch notification for a spawned agent."""
     from sase.llm_provider.registry import (
@@ -798,7 +851,7 @@ def _send_launch_notification(
 
     if single_directives is not None:
         directives = single_directives
-        agent_name = single_directives.name or single_auto_name
+        agent_name = resolved_agent_name or single_directives.name
     else:
         try:
             _, directives = extract_prompt_directives(slot_prompt)
@@ -807,7 +860,8 @@ def _send_launch_notification(
                 "Failed to extract per-slot directives, using fallbacks", exc_info=True
             )
             directives = None
-        agent_name = directives.name if directives is not None else None
+        directive_name = directives.name if directives is not None else None
+        agent_name = resolved_agent_name or directive_name
 
     if directives is not None and directives.model:
         provider, model = resolve_model_provider(directives.model)

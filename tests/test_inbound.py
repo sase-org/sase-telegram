@@ -1092,7 +1092,7 @@ class TestLaunchAgent:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_auto_name_prepended_when_no_name_directive(
+    def test_no_auto_name_prepended_when_no_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -1110,8 +1110,8 @@ class TestLaunchAgent:
         with (
             patch(
                 "sase.agent.names.get_next_auto_name",
-                return_value="c",
-            ),
+                side_effect=AssertionError("Telegram must not allocate names"),
+            ) as mock_auto,
             patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
                 return_value=[mock_result],
@@ -1119,10 +1119,9 @@ class TestLaunchAgent:
         ):
             _launch_agent("List all open beads")
 
-        # The prompt passed to launch_agents_from_cwd should start with %n:c
         launched_prompt = mock_launch.call_args[0][0]
-        assert launched_prompt.startswith("%n:c ")
-        assert "List all open beads" in launched_prompt
+        assert launched_prompt == "List all open beads"
+        mock_auto.assert_not_called()
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -1200,6 +1199,7 @@ class TestLaunchAgent:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
+        tmp_path: Path,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _launch_agent,
@@ -1209,16 +1209,14 @@ class TestLaunchAgent:
         mock_result = MagicMock()
         mock_result.pid = 42
         mock_result.workspace_num = 3
+        mock_result.artifacts_dir = str(tmp_path)
+        (tmp_path / "agent_meta.json").write_text(
+            json.dumps({"name": "c"}), encoding="utf-8"
+        )
 
-        with (
-            patch(
-                "sase.agent.names.get_next_auto_name",
-                return_value="c",
-            ),
-            patch(
-                "sase.agent.launcher.launch_agents_from_cwd",
-                return_value=[mock_result],
-            ),
+        with patch(
+            "sase.agent.launcher.launch_agents_from_cwd",
+            return_value=[mock_result],
         ):
             _launch_agent("List all open beads")
 
@@ -1260,12 +1258,12 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent.names.get_next_auto_name",
-                return_value="c",
-            ),
-            patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
                 return_value=[mock_result],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
+                return_value="c",
             ),
         ):
             _launch_agent(long_prompt)
@@ -1438,10 +1436,6 @@ class TestLaunchAgent:
 
         with (
             patch(
-                "sase.agent.names.get_next_auto_name",
-                return_value="c",
-            ),
-            patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
                 return_value=[result_opus, result_sonnet],
             ) as mock_launch,
@@ -1456,6 +1450,7 @@ class TestLaunchAgent:
         # multi-model prompt — not split per-model upstream.
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
+        assert not launched_prompt.startswith("%n:")
         assert "%m(opus,sonnet)" in launched_prompt
         assert "Do work" in launched_prompt
 
@@ -1519,10 +1514,6 @@ class TestLaunchAgent:
                 "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
             ),
             patch(
-                "sase.agent.names.get_next_auto_name",
-                return_value="c",
-            ),
-            patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
                 return_value=[result_opus, result_sonnet],
             ) as mock_launch,
@@ -1543,6 +1534,7 @@ class TestLaunchAgent:
         # Single launch call references the downloaded photo file.
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
+        assert not launched_prompt.startswith("%n:")
         assert "%m(opus,sonnet)" in launched_prompt
         assert "describe this" in launched_prompt
 
