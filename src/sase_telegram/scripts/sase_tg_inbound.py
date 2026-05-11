@@ -1302,114 +1302,40 @@ def _handle_list_command() -> None:
 
 
 def _handle_resume_command() -> None:
-    """Handle /resume — show copy buttons to resume running or done agents."""
-    from sase.ace.dismissed_agents import load_dismissed_agents
-    from sase.ace.tui.models.agent_loader import load_all_agents
+    """Handle /resume — show copy buttons to resume currently-running agents."""
     from sase.agent.running import list_running_agents
     from sase.xprompt import extract_vcs_workflow_tag
 
-    _DISMISSABLE_STATUSES = {"DONE", "FAILED", "PLAN DONE"}
     chat_id = credentials.get_chat_id()
 
-    # --- Running agents ---
-    running = list_running_agents()
-    running_buttons: list[list[InlineKeyboardButton]] = []
-    running_names: set[str] = set()
-    for a in running:
-        if not a.name:
-            continue
-        running_names.add(a.name)
+    agents = list_running_agents()
+    named_agents = [(a, a.name) for a in agents if a.name]
+    if not named_agents:
+        telegram_client.send_message(chat_id, "No running agents to resume.")
+        return
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    for a, name in named_agents:
         vcs_prefix = ""
         if a.prompt:
             vcs_tag = extract_vcs_workflow_tag(a.prompt)
             if vcs_tag:
                 vcs_prefix = vcs_tag
-        resume_text = f"{vcs_prefix}#resume:{a.name} %w:{a.name} "
-        running_buttons.append(
+        resume_text = f"{vcs_prefix}#resume:{name} %w:{name} "
+        buttons.append(
             [
                 InlineKeyboardButton(
-                    f"🏃 {a.name}",
+                    f"🏃 {name}",
                     copy_text=CopyTextButton(text=resume_text),
                 )
             ]
         )
 
-    # --- Done/undismissed agents ---
-    all_agents = load_all_agents()
-    dismissed = load_dismissed_agents()
-    done_buttons: list[list[InlineKeyboardButton]] = []
-    for agent in all_agents:
-        name = agent.agent_name or agent.cl_name
-        if name == "unknown":
-            continue
-        if agent.status not in _DISMISSABLE_STATUSES:
-            continue
-        if agent.is_workflow_child:
-            continue
-        if agent.identity in dismissed:
-            continue
-        if name in running_names:
-            continue
-        vcs_prefix = ""
-        raw = agent.get_raw_xprompt_content()
-        if raw:
-            vcs_tag = extract_vcs_workflow_tag(raw)
-            if vcs_tag:
-                vcs_prefix = vcs_tag
-        resume_text = f"{vcs_prefix}#resume:{name} "
-        done_buttons.append(
-            [
-                InlineKeyboardButton(
-                    f"✅ {name}",
-                    copy_text=CopyTextButton(text=resume_text),
-                )
-            ]
-        )
-
-    buttons = running_buttons + done_buttons
-    if not buttons:
-        telegram_client.send_message(chat_id, "No agents to resume.")
-        return
-
-    # Build description blocks
-    running_descs = [
-        _format_agent_description(a.name, a.model or "?", a.duration, a.prompt)
-        for a in running
-        if a.name and a.name in running_names
+    descriptions = [
+        _format_agent_description(name, a.model or "?", a.duration, a.prompt)
+        for a, name in named_agents
     ]
-    done_descs: list[str] = []
-    for agent in all_agents:
-        name = agent.agent_name or agent.cl_name
-        if name == "unknown":
-            continue
-        if agent.status not in _DISMISSABLE_STATUSES:
-            continue
-        if agent.is_workflow_child:
-            continue
-        if agent.identity in dismissed:
-            continue
-        if name in running_names:
-            continue
-        raw = agent.get_raw_xprompt_content()
-        done_descs.append(
-            _format_agent_description(
-                name,
-                agent.model or "?",
-                agent.duration_display,
-                raw,
-                status=agent.status,
-            )
-        )
-
-    parts = ["Select an agent to resume:"]
-    has_both = running_descs and done_descs
-    if has_both:
-        parts.append("\nRunning:\n" + "\n\n".join(running_descs))
-        parts.append("\nDone:\n" + "\n\n".join(done_descs))
-    else:
-        all_descs = running_descs or done_descs
-        parts.append("\n" + "\n\n".join(all_descs))
-    text = "\n".join(parts)
+    text = "Select an agent to resume:\n\n" + "\n\n".join(descriptions)
 
     telegram_client.send_message(
         chat_id,
