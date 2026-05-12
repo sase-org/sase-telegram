@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ RATE_LIMIT_TEST_FILE = Path("/tmp/test_integration_rate_limit.json")
 OFFSET_TEST_FILE = Path("/tmp/test_integration_offset.txt")
 AWAITING_TEST_FILE = Path("/tmp/test_integration_awaiting.json")
 OUTBOUND_LOCK_TEST_FILE = Path("/tmp/test_integration_outbound.lock")
+UPDATE_COMPLETION_TEST_DIR = Path("/tmp/test_integration_update_completions")
 
 
 def _cleanup_files() -> None:
@@ -34,6 +36,7 @@ def _cleanup_files() -> None:
         OUTBOUND_LOCK_TEST_FILE,
     ]:
         f.unlink(missing_ok=True)
+    shutil.rmtree(UPDATE_COMPLETION_TEST_DIR, ignore_errors=True)
 
 
 def _make_notification(
@@ -68,6 +71,10 @@ def _patch_paths():
         patch("sase_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
         patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
         patch("sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound._UPDATE_COMPLETION_PENDING_DIR",
+            UPDATE_COMPLETION_TEST_DIR,
+        ),
     ]
     for p in patchers:
         p.start()
@@ -81,21 +88,47 @@ class TestOutboundIntegration:
     """Integration tests for the outbound main() entry point."""
 
     @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=False)
-    def test_exits_early_when_user_active(self, _mock_idle: MagicMock) -> None:
+    def test_exits_early_when_user_active(
+        self, _mock_idle: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """When user is active, no messages should be sent."""
         result = outbound_main(["--dry-run"])
         assert result == 0
+        captured = capsys.readouterr()
+        assert "tg_outbound:" in captured.out
+        assert "reason=user_active" in captured.out
+        assert "unsent=0" in captured.out
 
     @patch("sase_telegram.outbound.load_notifications")
     @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     def test_first_run_initializes_without_sending(
-        self, _mock_idle: MagicMock, mock_load: MagicMock
+        self,
+        _mock_idle: MagicMock,
+        mock_load: MagicMock,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """First run creates high-water mark but doesn't send backlog."""
         result = outbound_main(["--dry-run"])
         assert result == 0
         assert LAST_SENT_TEST_FILE.exists()
         mock_load.assert_not_called()
+        captured = capsys.readouterr()
+        assert "tg_outbound:" in captured.out
+        assert "reason=no_unsent_notifications" in captured.out
+
+    @patch("sase_telegram.outbound.try_acquire_outbound_lock", return_value=None)
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    def test_lock_held_outputs_skip_summary(
+        self,
+        _mock_idle: MagicMock,
+        _mock_lock: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        result = outbound_main([])
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "tg_outbound:" in captured.out
+        assert "reason=lock_held" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
@@ -143,6 +176,7 @@ class TestOutboundIntegration:
         mock_load: MagicMock,
         mock_send: MagicMock,
         tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Plan approval notifications are saved as pending actions."""
         mock_chat_id.return_value = "12345"
@@ -174,6 +208,12 @@ class TestOutboundIntegration:
         assert prefix in pending
         assert pending[prefix]["action"] == "PlanApproval"
         assert pending[prefix]["message_id"] == 99
+        captured = capsys.readouterr()
+        assert "tg_outbound:" in captured.out
+        assert "unsent=1" in captured.out
+        assert "sent=1" in captured.out
+        assert "pending_action_writes=1" in captured.out
+        assert f"ids={n.id[:8]}" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
@@ -366,11 +406,17 @@ class TestInboundIntegration:
         assert pending_actions.get("abcd1234") is None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_no_updates_exits_cleanly(self, mock_tg: MagicMock) -> None:
+    def test_no_updates_exits_cleanly(
+        self, mock_tg: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """When there are no Telegram updates, exits with 0."""
         mock_tg.get_updates.return_value = []
         result = inbound_main(["--once"])
         assert result == 0
+        captured = capsys.readouterr()
+        assert "tg_inbound:" in captured.out
+        assert "updates=0" in captured.out
+        assert "reason=no_updates" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_plan_approve_callback(
@@ -655,7 +701,10 @@ class TestInboundIntegration:
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_saves_offset_after_processing(
-        self, mock_tg: MagicMock, _mock_launch: MagicMock
+        self,
+        mock_tg: MagicMock,
+        _mock_launch: MagicMock,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Offset file is updated after processing updates."""
         text_msg = SimpleNamespace(
@@ -677,6 +726,11 @@ class TestInboundIntegration:
         assert OFFSET_TEST_FILE.exists()
         offset = int(OFFSET_TEST_FILE.read_text().strip())
         assert offset == 501  # update_id + 1
+        captured = capsys.readouterr()
+        assert "tg_inbound:" in captured.out
+        assert "updates=1" in captured.out
+        assert "text=1" in captured.out
+        assert "next_offset=501" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")

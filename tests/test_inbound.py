@@ -2436,7 +2436,7 @@ class TestHandleListCommand:
             _handle_list_command()
 
         text = mock_tg.send_message.call_args.args[1]
-        needs_idx = text.index("<b>▲ Needs Attention (1)</b>")
+        needs_idx = text.index("<b>▲ Stopped (1)</b>")
         running_idx = text.index("<b>▶ Running (2)</b>")
         done_idx = text.index("<b>✓ Done (1)</b>")
         assert needs_idx < running_idx < done_idx

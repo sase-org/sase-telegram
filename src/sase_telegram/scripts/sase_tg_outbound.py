@@ -27,6 +27,7 @@ _DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
 # Actions that should be tracked as pending (user needs to respond)
 _ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "UserQuestion"}
+_SUMMARY_ID_LIMIT = 5
 
 # Lazily resolved path to ~/.sase/chats/
 _chats_dir: str | None = None
@@ -195,6 +196,46 @@ def _log_send_diagnostics(notifications: list) -> None:
         pass  # never let diagnostics crash the outbound
 
 
+def _short_notification_ids(notifications: list, limit: int = _SUMMARY_ID_LIMIT) -> str:
+    ids = [getattr(n, "id", "")[:8] for n in notifications[:limit]]
+    ids = [i for i in ids if i]
+    if len(notifications) > limit:
+        ids.append(f"+{len(notifications) - limit}")
+    return ",".join(ids) if ids else "-"
+
+
+def _print_outbound_summary(
+    *,
+    reason: str | None,
+    pending_actions_cleaned: int,
+    unsent_count: int = 0,
+    sent_count: int = 0,
+    dry_run_count: int = 0,
+    failed_count: int = 0,
+    pending_action_writes: int = 0,
+    attachment_failures: int = 0,
+    high_water_updates: int = 0,
+    stopped_active_count: int = 0,
+    notification_ids: str = "-",
+) -> None:
+    parts = [
+        "tg_outbound:",
+        f"unsent={unsent_count}",
+        f"sent={sent_count}",
+        f"dry_run={dry_run_count}",
+        f"failed={failed_count}",
+        f"pending_action_writes={pending_action_writes}",
+        f"attachment_failures={attachment_failures}",
+        f"high_water_updates={high_water_updates}",
+        f"pending_actions_cleaned={pending_actions_cleaned}",
+        f"stopped_active={stopped_active_count}",
+        f"ids={notification_ids}",
+    ]
+    if reason:
+        parts.append(f"reason={reason}")
+    print(" ".join(parts))
+
+
 def main(argv: list[str] | None = None) -> int:
     """Outbound Telegram chop entry point."""
     logging.basicConfig(
@@ -207,9 +248,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
     # Clean up stale pending actions
-    pending_actions.cleanup_stale()
+    stale_pending = pending_actions.cleanup_stale()
 
     if not is_idle():
+        _print_outbound_summary(
+            reason="user_active",
+            pending_actions_cleaned=len(stale_pending),
+        )
         return 0
 
     # Acquire exclusive lock to prevent concurrent outbound runs from
@@ -221,29 +266,45 @@ def main(argv: list[str] | None = None) -> int:
 
     lock_fd = try_acquire_outbound_lock()
     if lock_fd is None:
+        _print_outbound_summary(
+            reason="lock_held",
+            pending_actions_cleaned=len(stale_pending),
+        )
         return 0  # Another instance is running
 
     try:
-        return _run_outbound(args)
+        return _run_outbound(args, pending_actions_cleaned=len(stale_pending))
     finally:
         release_outbound_lock(lock_fd)
 
 
-def _run_outbound(args: argparse.Namespace) -> int:
+def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0) -> int:
     """Core outbound logic, called while holding the exclusive lock."""
     notifications = get_unsent_notifications()
     if not notifications:
+        _print_outbound_summary(
+            reason="no_unsent_notifications",
+            pending_actions_cleaned=pending_actions_cleaned,
+        )
         return 0
 
     log.info("Sending %d notification(s)", len(notifications))
     _log_send_diagnostics(notifications)
 
     chat_id = get_chat_id() if not args.dry_run else "DRY_RUN"
+    sent_count = 0
+    dry_run_count = 0
+    failed_count = 0
+    pending_action_writes = 0
+    attachment_failures = 0
+    high_water_updates = 0
+    stopped_active_count = 0
 
     for n in notifications:
         # Re-check idle state before each notification — stop sending
         # if the user became active while we were processing the batch.
         if not args.dry_run and not is_idle():
+            stopped_active_count += 1
             break
 
         # Check rate limit before sending
@@ -264,6 +325,8 @@ def _run_outbound(args: argparse.Namespace) -> int:
             # Advance high-water mark after each notification to prevent
             # re-sending if a later notification fails.
             mark_sent([n])
+            high_water_updates += 1
+            dry_run_count += 1
             continue
 
         msg = None
@@ -274,7 +337,10 @@ def _run_outbound(args: argparse.Namespace) -> int:
             rate_limit.record_send()
             log.debug("Sent notification %s → message_id=%s", n.id[:8], msg.message_id)
             mark_sent([n])
+            high_water_updates += 1
+            sent_count += 1
         except Exception:
+            failed_count += 1
             log.warning(
                 "Failed to send notification %s to Telegram",
                 n.id[:8],
@@ -300,6 +366,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
             if n.action == "PlanApproval" and n.files:
                 entry["plan_file"] = n.files[0]
             pending_actions.add(n.id[:8], entry)
+            pending_action_writes += 1
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []
@@ -349,6 +416,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
                     send_document(chat_id, actual_path)
                 rate_limit.record_send()
             except Exception:
+                attachment_failures += 1
                 log.warning(
                     "Failed to send attachment %s for notification %s",
                     file_path,
@@ -363,6 +431,7 @@ def _run_outbound(args: argparse.Namespace) -> int:
                     send_document(chat_id, dp)
                     rate_limit.record_send()
                 except Exception:
+                    attachment_failures += 1
                     log.warning(
                         "Failed to send diff %s for notification %s",
                         dp,
@@ -373,6 +442,19 @@ def _run_outbound(args: argparse.Namespace) -> int:
         for p in pdf_temps + response_temps:
             p.unlink(missing_ok=True)
 
+    _print_outbound_summary(
+        reason=None,
+        pending_actions_cleaned=pending_actions_cleaned,
+        unsent_count=len(notifications),
+        sent_count=sent_count,
+        dry_run_count=dry_run_count,
+        failed_count=failed_count,
+        pending_action_writes=pending_action_writes,
+        attachment_failures=attachment_failures,
+        high_water_updates=high_water_updates,
+        stopped_active_count=stopped_active_count,
+        notification_ids=_short_notification_ids(notifications),
+    )
     return 0
 
 

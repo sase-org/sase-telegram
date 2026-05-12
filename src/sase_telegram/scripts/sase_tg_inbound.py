@@ -83,6 +83,38 @@ class _ProjectBeadEntry:
     title: str
 
 
+def _print_inbound_summary(
+    *,
+    offset: int | None,
+    next_offset: int | None,
+    update_count: int,
+    callback_count: int,
+    text_count: int,
+    photo_count: int,
+    document_count: int,
+    unsupported_count: int,
+    ready_completions_sent: int,
+    pending_actions_cleaned: int,
+    reason: str | None = None,
+) -> None:
+    parts = [
+        "tg_inbound:",
+        f"updates={update_count}",
+        f"callbacks={callback_count}",
+        f"text={text_count}",
+        f"photos={photo_count}",
+        f"documents={document_count}",
+        f"unsupported={unsupported_count}",
+        f"ready_completions_sent={ready_completions_sent}",
+        f"pending_actions_cleaned={pending_actions_cleaned}",
+        f"offset={offset if offset is not None else '-'}",
+        f"next_offset={next_offset if next_offset is not None else '-'}",
+    ]
+    if reason:
+        parts.append(f"reason={reason}")
+    print(" ".join(parts))
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="sase_tg_inbound",
@@ -1107,12 +1139,13 @@ def _persist_update_completion_pending(result: Any, chat_id: str) -> None:
         )
 
 
-def _send_ready_update_completions() -> None:
+def _send_ready_update_completions() -> int:
+    sent_count = 0
     try:
         pending_paths = sorted(_UPDATE_COMPLETION_PENDING_DIR.glob("*.json"))
     except OSError:
         log.warning("Failed to scan Telegram update completion context", exc_info=True)
-        return
+        return sent_count
 
     for pending_path in pending_paths:
         pending = _load_json_file(pending_path)
@@ -1144,7 +1177,9 @@ def _send_ready_update_completions() -> None:
                 exc_info=True,
             )
             continue
+        sent_count += 1
         pending_path.unlink(missing_ok=True)
+    return sent_count
 
 
 def _format_update_completion(
@@ -1906,12 +1941,18 @@ def main(argv: list[str] | None = None) -> int:
     _register_commands_if_needed()
 
     # Clean up stale pending actions
-    pending_actions.cleanup_stale()
-    _send_ready_update_completions()
+    stale_pending = pending_actions.cleanup_stale()
+    ready_completions_sent = _send_ready_update_completions()
 
     pending = pending_actions.list_all()
     offset = get_last_offset()
     updates = telegram_client.get_updates(offset=offset, timeout=0)
+    next_offset: int | None = None
+    callback_count = 0
+    text_count = 0
+    photo_count = 0
+    document_count = 0
+    unsupported_count = 0
 
     if updates:
         log.info("Received %d update(s) (offset=%s)", len(updates), offset)
@@ -1919,15 +1960,18 @@ def main(argv: list[str] | None = None) -> int:
         # Save offset BEFORE processing to prevent duplicate agent launches when
         # overlapping invocations race (at-most-once delivery).
         last_update_id = max(u.update_id for u in updates)
-        save_offset(last_update_id + 1)
+        next_offset = last_update_id + 1
+        save_offset(next_offset)
 
         for update in updates:
             if update.callback_query:
-                log.info("Processing callback: %s", update.callback_query.data)
+                callback_count += 1
+                log.info("Processing callback (update_id=%d)", update.update_id)
                 _handle_callback(update.callback_query, pending)
             elif update.message:
                 msg = update.message
                 if msg.photo:
+                    photo_count += 1
                     log.info("Processing photo message")
                     _handle_photo_message(msg)
                 elif (
@@ -1935,12 +1979,15 @@ def main(argv: list[str] | None = None) -> int:
                     and msg.document.mime_type
                     and msg.document.mime_type.startswith("image/")
                 ):
+                    document_count += 1
                     log.info("Processing document image: %s", msg.document.file_name)
                     _handle_document_image(msg)
                 elif msg.text:
-                    log.info("Processing text message: %s", msg.text[:100])
+                    text_count += 1
+                    log.info("Processing text message (update_id=%d)", update.update_id)
                     _handle_text_message(msg)
                 else:
+                    unsupported_count += 1
                     log.info(
                         "Skipping unsupported message type (update_id=%d)",
                         update.update_id,
@@ -1961,6 +2008,19 @@ def main(argv: list[str] | None = None) -> int:
         pending_actions.remove(prefix)
         clear_awaiting_feedback_by_prefix(prefix)
 
+    _print_inbound_summary(
+        offset=offset,
+        next_offset=next_offset,
+        update_count=len(updates),
+        callback_count=callback_count,
+        text_count=text_count,
+        photo_count=photo_count,
+        document_count=document_count,
+        unsupported_count=unsupported_count,
+        ready_completions_sent=ready_completions_sent,
+        pending_actions_cleaned=len(stale_pending) + len(handled),
+        reason=None if updates else "no_updates",
+    )
     return 0
 
 
