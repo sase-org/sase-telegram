@@ -107,7 +107,8 @@ count. Large result sets are split across multiple Telegram messages without dro
 
 ## Beads
 
-`/bead` runs `sase bead list` across known workspaces from `~/.sase/projects/*/<project>.gp`, parses active beads
+`/bead` runs `sase bead list` across known workspaces from `~/.sase/projects/*/<project>.sase` (legacy `.gp` files are
+also read as a fallback), parses active beads
 (`open` and `in_progress`), and shows up to 80 picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the
 plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
 
