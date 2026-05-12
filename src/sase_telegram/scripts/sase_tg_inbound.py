@@ -259,13 +259,37 @@ def _workspace_from_project_file(project_file: Path) -> str | None:
     return None
 
 
+def _project_spec_path(project_dir: Path, project: str) -> Path:
+    """Resolve the project spec path, preferring canonical ``.sase``.
+
+    Falls back to legacy ``.gp`` when only that exists, and defaults to the
+    canonical name otherwise. Mirrors the main-repo helper but degrades
+    gracefully if the older `sase` install lacks it.
+    """
+    try:
+        from sase.ace.changespec.project_spec_path import preferred_project_spec_path
+    except ImportError:
+        sase_path = project_dir / f"{project}.sase"
+        if sase_path.exists():
+            return sase_path
+        legacy_path = project_dir / f"{project}.gp"
+        if legacy_path.exists():
+            return legacy_path
+        return sase_path
+    return Path(preferred_project_spec_path(str(project_dir), project))
+
+
 def _resolve_workspace_from_project_file(project: str) -> str | None:
-    project_file = Path.home() / ".sase" / "projects" / project / f"{project}.gp"
-    return _workspace_from_project_file(project_file)
+    project_dir = Path.home() / ".sase" / "projects" / project
+    return _workspace_from_project_file(_project_spec_path(project_dir, project))
 
 
 def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
-    """Return valid workspaces from ``~/.sase/projects/*/<project>.gp``."""
+    """Return valid workspaces from ``~/.sase/projects/*/<project>.sase``.
+
+    Legacy ``.gp`` files are honored as a fallback for projects that have
+    not yet been migrated to the canonical extension.
+    """
     projects_root = Path.home() / ".sase" / "projects"
     try:
         project_dirs = sorted(item for item in projects_root.iterdir() if item.is_dir())
@@ -276,7 +300,9 @@ def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
     seen_workspaces: set[str] = set()
     for project_dir in project_dirs:
         project = project_dir.name
-        workspace = _workspace_from_project_file(project_dir / f"{project}.gp")
+        workspace = _workspace_from_project_file(
+            _project_spec_path(project_dir, project)
+        )
         if not workspace or workspace in seen_workspaces:
             continue
         seen_workspaces.add(workspace)

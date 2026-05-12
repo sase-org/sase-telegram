@@ -1918,6 +1918,36 @@ class TestBeadProjectContext:
         workspace.mkdir()
         project_dir = tmp_path / ".sase" / "projects" / "sase"
         project_dir.mkdir(parents=True)
+        (project_dir / "sase.sase").write_text(f"WORKSPACE_DIR: {workspace}\n")
+        monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.Path.home",
+                return_value=tmp_path,
+            ),
+            patch(
+                "sase.running_field.get_workspace_directory",
+                side_effect=RuntimeError("workspace plugin unavailable"),
+            ),
+        ):
+            from sase_telegram.scripts.sase_tg_inbound import (
+                _resolve_workspace_for_project,
+            )
+
+            assert _resolve_workspace_for_project("sase", "test") == str(workspace)
+
+    def test_project_file_workspace_fallback_legacy_gp(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        """Legacy ``.gp`` project spec resolves when no ``.sase`` file exists."""
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        project_dir = tmp_path / ".sase" / "projects" / "sase"
+        project_dir.mkdir(parents=True)
         (project_dir / "sase.gp").write_text(f"WORKSPACE_DIR: {workspace}\n")
         monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
 
