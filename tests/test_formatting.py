@@ -432,6 +432,48 @@ class TestFormatWorkflowComplete:
         assert button.copy_text is not None
         assert button.copy_text.text == "#resume:sase-x.3 "
 
+    def test_includes_runtime_without_changing_existing_fields(self):
+        from unittest.mock import patch
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as png:
+            png.write(b"\x89PNG\r\n\x1a\n")
+            png_file = png.name
+
+        n = _make_notification(
+            sender="user-agent",
+            notes=["CLAUDE(opus) completed: my-workflow"],
+            files=[png_file],
+            action_data={
+                "agent_name": "sase-x.3",
+                "bead_display": "sase-x.3 - Fix the thing",
+                "llm_provider": "claude",
+                "model": "opus",
+                "prompt": "#gh:sase Fix the bug",
+                "cl_name": "sase_foobar_1",
+                "runtime": "4m32s",
+            },
+        )
+        with patch(
+            "sase.xprompt.extract_vcs_workflow_tag",
+            return_value="#gh:sase ",
+        ):
+            text, keyboard, attachments = format_notification(n)
+
+        assert "CLAUDE\\(opus\\) Complete" in text
+        assert "*Bead:* sase\\-x\\.3 \\- Fix the thing" in text
+        assert "*Runtime:* 4m32s" in text
+        assert "📝 *Prompt:*\n\\#gh:sase Fix the bug" in text
+        assert text.index("*Bead:*") < text.index("*Runtime:*")
+        assert text.index("*Runtime:*") < text.index("CLAUDE\\(opus\\) completed")
+        assert attachments == [png_file]
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "▶️ Resume"
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#gh:sase_foobar_1 #resume:sase-x.3 "
+
+        Path(png_file).unlink()
+
     def test_omits_bead_display_line_when_absent(self):
         n = _make_notification(
             sender="user-agent",

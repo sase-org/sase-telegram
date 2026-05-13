@@ -536,6 +536,9 @@ def _format_workflow_complete(
     bead_display = n.action_data.get("bead_display")
     if bead_display:
         header += f"\n*Bead:* {escape_markdown_v2(bead_display)}"
+    runtime = n.action_data.get("runtime")
+    if runtime:
+        header += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
     text = f"{header}\n\n{notes_text}"
 
     pr_url = n.action_data.get("pr_url")
