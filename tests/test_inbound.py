@@ -1194,6 +1194,52 @@ class TestLaunchAgent:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_uses_result_agent_name_without_polling_meta(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        """When the launch result carries an agent_name, Telegram skips the poll."""
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+        mock_result.agent_name = "c"
+        # No artifacts_dir / agent_meta.json on disk — the result name alone
+        # must be enough to render the inline keyboard.
+        mock_result.artifacts_dir = None
+        mock_result.project_name = ""
+        mock_result.timestamp = ""
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
+                side_effect=AssertionError("must not poll when result name is set"),
+            ),
+        ):
+            _launch_agent("List all open beads")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "▶️ Resume"
+        assert buttons[0][0].copy_text.text == "#resume:c %w:c "
+        assert buttons[1][0].text == "🗡️ Kill"
+        assert buttons[1][0].callback_data == "kill:c:go"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_launch_includes_wait_keyboard(
         self,
         mock_creds: MagicMock,

@@ -793,7 +793,18 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
     slot_prompts = _resolve_slot_prompts(prompt, len(results))
 
     for result, slot_prompt in zip(results, slot_prompts, strict=True):
-        resolved_agent_name = _resolve_launch_result_agent_name(result)
+        result_name = getattr(result, "agent_name", None)
+        if isinstance(result_name, str) and result_name:
+            resolved_agent_name: str | None = result_name
+        else:
+            resolved_agent_name = _resolve_launch_result_agent_name(result)
+            if resolved_agent_name is None:
+                log.warning(
+                    "Telegram launch fallback: result.agent_name unset and "
+                    "agent_meta.json poll timed out (pid=%s, timestamp=%s)",
+                    getattr(result, "pid", None),
+                    getattr(result, "timestamp", None),
+                )
         _send_launch_notification(
             slot_prompt=slot_prompt,
             original_prompt=original_prompt,
@@ -828,7 +839,7 @@ def _resolve_slot_prompts(prompt: str, expected_count: int) -> list[str]:
 def _resolve_launch_result_agent_name(
     result: Any,
     *,
-    timeout: float = 3.0,
+    timeout: float = 8.0,
     interval: float = 0.1,
 ) -> str | None:
     """Return the actual claimed agent name written to ``agent_meta.json``."""
