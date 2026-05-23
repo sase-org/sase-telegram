@@ -51,8 +51,8 @@ Each notification is formatted as a Telegram message with:
 | Plan Approval | Plan text + optional model/agent label | Tale, ✅ Approve, Epic, Legend, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
-| Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Resume (copy-text) |
-| Agent Launched | Provider/model, workspace number, prompt snippet | Resume, Wait, Kill, Retry |
+| Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |
+| Agent Launched | Provider/model, workspace number, prompt snippet | Fork, Wait, Kill, Retry |
 | Agent Killed | Termination confirmation | Retry |
 | Error Digest | Error summary | — |
 | Image Generated | Model name | Sends image inline |

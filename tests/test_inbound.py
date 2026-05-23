@@ -505,6 +505,37 @@ class TestChangesCommandDispatch:
         assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
 
 
+class TestForkCommandDispatch:
+    """Tests for the /fork slash command."""
+
+    def test_handle_command_dispatches_fork(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_fork_command"
+        ) as mock_handler:
+            _handle_command("/fork")
+
+        mock_handler.assert_called_once_with()
+
+    def test_legacy_command_is_not_dispatched(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        legacy = "re" + "sume"
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_fork_command"
+        ) as mock_handler:
+            _handle_command(f"/{legacy}")
+
+        mock_handler.assert_not_called()
+
+    def test_fork_registered_as_slash_command(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+
+        assert ("fork", "Copy fork text for an agent") in _SLASH_COMMANDS
+        assert not any(command == "re" + "sume" for command, _desc in _SLASH_COMMANDS)
+
+
 class TestBeadCommandDispatch:
     """Tests for /bead command dispatch aliases."""
 
@@ -1232,8 +1263,8 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].text == "▶️ Resume"
-        assert buttons[0][0].copy_text.text == "#resume:c %w:c "
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "#fork:c %w:c "
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
 
@@ -1272,8 +1303,8 @@ class TestLaunchAgent:
         buttons = keyboard.inline_keyboard
         assert len(buttons) == 2
         assert len(buttons[0]) == 2
-        assert buttons[0][0].text == "▶️ Resume"
-        assert buttons[0][0].copy_text.text == "#resume:c %w:c "
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "#fork:c %w:c "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "%w:c "
         assert len(buttons[1]) == 2
@@ -1360,8 +1391,8 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].text == "▶️ Resume"
-        assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo %w:foo "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
@@ -1407,8 +1438,8 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].text == "▶️ Resume"
-        assert buttons[0][0].copy_text.text == "#gh:@foo #resume:foo %w:foo "
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "#gh:@foo #fork:foo %w:foo "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:@foo %w:foo "
 
@@ -1450,7 +1481,7 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].copy_text.text == "#gh:sase #resume:foo %w:foo "
+        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo %w:foo "
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
@@ -1743,7 +1774,7 @@ class TestBeadProjectContext:
         assert _extract_project_from_prompt("#git(sase-telegram) Fix it") == (
             "sase-telegram"
         )
-        assert _extract_project_from_prompt("#resume:foo #gh:zorg Continue") == "zorg"
+        assert _extract_project_from_prompt("#fork:foo #gh:zorg Continue") == "zorg"
         assert _extract_project_from_prompt("#sase__research #gh:zorg Fix") == "zorg"
         assert _extract_project_from_prompt("#gh:@foo Continue work") is None
         assert _extract_project_from_prompt("plain prompt") is None

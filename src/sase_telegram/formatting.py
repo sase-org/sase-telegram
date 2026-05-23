@@ -561,7 +561,7 @@ def _format_workflow_complete(
     if agent_name:
         from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
 
-        resume_text = f"#resume:{agent_name} "
+        fork_text = f"#fork:{agent_name} "
         raw_prompt = n.action_data.get("prompt", "")
         if raw_prompt:
             vcs_tag = extract_vcs_workflow_tag(raw_prompt)
@@ -569,13 +569,13 @@ def _format_workflow_complete(
                 cl_name = n.action_data.get("cl_name")
                 if cl_name:
                     vcs_tag = replace_ref_in_vcs_tag(vcs_tag, cl_name)
-                resume_text = f"{vcs_tag}{resume_text}"
+                fork_text = f"{vcs_tag}{fork_text}"
         keyboard = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "▶️ Resume",
-                        copy_text=CopyTextButton(text=resume_text),
+                        "🍴 Fork",
+                        copy_text=CopyTextButton(text=fork_text),
                     ),
                 ]
             ]

@@ -60,7 +60,7 @@ Text messages are dispatched in priority order:
    - `/list` — Lists running agents with provider/model and a prompt snippet
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Retry button on success)
-   - `/resume` — Shows resume copy buttons for running + done agents
+   - `/fork` — Shows fork copy buttons for named running agents
    - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
@@ -94,7 +94,7 @@ When a text message or photo triggers an agent launch:
   them using Telegram's entity metadata
 - **Project context**: If the launch prompt contains a VCS project tag like `#gh:sase`, the bot remembers that
   chat-scoped project in `~/.sase/telegram/project_context.json` for later `/bead` commands
-- **Launch confirmation**: A message is sent back with Resume and Wait copy-text buttons, plus Kill and Retry controls
+- **Launch confirmation**: A message is sent back with Fork and Wait copy-text buttons, plus Kill and Retry controls
 
 ## ChangeSpec Tags
 

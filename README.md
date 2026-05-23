@@ -42,8 +42,8 @@ Installing sase-telegram adds the following commands:
 | Plan Approval      | Shows plan content with Tale / ✅ Approve / Epic / Legend / Reject / Feedback buttons       |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
-| Workflow Complete   | Sends a summary message with diff/chat attachments and a Resume copy button                 |
-| Agent Launched      | Shows provider/model label, workspace number, prompt snippet, and Resume / Wait / Kill / Retry buttons |
+| Workflow Complete   | Sends a summary message with diff/chat attachments and a Fork copy button                 |
+| Agent Launched      | Shows provider/model label, workspace number, prompt snippet, and Fork / Wait / Kill / Retry buttons |
 | Agent Killed        | Confirms termination with a Retry copy button to re-launch with the same prompt             |
 | Error Digest       | Sends error summary with digest file attachments                                            |
 | Image Generated    | Sends model name and generated image inline                                                 |
@@ -58,9 +58,9 @@ Installing sase-telegram adds the following commands:
 - **Auto-naming** — agents launched from Telegram automatically get assigned names
 - **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
 - **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
-- **Copy-text buttons** — Resume, Wait, Retry, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
+- **Copy-text buttons** — Fork, Wait, Retry, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos or image documents to launch agents with visual context
-- **Slash commands** — `/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **Slash commands** — `/list`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -104,12 +104,12 @@ keyboard callbacks (approve/run/reject/select/epic/legend, agent controls, and b
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Slash commands** (`/list`, `/kill [<name>]`, `/resume`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Slash commands** (`/list`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
-messages include Resume and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
+messages include Fork and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 
 Set `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` on hosts that should process Telegram callbacks, feedback, and slash commands
 without launching new agents from free-form text, photos, or image documents. The check is presence-based, so an empty

@@ -409,11 +409,11 @@ class TestFormatWorkflowComplete:
         assert "_@c_" in text
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
-        assert button.text == "▶️ Resume"
+        assert button.text == "🍴 Fork"
         assert button.copy_text is not None
-        assert button.copy_text.text == "#resume:c "
+        assert button.copy_text.text == "#fork:c "
 
-    def test_includes_bead_display_and_resume_button(self):
+    def test_includes_bead_display_and_fork_button(self):
         n = _make_notification(
             sender="user-agent",
             notes=["Agent completed: my-workflow"],
@@ -430,7 +430,7 @@ class TestFormatWorkflowComplete:
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
         assert button.copy_text is not None
-        assert button.copy_text.text == "#resume:sase-x.3 "
+        assert button.copy_text.text == "#fork:sase-x.3 "
 
     def test_includes_runtime_without_changing_existing_fields(self):
         from unittest.mock import patch
@@ -468,9 +468,9 @@ class TestFormatWorkflowComplete:
         assert attachments == [png_file]
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
-        assert button.text == "▶️ Resume"
+        assert button.text == "🍴 Fork"
         assert button.copy_text is not None
-        assert button.copy_text.text == "#gh:sase_foobar_1 #resume:sase-x.3 "
+        assert button.copy_text.text == "#gh:sase_foobar_1 #fork:sase-x.3 "
 
         Path(png_file).unlink()
 
@@ -524,7 +524,7 @@ class TestFormatWorkflowComplete:
         assert text.startswith("✅ ")
         assert "✏️" not in text
 
-    def test_resume_uses_cl_name_over_project(self):
+    def test_fork_uses_cl_name_over_project(self):
         from unittest.mock import patch
 
         n = _make_notification(
@@ -545,9 +545,9 @@ class TestFormatWorkflowComplete:
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
         assert button.copy_text is not None
-        assert button.copy_text.text == "#gh:sase_foobar_1 #resume:c "
+        assert button.copy_text.text == "#gh:sase_foobar_1 #fork:c "
 
-    def test_resume_without_cl_name_uses_original_tag(self):
+    def test_fork_without_cl_name_uses_original_tag(self):
         from unittest.mock import patch
 
         n = _make_notification(
@@ -567,7 +567,7 @@ class TestFormatWorkflowComplete:
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
         assert button.copy_text is not None
-        assert button.copy_text.text == "#gh:sase #resume:c "
+        assert button.copy_text.text == "#gh:sase #fork:c "
 
     def test_preserves_workflow_complete_image_attachments(self):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as png:

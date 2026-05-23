@@ -961,7 +961,7 @@ def _send_launch_notification(
             if _prompt_has_pr_xprompt(slot_prompt):
                 vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
             vcs_prefix = f"{vcs_tag}"
-        resume_text = f"{vcs_prefix}#resume:{agent_name} %w:{agent_name} "
+        fork_text = f"{vcs_prefix}#fork:{agent_name} %w:{agent_name} "
         wait_text = f"{vcs_prefix}%w:{agent_name} "
         if len(original_prompt) <= _COPY_TEXT_MAX:
             retry_button = InlineKeyboardButton(
@@ -981,8 +981,8 @@ def _send_launch_notification(
             [
                 [
                     InlineKeyboardButton(
-                        "▶️ Resume",
-                        copy_text=CopyTextButton(text=resume_text),
+                        "🍴 Fork",
+                        copy_text=CopyTextButton(text=fork_text),
                     ),
                     InlineKeyboardButton(
                         "⏳ Wait",
@@ -1093,8 +1093,8 @@ def _handle_command(text: str, message: Any | None = None) -> None:
         _handle_kill_command(args)
     elif command == "list":
         _handle_list_command()
-    elif command == "resume":
-        _handle_resume_command()
+    elif command == "fork":
+        _handle_fork_command()
     elif command == "changes":
         _handle_changes_command(args)
     elif command == "xprompts":
@@ -1238,7 +1238,7 @@ def _format_agent_description(
 ) -> str:
     """Format an HTML description block for an agent.
 
-    Used by /kill and /resume to show context above the inline buttons.
+    Used by /kill and /fork to show context above the inline buttons.
     """
     import html
 
@@ -1373,8 +1373,8 @@ def _handle_list_command() -> None:
     telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
 
 
-def _handle_resume_command() -> None:
-    """Handle /resume — show copy buttons to resume currently-running agents."""
+def _handle_fork_command() -> None:
+    """Handle /fork — show copy buttons to fork currently-running agents."""
     from sase.agent.running import list_running_agents
     from sase.xprompt import extract_vcs_workflow_tag
 
@@ -1383,7 +1383,7 @@ def _handle_resume_command() -> None:
     agents = list_running_agents()
     named_agents = [(a, a.name) for a in agents if a.name]
     if not named_agents:
-        telegram_client.send_message(chat_id, "No running agents to resume.")
+        telegram_client.send_message(chat_id, "No running agents to fork.")
         return
 
     buttons: list[list[InlineKeyboardButton]] = []
@@ -1393,12 +1393,12 @@ def _handle_resume_command() -> None:
             vcs_tag = extract_vcs_workflow_tag(a.prompt)
             if vcs_tag:
                 vcs_prefix = vcs_tag
-        resume_text = f"{vcs_prefix}#resume:{name} %w:{name} "
+        fork_text = f"{vcs_prefix}#fork:{name} %w:{name} "
         buttons.append(
             [
                 InlineKeyboardButton(
-                    f"🏃 {name}",
-                    copy_text=CopyTextButton(text=resume_text),
+                    f"🍴 {name}",
+                    copy_text=CopyTextButton(text=fork_text),
                 )
             ]
         )
@@ -1407,7 +1407,7 @@ def _handle_resume_command() -> None:
         _format_agent_description(name, a.model or "?", a.duration, a.prompt)
         for a, name in named_agents
     ]
-    text = "Select an agent to resume:\n\n" + "\n\n".join(descriptions)
+    text = "Select an agent to fork:\n\n" + "\n\n".join(descriptions)
 
     telegram_client.send_message(
         chat_id,
@@ -1871,7 +1871,7 @@ def _handle_text_message(message: Any) -> None:
 _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
     ("list", "Show all running agents"),
-    ("resume", "Copy resume text for an agent"),
+    ("fork", "Copy fork text for an agent"),
     ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
