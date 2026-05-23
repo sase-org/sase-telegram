@@ -113,6 +113,18 @@ def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None
             f.write("```\n")
 
 
+def _markdown_fence_for_content(content: str) -> str:
+    longest_run = 0
+    current_run = 0
+    for char in content:
+        if char == "`":
+            current_run += 1
+            longest_run = max(longest_run, current_run)
+        else:
+            current_run = 0
+    return "`" * max(3, longest_run + 1)
+
+
 def _prepend_commit_message_to_markdown(
     response_file: Path, commit_message: str
 ) -> None:
@@ -122,13 +134,14 @@ def _prepend_commit_message_to_markdown(
     appears above the diff in the resulting PDF.
     """
     with open(response_file, "a", encoding="utf-8") as f:
+        fence = _markdown_fence_for_content(commit_message)
         f.write("\n\n---\n\n")
         f.write("## Commit Message\n\n")
-        f.write("```\n")
+        f.write(f"{fence}text\n")
         f.write(commit_message)
         if not commit_message.endswith("\n"):
             f.write("\n")
-        f.write("```\n")
+        f.write(f"{fence}\n")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

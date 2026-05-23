@@ -21,6 +21,7 @@ from sase_telegram.scripts.sase_tg_outbound import (
     _is_diff_file,
     _is_image_file,
     _is_pdf_file,
+    _prepend_commit_message_to_markdown,
     _run_outbound,
 )
 
@@ -235,6 +236,33 @@ class TestAppendDiffToMarkdown:
         Path(resp.name).unlink()
 
 
+class TestPrependCommitMessageToMarkdown:
+    def test_appends_full_multiline_message(self, tmp_path: Path):
+        response = tmp_path / "response.md"
+        response.write_text("# Response\n\nDone.", encoding="utf-8")
+        commit_message = "feat: add report\n\nBody line one.\n\nBody line two.\n"
+
+        _prepend_commit_message_to_markdown(response, commit_message)
+
+        result = response.read_text(encoding="utf-8")
+        assert "## Commit Message" in result
+        assert "```text\n" in result
+        assert commit_message in result
+
+    def test_uses_fence_longer_than_commit_message_backticks(self, tmp_path: Path):
+        response = tmp_path / "response.md"
+        response.write_text("# Response\n\nDone.", encoding="utf-8")
+        commit_message = "feat: add fenced body\n\n```python\nprint('x')\n```\n````"
+
+        _prepend_commit_message_to_markdown(response, commit_message)
+
+        result = response.read_text(encoding="utf-8")
+        lines = result.splitlines()
+        assert "`````text" in lines
+        assert lines[-1] == "`````"
+        assert commit_message in result
+
+
 class TestRunOutboundAttachments:
     def test_workflow_complete_pdf_sends_document_without_conversion(self):
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as pdf:
@@ -413,6 +441,82 @@ class TestRunOutboundAttachments:
             send_document.assert_any_call("chat-1", str(generated_pdf))
             assert send_document.call_count == 2
             send_photo.assert_called_once_with("chat-1", str(image_file))
+
+    def test_chat_pdf_embeds_full_commit_message_before_conversion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_dir = tmp / "chats"
+            chat_dir.mkdir()
+            chat_file = chat_dir / "chat.md"
+            chat_file.write_text("full chat", encoding="utf-8")
+            response_file = tmp / "response.md"
+            response_file.write_text("# Response\n\nDone.", encoding="utf-8")
+            response_pdf = tmp / "response.pdf"
+            full_message = "feat: add report\n\nInclude all body lines.\n\nMore detail."
+            captured_markdown: list[str] = []
+
+            notification = Notification(
+                id="msg00000-0000-0000-0000-000000000000",
+                timestamp=datetime.now(UTC).isoformat(),
+                sender="user-agent",
+                notes=["Agent completed: commit-update"],
+                files=[str(chat_file)],
+                action="JumpToAgent",
+                action_data={"commit_message": full_message},
+            )
+
+            def fake_md_to_pdf(path: str) -> str:
+                captured_markdown.append(Path(path).read_text(encoding="utf-8"))
+                response_pdf.write_bytes(b"%PDF-1.4\n")
+                return str(response_pdf)
+
+            with (
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                    return_value=[notification],
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                    return_value="chat-1",
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.is_idle",
+                    return_value=True,
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                    return_value=True,
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+                patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_message",
+                    return_value=SimpleNamespace(message_id=123),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound._make_response_only_file",
+                    return_value=(response_file, "Done."),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound._get_chats_dir",
+                    return_value=str(chat_dir),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.md_to_pdf",
+                    side_effect=fake_md_to_pdf,
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.send_photo"),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_document"
+                ) as send_document,
+            ):
+                result = _run_outbound(argparse.Namespace(dry_run=False))
+
+            assert result == 0
+            assert len(captured_markdown) == 1
+            assert "## Commit Message" in captured_markdown[0]
+            assert full_message in captured_markdown[0]
+            send_document.assert_called_once_with("chat-1", str(response_pdf))
 
     def test_dry_run_lists_pdf_attachment_without_research_section(self, capsys):
         with tempfile.TemporaryDirectory() as tmpdir:
