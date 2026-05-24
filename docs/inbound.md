@@ -72,15 +72,20 @@ If `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present in the environment, step 4 
 slash commands still run normally, but free-form text that would launch an agent is logged and ignored without sending a
 Telegram acknowledgement. The check is presence-based, so an empty value still disables launches.
 
-### Photos and Image Documents
+### Photos, Albums, and Image Documents
 
-Photos or image documents sent to the bot are:
+Single photos or image documents sent to the bot are:
 1. Downloaded to `~/.sase/telegram/images/` with a timestamped filename
 2. Used to build an agent prompt that references the downloaded image path
 3. A new sase agent is launched with the visual context
 
-When `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present, photos and image documents are ignored before file download, so
-disabled hosts do not call Telegram's file API or create local image files for launch prompts.
+Telegram albums are delivered as multiple updates with the same `media_group_id`. The inbound script stages those
+updates in `~/.sase/telegram/media_groups.json`, waits for a small quiet window so split deliveries can join the same
+album, then downloads every image and launches one agent prompt with a numbered list of all local image paths. If a
+download fails, the bot sends one error message, removes the staged album, and does not launch an agent.
+
+When `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present, photos, image documents, and albums are ignored before staging
+or file download, so disabled hosts do not call Telegram's file API or create local image files for launch prompts.
 
 ## Agent Launching
 

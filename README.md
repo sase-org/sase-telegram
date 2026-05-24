@@ -59,7 +59,7 @@ Installing sase-telegram adds the following commands:
 - **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
 - **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
 - **Copy-text buttons** — Fork, Wait, Retry, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
-- **Photo/document handling** — send photos or image documents to launch agents with visual context
+- **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — `/list`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
@@ -111,9 +111,13 @@ up. Text messages that don't complete a feedback flow are dispatched as follows:
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
 messages include Fork and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 
+Photos and image documents launch agents with prompts that reference the downloaded local image path. Telegram albums
+are staged briefly and then launched as one prompt containing a numbered list of all downloaded image paths, so prompt
+image discovery can surface every file later.
+
 Set `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` on hosts that should process Telegram callbacks, feedback, and slash commands
-without launching new agents from free-form text, photos, or image documents. The check is presence-based, so an empty
-value still disables launches; ignored launch messages are logged without a Telegram acknowledgement.
+without launching new agents from free-form text, photos, image documents, or albums. The check is presence-based, so an
+empty value still disables launches; ignored launch messages are logged without a Telegram acknowledgement.
 
 `/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
@@ -141,11 +145,12 @@ State files are stored under `~/.sase/telegram/`:
 | `rate_limit.json`           | Sliding-window send timestamps                |
 | `update_offset.txt`         | Last processed Telegram update ID             |
 | `awaiting_feedback.json`    | Active two-step feedback flow state, keyed by Telegram message |
+| `media_groups.json`         | Staged Telegram photo/image-document albums waiting for the quiet window |
 | `last_sent_ts`              | High-water mark for outbound notifications    |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
 | `commands_registered_ts`    | Cached timestamp and fingerprint for Telegram slash command registration |
-| `images/`                   | Downloaded photos from Telegram messages       |
+| `images/`                   | Downloaded photos and image documents from Telegram messages |
 
 ## Requirements
 

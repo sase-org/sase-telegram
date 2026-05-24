@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sase_telegram.inbound import (
+    build_image_prompt,
     build_photo_prompt,
     clear_awaiting_feedback,
     clear_awaiting_feedback_by_prefix,
@@ -484,6 +485,243 @@ class TestHandleImageMessageLaunchDisabled:
             mock_download.assert_not_called()
             mock_record.assert_not_called()
             mock_launch.assert_not_called()
+
+
+class TestMediaGroupImages:
+    """Tests for Telegram album staging and launch flushing."""
+
+    def _photo_message(
+        self,
+        file_id: str,
+        *,
+        message_id: int,
+        caption: str | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            photo=[SimpleNamespace(file_id=file_id)],
+            document=None,
+            caption=caption,
+            caption_entities=None,
+            media_group_id="album-1",
+            message_id=message_id,
+            chat=SimpleNamespace(id=12345),
+        )
+
+    def _document_message(
+        self,
+        file_id: str,
+        *,
+        file_name: str | None,
+        message_id: int,
+        caption: str | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            photo=None,
+            document=SimpleNamespace(
+                file_id=file_id,
+                file_name=file_name,
+                mime_type="image/png",
+            ),
+            caption=caption,
+            caption_entities=None,
+            media_group_id="album-1",
+            message_id=message_id,
+            chat=SimpleNamespace(id=12345),
+        )
+
+    def test_grouped_photo_stages_without_immediate_launch(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        state_path = tmp_path / "media_groups.json"
+        message = self._photo_message(
+            "photo_one_12345678",
+            message_id=10,
+            caption="#gh@sase Compare these",
+        )
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound.time, "time", return_value=100.0),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+            ) as mock_download,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            assert inbound._stage_media_group_image(message, "photo") is True
+
+        mock_download.assert_not_called()
+        mock_launch.assert_not_called()
+        state = json.loads(state_path.read_text())
+        group = state["12345:album-1"]
+        assert group["caption"] == "#gh:sase Compare these"
+        assert group["items"] == [
+            {
+                "message_id": 10,
+                "kind": "photo",
+                "file_id": "photo_one_12345678",
+                "file_name": None,
+            }
+        ]
+
+    def test_flush_ready_group_downloads_all_images_and_launches_once(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        state_path = tmp_path / "media_groups.json"
+        images_dir = tmp_path / "images"
+        first = self._photo_message("photo_one_12345678", message_id=10)
+        second = self._photo_message(
+            "photo_two_12345678",
+            message_id=11,
+            caption="Compare these",
+        )
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound.time, "time", side_effect=[100.0, 100.1]),
+        ):
+            inbound._stage_media_group_image(first, "photo")
+            inbound._stage_media_group_image(second, "photo")
+
+        def _download(_file_id: str, dest: Path) -> None:
+            dest.write_text("image")
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound, "IMAGES_DIR", images_dir),
+            patch.object(inbound.time, "time", return_value=103.0),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file",
+                side_effect=_download,
+            ) as mock_download,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            assert inbound._flush_ready_media_groups() == 1
+
+        assert mock_download.call_count == 2
+        mock_launch.assert_called_once()
+        prompt = mock_launch.call_args.args[0]
+        assert "Compare these" in prompt
+        assert "1. " in prompt and "photo_one_12" in prompt
+        assert "2. " in prompt and "photo_two_12" in prompt
+        mock_record.assert_called_once()
+        assert not state_path.exists()
+
+    def test_grouped_document_filename_is_preserved_safely(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        state_path = tmp_path / "media_groups.json"
+        images_dir = tmp_path / "images"
+        message = self._document_message(
+            "doc_file_12345678",
+            file_name="../diagram.png",
+            message_id=10,
+            caption="Inspect this",
+        )
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound.time, "time", return_value=100.0),
+        ):
+            inbound._stage_media_group_image(message, "document")
+
+        def _download(_file_id: str, dest: Path) -> None:
+            dest.write_text("image")
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound, "IMAGES_DIR", images_dir),
+            patch.object(inbound.time, "time", return_value=103.0),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file",
+                side_effect=_download,
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound._record_project_context"),
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            inbound._flush_ready_media_groups()
+
+        prompt = mock_launch.call_args.args[0]
+        assert "diagram.png" in prompt
+        assert "../diagram.png" not in prompt
+
+    def test_launch_disabled_does_not_stage_grouped_images(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        state_path = tmp_path / "media_groups.json"
+        message = self._photo_message("photo_one_12345678", message_id=10)
+
+        with (
+            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+            ) as mock_download,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            assert inbound._stage_media_group_image(message, "photo") is False
+            assert inbound._flush_ready_media_groups() == 0
+
+        assert not state_path.exists()
+        mock_download.assert_not_called()
+        mock_launch.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_download_failure_sends_one_error_and_does_not_launch(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        state_path = tmp_path / "media_groups.json"
+        images_dir = tmp_path / "images"
+        created: list[Path] = []
+
+        first = self._photo_message("ok_photo_12345678", message_id=10)
+        second = self._photo_message("bad_photo_12345678", message_id=11)
+
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound.time, "time", side_effect=[100.0, 100.1]),
+        ):
+            inbound._stage_media_group_image(first, "photo")
+            inbound._stage_media_group_image(second, "photo")
+
+        def _download(file_id: str, dest: Path) -> None:
+            if file_id.startswith("bad"):
+                raise RuntimeError("Network error")
+            dest.write_text("image")
+            created.append(dest)
+
+        mock_tg.download_file.side_effect = _download
+        with (
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
+            patch.object(inbound, "IMAGES_DIR", images_dir),
+            patch.object(inbound.time, "time", return_value=103.0),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+        ):
+            assert inbound._flush_ready_media_groups() == 1
+
+        mock_tg.send_message.assert_called_once()
+        assert (
+            "Failed to download image album" in mock_tg.send_message.call_args.args[1]
+        )
+        mock_launch.assert_not_called()
+        mock_record.assert_not_called()
+        assert not state_path.exists()
+        assert all(not path.exists() for path in created)
 
 
 class TestChangesCommandDispatch:
@@ -1760,6 +1998,15 @@ class TestBuildPhotoPrompt:
         result = build_photo_prompt(image_path, "")
         # Empty string is falsy, should behave like None
         assert "describe what you see" in result
+
+    def test_multi_image_prompt_lists_all_paths(self, tmp_path: Path) -> None:
+        first = tmp_path / "first.jpg"
+        second = tmp_path / "second.jpg"
+        result = build_image_prompt([first, second], "#gh@sase Compare these")
+        assert "#gh:sase Compare these" in result
+        assert f"1. {first}" in result
+        assert f"2. {second}" in result
+        assert "respond to the user's request" in result
 
 
 class TestBeadProjectContext:

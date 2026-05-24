@@ -22,8 +22,10 @@ PENDING_TEST_FILE = Path("/tmp/test_integration_pending.json")
 RATE_LIMIT_TEST_FILE = Path("/tmp/test_integration_rate_limit.json")
 OFFSET_TEST_FILE = Path("/tmp/test_integration_offset.txt")
 AWAITING_TEST_FILE = Path("/tmp/test_integration_awaiting.json")
+MEDIA_GROUP_TEST_FILE = Path("/tmp/test_integration_media_groups.json")
 OUTBOUND_LOCK_TEST_FILE = Path("/tmp/test_integration_outbound.lock")
 UPDATE_COMPLETION_TEST_DIR = Path("/tmp/test_integration_update_completions")
+IMAGES_TEST_DIR = Path("/tmp/test_integration_images")
 
 
 def _cleanup_files() -> None:
@@ -33,10 +35,12 @@ def _cleanup_files() -> None:
         RATE_LIMIT_TEST_FILE,
         OFFSET_TEST_FILE,
         AWAITING_TEST_FILE,
+        MEDIA_GROUP_TEST_FILE,
         OUTBOUND_LOCK_TEST_FILE,
     ]:
         f.unlink(missing_ok=True)
     shutil.rmtree(UPDATE_COMPLETION_TEST_DIR, ignore_errors=True)
+    shutil.rmtree(IMAGES_TEST_DIR, ignore_errors=True)
 
 
 def _make_notification(
@@ -71,6 +75,10 @@ def _patch_paths():
         patch("sase_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
         patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
         patch("sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound._MEDIA_GROUPS_PATH",
+            MEDIA_GROUP_TEST_FILE,
+        ),
         patch(
             "sase_telegram.scripts.sase_tg_inbound._UPDATE_COMPLETION_PENDING_DIR",
             UPDATE_COMPLETION_TEST_DIR,
@@ -784,3 +792,75 @@ class TestInboundIntegration:
         assert OFFSET_TEST_FILE.exists()
         offset = int(OFFSET_TEST_FILE.read_text().strip())
         assert offset == 601
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_photo_album_stages_then_flushes_one_launch(
+        self,
+        mock_tg: MagicMock,
+        mock_launch: MagicMock,
+    ) -> None:
+        """Media-group photos become one later launch containing both paths."""
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        def _download(_file_id: str, dest: Path) -> None:
+            dest.write_text("image")
+
+        mock_tg.download_file.side_effect = _download
+        first = SimpleNamespace(file_id="album_one_12345678")
+        second = SimpleNamespace(file_id="album_two_12345678")
+        message1 = SimpleNamespace(
+            photo=[first],
+            caption="Compare these",
+            caption_entities=None,
+            media_group_id="album-1",
+            message_id=10,
+            chat=SimpleNamespace(id=12345),
+            text=None,
+            document=None,
+        )
+        message2 = SimpleNamespace(
+            photo=[second],
+            caption=None,
+            caption_entities=None,
+            media_group_id="album-1",
+            message_id=11,
+            chat=SimpleNamespace(id=12345),
+            text=None,
+            document=None,
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(update_id=800, callback_query=None, message=message1),
+            SimpleNamespace(update_id=801, callback_query=None, message=message2),
+        ]
+
+        with (
+            patch.object(inbound, "IMAGES_DIR", IMAGES_TEST_DIR),
+            patch.object(inbound, "_register_commands_if_needed"),
+            patch.object(
+                inbound.time,
+                "time",
+                side_effect=[100.0, 100.5, 100.5, 100.5],
+            ),
+        ):
+            assert inbound_main(["--once"]) == 0
+
+        mock_launch.assert_not_called()
+        assert MEDIA_GROUP_TEST_FILE.exists()
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 802
+
+        mock_tg.get_updates.return_value = []
+        with (
+            patch.object(inbound, "IMAGES_DIR", IMAGES_TEST_DIR),
+            patch.object(inbound, "_register_commands_if_needed"),
+            patch.object(inbound.time, "time", return_value=103.0),
+        ):
+            assert inbound_main(["--once"]) == 0
+
+        mock_launch.assert_called_once()
+        prompt = mock_launch.call_args.args[0]
+        assert "Compare these" in prompt
+        assert "1. " in prompt and "album_one_1" in prompt
+        assert "2. " in prompt and "album_two_1" in prompt
+        assert not MEDIA_GROUP_TEST_FILE.exists()
+        assert mock_tg.download_file.call_count == 2

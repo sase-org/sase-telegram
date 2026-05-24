@@ -579,12 +579,46 @@ def find_externally_handled(
     return handled
 
 
+def _normalized_caption(caption: str | None) -> str | None:
+    if not caption:
+        return None
+    normalized = normalize_launch_xprompt_at_refs(caption)
+    return normalized if normalized.strip() else None
+
+
+def build_image_prompt(image_paths: Sequence[Path], caption: str | None) -> str:
+    """Build an agent prompt that references one or more downloaded images."""
+    paths = list(image_paths)
+    if not paths:
+        raise ValueError("at least one image path is required")
+
+    normalized_caption = _normalized_caption(caption)
+    if len(paths) == 1:
+        return build_photo_prompt(paths[0], normalized_caption)
+
+    image_list = "\n".join(f"{idx}. {path}" for idx, path in enumerate(paths, 1))
+    if normalized_caption:
+        return (
+            f"The user sent {len(paths)} images via Telegram with the following "
+            f"caption:\n\n"
+            f"{normalized_caption}\n\n"
+            f"The images have been saved to:\n{image_list}\n"
+            f"Please read the image files and respond to the user's request."
+        )
+    return (
+        f"The user sent {len(paths)} images via Telegram.\n\n"
+        f"The images have been saved to:\n{image_list}\n"
+        f"Please read the image files and describe what you see."
+    )
+
+
 def build_photo_prompt(image_path: Path, caption: str | None) -> str:
-    """Build an agent prompt that references a downloaded image."""
-    if caption:
+    """Build an agent prompt that references one downloaded image."""
+    normalized_caption = _normalized_caption(caption)
+    if normalized_caption:
         return (
             f"The user sent an image via Telegram with the following caption:\n\n"
-            f"{caption}\n\n"
+            f"{normalized_caption}\n\n"
             f"The image has been saved to: {image_path}\n"
             f"Please read the image file and respond to the user's request."
         )
