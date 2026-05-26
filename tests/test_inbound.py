@@ -1320,9 +1320,12 @@ class TestLaunchAgent:
         mock_result.pid = 42
         mock_result.workspace_num = 3
 
-        with patch(
-            "sase.agent.launcher.launch_agents_from_cwd",
-            return_value=[mock_result],
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
         ):
             _launch_agent("List all open beads")
 
@@ -1529,9 +1532,12 @@ class TestLaunchAgent:
             json.dumps({"name": "c"}), encoding="utf-8"
         )
 
-        with patch(
-            "sase.agent.launcher.launch_agents_from_cwd",
-            return_value=[mock_result],
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
         ):
             _launch_agent("List all open beads")
 
@@ -1549,7 +1555,41 @@ class TestLaunchAgent:
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
         assert buttons[1][1].text == "🔄 Retry"
-        assert buttons[1][1].copy_text.text == "List all open beads"
+        assert buttons[1][1].copy_text.text == "%n:c.r1\nList all open beads"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_retry_button_replaces_existing_name_directive(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+        mock_result.agent_name = "c"
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
+        ):
+            _launch_agent("%n:foo List all open beads")
+
+        keyboard = mock_tg.send_message.call_args.kwargs.get("reply_markup")
+        assert keyboard is not None
+        retry_button = keyboard.inline_keyboard[1][1]
+        assert retry_button.text == "🔄 Retry"
+        assert retry_button.copy_text.text == "%n:c.r1 List all open beads"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -1569,7 +1609,7 @@ class TestLaunchAgent:
         mock_result.pid = 42
         mock_result.workspace_num = 3
 
-        long_prompt = "x" * 300
+        long_prompt = "x" * 250
 
         with (
             patch(
@@ -1580,6 +1620,7 @@ class TestLaunchAgent:
                 "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
                 return_value="c",
             ),
+            patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
         ):
             _launch_agent(long_prompt)
 
@@ -1592,7 +1633,7 @@ class TestLaunchAgent:
         assert buttons[1][1].copy_text is None
         mock_pa.add.assert_any_call(
             "retry-c",
-            {"action": "retry", "prompt": long_prompt},
+            {"action": "retry", "prompt": f"%n:c.r1\n{long_prompt}"},
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
@@ -1790,8 +1831,8 @@ class TestLaunchAgent:
         assert kill_keys == ["kill-c.cld-opus", "kill-c.cld-sonnet"]
         for call in mock_pa.add.call_args_list:
             if call.args and call.args[0].startswith("kill-"):
-                # Retry button copies the original (multi-model) prompt so a
-                # single click re-launches the whole fan-out.
+                # Kill retry stores the source prompt so kill confirmation can
+                # allocate a fresh retry name later.
                 assert call.args[1]["prompt"] == "%m(opus,sonnet) Do work"
 
     @patch("sase_telegram.scripts.sase_tg_inbound._record_project_context")
@@ -2625,12 +2666,14 @@ class TestSendKillResult:
         result = SimpleNamespace(success=True, message="Killed")
         kill_info = {"prompt": "short prompt", "chat_id": "12345", "message_id": 1}
 
-        _send_kill_result("a", result, kill_info)
+        with patch("sase.agent.names.allocate_retry_name", return_value="a.r1"):
+            _send_kill_result("a", result, kill_info)
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         assert keyboard.inline_keyboard[0][0].text == "🔄 Retry"
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a.r1\nshort prompt"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -2648,12 +2691,13 @@ class TestSendKillResult:
         long_prompt = "x" * 300
         kill_info = {"prompt": long_prompt, "chat_id": "12345", "message_id": 1}
 
-        _send_kill_result("a", result, kill_info)
+        with patch("sase.agent.names.allocate_retry_name", return_value="a.r1"):
+            _send_kill_result("a", result, kill_info)
 
         # Should store prompt in pending_actions for callback retrieval
         mock_pending.add.assert_called_once_with(
             "retry-a",
-            {"action": "retry", "prompt": long_prompt},
+            {"action": "retry", "prompt": f"%n:a.r1\n{long_prompt}"},
         )
 
         # Should include a callback-based Retry button
@@ -2663,6 +2707,42 @@ class TestSendKillResult:
         btn = keyboard.inline_keyboard[0][0]
         assert btn.text == "🔄 Retry"
         assert btn.callback_data == "retry:a:go"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_artifact_fallback_rewrites_existing_retry_name(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_kill_from_callback
+
+        (tmp_path / "raw_xprompt.md").write_text(
+            "%n:a Do work",
+            encoding="utf-8",
+        )
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_pending.get.return_value = None
+        result = SimpleNamespace(success=True, message="Killed")
+        callback = SimpleNamespace(id="cb1")
+
+        with (
+            patch(
+                "sase.agent.names.find_named_agent",
+                return_value=SimpleNamespace(artifacts_dir=str(tmp_path)),
+            ),
+            patch("sase.agent.running.kill_named_agent", return_value=result),
+            patch("sase.agent.names.allocate_retry_name", return_value="a.r1"),
+        ):
+            _handle_kill_from_callback(callback, "a")
+
+        call_kwargs = mock_tg.send_message.call_args
+        keyboard = call_kwargs.kwargs.get("reply_markup")
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a.r1 Do work"
 
 
 def _running_agent(
@@ -2782,7 +2862,7 @@ class TestHandleRetryFromCallback:
         from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
 
         mock_creds.get_chat_id.return_value = "12345"
-        prompt = "x" * 500
+        prompt = "%n:agent1.r1\n" + ("x" * 500)
         mock_pending.get.return_value = {"action": "retry", "prompt": prompt}
 
         cb = SimpleNamespace(id="cb1")

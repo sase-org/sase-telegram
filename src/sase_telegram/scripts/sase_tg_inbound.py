@@ -841,11 +841,11 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
 
 
 def _get_agent_retry_prompt(name: str) -> str | None:
-    """Read the original prompt for a named agent from its artifact directory.
+    """Read the source prompt for retrying a named agent.
 
     Falls back to raw_xprompt.md when the pending action is missing (e.g. due
-    to a file-level race between concurrent inbound/outbound handlers).
-    Strips auto-assigned ``%n:<name>`` directives so the retry gets a fresh name.
+    to a file-level race between concurrent inbound/outbound handlers).  The
+    caller owns rewriting the prompt with a freshly allocated retry name.
     """
     from sase.agent.names import find_named_agent
 
@@ -862,8 +862,35 @@ def _get_agent_retry_prompt(name: str) -> str | None:
     if not prompt:
         return None
 
-    # Strip auto-assigned %n:<name> directive so the retry gets a fresh name
-    return re.sub(r"^%n:\S+\s*", "", prompt)
+    return prompt
+
+
+def _build_retry_prompt_for_agent(
+    agent_name: str,
+    source_prompt: str | None,
+) -> str | None:
+    """Return Telegram copy/send text for retrying ``agent_name``."""
+    source_prompt = source_prompt.strip() if source_prompt is not None else ""
+    if not source_prompt:
+        return None
+
+    try:
+        from sase.agent.names import allocate_retry_name
+        from sase.agent.retry_prompt import rewrite_retry_prompt_name
+
+        retry_name = allocate_retry_name(agent_name)
+        return rewrite_retry_prompt_name(
+            source_prompt,
+            retry_name,
+            directive_alias="n",
+        )
+    except Exception:
+        log.warning(
+            "Failed to build Telegram retry prompt for agent %s",
+            agent_name,
+            exc_info=True,
+        )
+        return source_prompt
 
 
 def _send_kill_result(
@@ -894,9 +921,10 @@ def _send_kill_result(
     try:
         if result.success:
             escaped_name = escape_markdown_v2(name)
-            retry_prompt = (
+            retry_source_prompt = (
                 kill_info.get("prompt") if kill_info else None
             ) or prompt_fallback
+            retry_prompt = _build_retry_prompt_for_agent(name, retry_source_prompt)
             # Telegram CopyTextButton limit is 256 characters
             keyboard: InlineKeyboardMarkup | None = None
             if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
@@ -977,7 +1005,7 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
 
 
 def _handle_retry_from_callback(callback_query: Any, agent_name: str) -> None:
-    """Handle a Retry button press: send the original prompt as a message."""
+    """Handle a Retry button press: send the stored retry prompt as a message."""
     retry_key = f"retry-{agent_name}"
     retry_info = pending_actions.get(retry_key)
 
@@ -1239,20 +1267,31 @@ def _send_launch_notification(
             vcs_prefix = f"{vcs_tag}"
         fork_text = f"{vcs_prefix}#fork:{agent_name} %w:{agent_name} "
         wait_text = f"{vcs_prefix}%w:{agent_name} "
-        if len(original_prompt) <= _COPY_TEXT_MAX:
+        retry_prompt = _build_retry_prompt_for_agent(agent_name, original_prompt)
+        if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
             retry_button = InlineKeyboardButton(
                 "🔄 Retry",
-                copy_text=CopyTextButton(text=original_prompt),
+                copy_text=CopyTextButton(text=retry_prompt),
             )
-        else:
+        elif retry_prompt:
             pending_actions.add(
                 f"retry-{agent_name}",
-                {"action": "retry", "prompt": original_prompt},
+                {"action": "retry", "prompt": retry_prompt},
             )
             retry_button = InlineKeyboardButton(
                 "🔄 Retry",
                 callback_data=encode("retry", agent_name, "go"),
             )
+        else:
+            retry_button = None
+        agent_buttons = [
+            InlineKeyboardButton(
+                "🗡️ Kill",
+                callback_data=encode("kill", agent_name, "go"),
+            )
+        ]
+        if retry_button is not None:
+            agent_buttons.append(retry_button)
         keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -1265,13 +1304,7 @@ def _send_launch_notification(
                         copy_text=CopyTextButton(text=wait_text),
                     ),
                 ],
-                [
-                    InlineKeyboardButton(
-                        "🗡️ Kill",
-                        callback_data=encode("kill", agent_name, "go"),
-                    ),
-                    retry_button,
-                ],
+                agent_buttons,
             ]
         )
     msg = telegram_client.send_message(
