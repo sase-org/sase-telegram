@@ -185,6 +185,9 @@ def _log_send_diagnostics(notifications: list) -> None:
             ("last_activity", ACTIVITY_FILE),
             ("last_keypress", LAST_KEYPRESS_FILE),
         ]:
+            if path is None:
+                lines.append(f"  {label}: <unset>")
+                continue
             try:
                 val = path.read_text().strip()
                 if label in ("last_activity", "last_keypress"):
