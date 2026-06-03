@@ -59,7 +59,7 @@ Text messages are dispatched in priority order:
 2. **Slash commands** — Messages starting with `/` are agent management commands (registered with `set_my_commands` so they appear in the chat input UI):
    - `/list` — Lists running agents with provider/model and a prompt snippet
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
-   - `/kill <name>` — Terminates the named agent (sends a 🔄 Retry button on success)
+   - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
    - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path

@@ -53,7 +53,7 @@ Each notification is formatted as a Telegram message with:
 | User Question | Question text + options | One button per option + Custom |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |
 | Agent Launched | Provider/model, workspace number, prompt snippet | Fork, Wait, Kill, Retry |
-| Agent Killed | Termination confirmation | Retry |
+| Agent Killed | Termination confirmation | Redo |
 | Error Digest | Error summary | — |
 | Image Generated | Model name | Sends image inline |
 

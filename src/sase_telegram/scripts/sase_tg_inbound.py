@@ -59,14 +59,15 @@ _PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.js
 _MEDIA_GROUPS_PATH = Path.home() / ".sase" / "telegram" / "media_groups.json"
 _MEDIA_GROUP_QUIET_SECONDS = 2.0
 _KNOWN_VCS_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
-_VCS_PROJECT_RE = re.compile(
-    rf"(?:^|(?<=\s)|(?<=[(\"']))#(?P<workflow>{'|'.join(_KNOWN_VCS_WORKFLOWS)})"
-    r"(?:!!|\?\?)?"
-    r"(?:(?::|_)(?P<ref>[A-Za-z0-9][A-Za-z0-9_.~/-]*)|"
-    r"\((?P<paren>[A-Za-z0-9][A-Za-z0-9_.~/-]*)\))"
-    r"(?=\s|$)",
-    re.IGNORECASE,
+_VCS_WORKFLOW_PATTERN = "|".join(_KNOWN_VCS_WORKFLOWS)
+_VCS_PROJECT_PATTERN = (
+    f"(?:^|(?<=\\s)|(?<=[(\\x22']))#(?P<workflow>{_VCS_WORKFLOW_PATTERN})"
+    "(?:!!|\\?\\?)?"
+    "(?:(?::|_)(?P<ref>[A-Za-z0-9][A-Za-z0-9_.~/-]*)|"
+    "\\((?P<paren>[A-Za-z0-9][A-Za-z0-9_.~/-]*)\\))"
+    "(?=\\s|$)"
 )
+_VCS_PROJECT_RE = re.compile(_VCS_PROJECT_PATTERN, re.IGNORECASE)
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 _LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
 
@@ -844,8 +845,8 @@ def _get_agent_retry_prompt(name: str) -> str | None:
     """Read the source prompt for retrying a named agent.
 
     Falls back to raw_xprompt.md when the pending action is missing (e.g. due
-    to a file-level race between concurrent inbound/outbound handlers).  The
-    caller owns rewriting the prompt with a freshly allocated retry name.
+    to a file-level race between concurrent inbound/outbound handlers). The
+    caller owns formatting the prompt for the target Telegram action.
     """
     from sase.agent.names import find_named_agent
 
@@ -893,6 +894,12 @@ def _build_retry_prompt_for_agent(
         return source_prompt
 
 
+def _build_redo_prompt_for_killed_agent(source_prompt: str | None) -> str | None:
+    """Return Telegram copy/send text for redoing a killed agent's prompt."""
+    redo_prompt = source_prompt.strip() if source_prompt is not None else ""
+    return redo_prompt or None
+
+
 def _send_kill_result(
     name: str,
     result: Any,
@@ -921,36 +928,36 @@ def _send_kill_result(
     try:
         if result.success:
             escaped_name = escape_markdown_v2(name)
-            retry_source_prompt = (
+            redo_source_prompt = (
                 kill_info.get("prompt") if kill_info else None
             ) or prompt_fallback
-            retry_prompt = _build_retry_prompt_for_agent(name, retry_source_prompt)
+            redo_prompt = _build_redo_prompt_for_killed_agent(redo_source_prompt)
             # Telegram CopyTextButton limit is 256 characters
             keyboard: InlineKeyboardMarkup | None = None
-            if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
+            if redo_prompt and len(redo_prompt) <= _COPY_TEXT_MAX:
                 keyboard = InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "🔄 Retry",
-                                copy_text=CopyTextButton(text=retry_prompt),
+                                "🔄 Redo",
+                                copy_text=CopyTextButton(text=redo_prompt),
                             ),
                         ]
                     ]
                 )
-            elif retry_prompt:
+            elif redo_prompt:
                 # Prompt too long for CopyTextButton — use a callback button
                 # that sends the prompt as a new message when pressed.
                 retry_key = f"retry-{name}"
                 pending_actions.add(
                     retry_key,
-                    {"action": "retry", "prompt": retry_prompt},
+                    {"action": "retry", "prompt": redo_prompt},
                 )
                 keyboard = InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "🔄 Retry",
+                                "🔄 Redo",
                                 callback_data=encode("retry", name, "go"),
                             ),
                         ]

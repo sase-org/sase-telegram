@@ -1831,8 +1831,7 @@ class TestLaunchAgent:
         assert kill_keys == ["kill-c.cld-opus", "kill-c.cld-sonnet"]
         for call in mock_pa.add.call_args_list:
             if call.args and call.args[0].startswith("kill-"):
-                # Kill retry stores the source prompt so kill confirmation can
-                # allocate a fresh retry name later.
+                # Kill confirmations reuse the source prompt for Redo.
                 assert call.args[1]["prompt"] == "%m(opus,sonnet) Do work"
 
     @patch("sase_telegram.scripts.sase_tg_inbound._record_project_context")
@@ -2654,7 +2653,7 @@ class TestSendKillResult:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_short_prompt_includes_retry_button(
+    def test_short_prompt_includes_redo_button(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -2666,19 +2665,18 @@ class TestSendKillResult:
         result = SimpleNamespace(success=True, message="Killed")
         kill_info = {"prompt": "short prompt", "chat_id": "12345", "message_id": 1}
 
-        with patch("sase.agent.names.allocate_retry_name", return_value="a.r1"):
-            _send_kill_result("a", result, kill_info)
+        _send_kill_result("a", result, kill_info)
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
-        assert keyboard.inline_keyboard[0][0].text == "🔄 Retry"
-        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a.r1\nshort prompt"
+        assert keyboard.inline_keyboard[0][0].text == "🔄 Redo"
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "short prompt"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_long_prompt_uses_callback_retry_button(
+    def test_long_prompt_uses_callback_redo_button(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -2691,27 +2689,26 @@ class TestSendKillResult:
         long_prompt = "x" * 300
         kill_info = {"prompt": long_prompt, "chat_id": "12345", "message_id": 1}
 
-        with patch("sase.agent.names.allocate_retry_name", return_value="a.r1"):
-            _send_kill_result("a", result, kill_info)
+        _send_kill_result("a", result, kill_info)
 
-        # Should store prompt in pending_actions for callback retrieval
+        # Should store the original prompt in pending_actions for callback retrieval.
         mock_pending.add.assert_called_once_with(
             "retry-a",
-            {"action": "retry", "prompt": f"%n:a.r1\n{long_prompt}"},
+            {"action": "retry", "prompt": long_prompt},
         )
 
-        # Should include a callback-based Retry button
+        # Should include a callback-based Redo button.
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         btn = keyboard.inline_keyboard[0][0]
-        assert btn.text == "🔄 Retry"
+        assert btn.text == "🔄 Redo"
         assert btn.callback_data == "retry:a:go"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_artifact_fallback_rewrites_existing_retry_name(
+    def test_artifact_fallback_preserves_existing_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -2735,14 +2732,14 @@ class TestSendKillResult:
                 return_value=SimpleNamespace(artifacts_dir=str(tmp_path)),
             ),
             patch("sase.agent.running.kill_named_agent", return_value=result),
-            patch("sase.agent.names.allocate_retry_name", return_value="a.r1"),
         ):
             _handle_kill_from_callback(callback, "a")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
-        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a.r1 Do work"
+        assert keyboard.inline_keyboard[0][0].text == "🔄 Redo"
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a Do work"
 
 
 def _running_agent(
