@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: sase-org/sase
+          path: .sase-deps/sase
+          token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: sase-org/sase-core
+          path: .sase-deps/sase-core
+          token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python ${{ matrix.python-version }}
+        run: |
+          uv python install ${{ matrix.python-version }}
+          uv venv --python ${{ matrix.python-version }} .venv
+      - name: Install dependencies
+        run: |
+          just install
+          uv pip install --python .venv/bin/python maturin
+          (
+            cd .sase-deps/sase-core/crates/sase_core_py
+            VIRTUAL_ENV="${GITHUB_WORKSPACE}/.venv" \
+              PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+              "${GITHUB_WORKSPACE}/.venv/bin/maturin" develop --release
+          )
+          uv pip install --python .venv/bin/python --no-deps -e .sase-deps/sase
+      - name: Lint
+        if: ${{ matrix.python-version == '3.12' }}
+        run: just lint
+      - name: Run tests
+        run: just test
