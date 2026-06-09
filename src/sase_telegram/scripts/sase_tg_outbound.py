@@ -9,16 +9,12 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from sase.ace.tui_activity import is_idle
-from sase.history.chat import extract_response_from_chat_file
-from sase.core.paths import get_sase_directory
-from sase.core.time import get_timezone
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import format_notification
 from sase_telegram.outbound import get_unsent_notifications, mark_sent
-from sase_telegram.pdf_convert import md_to_pdf
 from sase_telegram.telegram_client import send_document, send_message, send_photo
 
 log = logging.getLogger(__name__)
@@ -31,6 +27,36 @@ _SUMMARY_ID_LIMIT = 5
 
 # Lazily resolved path to ~/.sase/chats/
 _chats_dir: str | None = None
+
+
+def is_idle() -> bool:
+    from sase.ace.tui_activity import is_idle
+
+    return is_idle()
+
+
+def get_sase_directory(name: str) -> str:
+    from sase.core.paths import get_sase_directory
+
+    return get_sase_directory(name)
+
+
+def get_timezone() -> Any:
+    from sase.core.time import get_timezone
+
+    return get_timezone()
+
+
+def extract_response_from_chat_file(chat_path: str) -> str | None:
+    from sase.history.chat import extract_response_from_chat_file
+
+    return extract_response_from_chat_file(chat_path)
+
+
+def md_to_pdf(path: str) -> str | None:
+    from sase_telegram.pdf_convert import md_to_pdf
+
+    return md_to_pdf(path)
 
 
 def _get_chats_dir() -> str:

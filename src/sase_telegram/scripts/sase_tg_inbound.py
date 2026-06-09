@@ -20,7 +20,6 @@ from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_out
 from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
-from sase.integrations.chat_install import start_chat_install_worker
 from sase_telegram.formatting import escape_markdown_v2, markdown_to_telegram_v2
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -90,6 +89,32 @@ class _ProjectBeadEntry:
 @dataclass(frozen=True)
 class _MediaGroupMessageContext:
     chat_id: str
+
+
+@dataclass(frozen=True)
+class _ChatInstallUnavailableResult:
+    status: str = "chat_install_unavailable"
+    message: str = (
+        "Update not started: installed sase package does not provide "
+        "chat_install.command support."
+    )
+
+
+def start_chat_install_worker() -> Any:
+    try:
+        from sase.integrations.chat_install import (
+            start_chat_install_worker as worker,
+        )
+    except ImportError as exc:
+        missing_name = getattr(exc, "name", None)
+        if missing_name in {
+            "sase.integrations",
+            "sase.integrations.chat_install",
+        } or "start_chat_install_worker" in str(exc):
+            return _ChatInstallUnavailableResult()
+        raise
+
+    return worker()
 
 
 def _print_inbound_summary(
@@ -1438,6 +1463,8 @@ def _format_update_ack(result: Any) -> str:
         return "Update not started: could not resolve the primary SASE workspace."
     if result.status == "already_running":
         return "Update already running."
+    if result.status == "chat_install_unavailable":
+        return _ChatInstallUnavailableResult.message
     if result.status == "launched":
         return result.message
     return result.message

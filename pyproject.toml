@@ -6,12 +6,17 @@ build-backend = "hatchling.build"
 name = "sase-telegram"
 version = "0.1.0"
 description = "Telegram integration chop for sase"
+readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "sase>=0.1.0",
     "python-telegram-bot>=21.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/sase-org/sase-telegram"
+Issues = "https://github.com/sase-org/sase-telegram/issues"
 
 [project.optional-dependencies]
 dev = [
