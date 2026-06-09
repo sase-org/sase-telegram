@@ -1,9 +1,15 @@
-name: Release
+name: Publish
 
 on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      publish_existing:
+        description: Publish the existing 0.1.0 release artifacts
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   release:
@@ -13,9 +19,10 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
+      release_created: ${{ steps.release.outputs.release_created || 'false' }}
     steps:
       - uses: googleapis/release-please-action@v5
+        if: ${{ github.event_name == 'push' }}
         id: release
         with:
           token: ${{ secrets.SASE_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -24,7 +31,7 @@ jobs:
 
   build:
     needs: release
-    if: ${{ needs.release.outputs.release_created == 'true' }}
+    if: ${{ needs.release.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish_existing == true) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -66,7 +73,7 @@ jobs:
 
   publish:
     needs: [release, build, install-smoke]
-    if: ${{ needs.release.outputs.release_created == 'true' }}
+    if: ${{ needs.release.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish_existing == true) }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
