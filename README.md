@@ -1,5 +1,6 @@
 # sase-telegram — Telegram Integration Chop for sase
 
+[![PyPI](https://img.shields.io/pypi/v/sase-telegram?logo=pypi&logoColor=white)](https://pypi.org/project/sase-telegram/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/type_checker-mypy-blue.svg)](https://mypy-lang.org/)
 [![pytest](https://img.shields.io/badge/tests-pytest-blue.svg)](https://docs.pytest.org/)
