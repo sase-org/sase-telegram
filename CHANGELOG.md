@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/sase-org/sase-telegram/compare/v0.1.0...v0.1.1) (2026-06-13)
+
+
+### Documentation
+
+* add PyPI version badge ([33a3afe](https://github.com/sase-org/sase-telegram/commit/33a3afefc07064c53282b0727c676f937efd2358))
+
 ## 0.1.0 (2026-06-09)
 
 
