@@ -779,6 +779,63 @@ def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
         )
 
 
+def _is_plain_plan_reject(response: ResponseAction) -> bool:
+    return (
+        response.action_type == "plan"
+        and response.response_data.get("action") == "reject"
+        and "feedback" not in response.response_data
+    )
+
+
+def _plan_reject_agent_name(action: dict[str, Any] | None) -> str | None:
+    if not action:
+        return None
+
+    action_data = action.get("action_data")
+    containers = [action_data, action] if isinstance(action_data, dict) else [action]
+    for container in containers:
+        agent_name = container.get("agent_name")
+        if isinstance(agent_name, str) and agent_name.strip():
+            return agent_name.strip()
+    return None
+
+
+def _kill_agent_after_plan_reject(agent_name: str) -> None:
+    from sase.agent.running import kill_named_agent
+
+    result = kill_named_agent(agent_name)
+    if not getattr(result, "success", False):
+        log.info(
+            "Plan reject kill for agent %s was non-fatal: %s",
+            agent_name,
+            getattr(result, "message", result),
+        )
+
+
+def _handle_post_response_side_effects(
+    response: ResponseAction, action: dict[str, Any] | None
+) -> None:
+    if not _is_plain_plan_reject(response):
+        return
+
+    agent_name = _plan_reject_agent_name(action)
+    if agent_name is None:
+        log.info(
+            "Skipping plan reject kill for %s: no agent_name in pending action",
+            response.notif_id_prefix,
+        )
+        return
+
+    try:
+        _kill_agent_after_plan_reject(agent_name)
+    except Exception:
+        log.warning(
+            "Failed to kill agent %s after Telegram plan reject",
+            agent_name,
+            exc_info=True,
+        )
+
+
 def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle an inline keyboard button press."""
     data_str: str = callback_query.data
@@ -844,10 +901,11 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         pending_actions.remove(response.notif_id_prefix)
         return
 
+    action = pending.get(response.notif_id_prefix)
     _write_response(response)
+    _handle_post_response_side_effects(response, action)
     telegram_client.answer_callback_query(callback_query.id, response.answer_text)
 
-    action = pending.get(response.notif_id_prefix)
     if action:
         telegram_client.edit_message_reply_markup(
             action["chat_id"], action["message_id"], reply_markup=None

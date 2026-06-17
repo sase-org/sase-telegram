@@ -355,7 +355,10 @@ class TestInboundIntegration:
         *,
         choice: str,
         expected_response: dict[str, Any],
-        expected_confirmation: str,
+        expected_confirmation: str | None,
+        expected_answer: str | None = None,
+        agent_name: str | None = "plan.agent",
+        expected_kill: str | None = None,
     ) -> None:
         response_dir = tmp_path / "responses"
         response_dir.mkdir()
@@ -366,15 +369,19 @@ class TestInboundIntegration:
 
         from sase_telegram import pending_actions
 
+        action_data = {
+            "response_dir": str(response_dir),
+            "project_dir": str(project_dir),
+        }
+        if agent_name is not None:
+            action_data["agent_name"] = agent_name
+
         pending_actions.add(
             "abcd1234",
             {
                 "notification_id": "abcd1234-0000-0000-0000-000000000000",
                 "action": "PlanApproval",
-                "action_data": {
-                    "response_dir": str(response_dir),
-                    "project_dir": str(project_dir),
-                },
+                "action_data": action_data,
                 "plan_file": str(plan_file),
                 "message_id": 42,
                 "chat_id": "12345",
@@ -395,21 +402,37 @@ class TestInboundIntegration:
         mock_tg.answer_callback_query.return_value = True
         mock_tg.edit_message_reply_markup.return_value = True
 
-        result = inbound_main(["--once"])
+        with patch("sase.agent.running.kill_named_agent") as mock_kill:
+            result = inbound_main(["--once"])
         assert result == 0
 
         response_file = response_dir / "plan_response.json"
         assert response_file.exists()
         assert json.loads(response_file.read_text()) == expected_response
 
-        mock_tg.send_message.assert_called_once()
-        chat_id, text = mock_tg.send_message.call_args.args[:2]
-        assert chat_id == "12345"
-        assert text == expected_confirmation
-        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
-        copy_button = keyboard.inline_keyboard[0][0]
-        assert copy_button.text == "📋 Plan"
-        assert copy_button.copy_text.text == "sdd/tales/plan.md"
+        mock_tg.answer_callback_query.assert_called_with(
+            "cb_1", expected_answer or expected_confirmation
+        )
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+
+        if expected_confirmation is None:
+            mock_tg.send_message.assert_not_called()
+        else:
+            mock_tg.send_message.assert_called_once()
+            chat_id, text = mock_tg.send_message.call_args.args[:2]
+            assert chat_id == "12345"
+            assert text == expected_confirmation
+            keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+            copy_button = keyboard.inline_keyboard[0][0]
+            assert copy_button.text == "📋 Plan"
+            assert copy_button.copy_text.text == "sdd/tales/plan.md"
+
+        if expected_kill is None:
+            mock_kill.assert_not_called()
+        else:
+            mock_kill.assert_called_once_with(expected_kill)
 
         assert pending_actions.get("abcd1234") is None
 
@@ -440,6 +463,40 @@ class TestInboundIntegration:
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_run_callback_without_killing_agent(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Full flow: plan run callback -> response file and no agent kill."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="run",
+            expected_response={
+                "action": "approve",
+                "commit_plan": False,
+                "run_coder": True,
+            },
+            expected_confirmation="Plan approved",
+            expected_answer="Running coder (no commit)",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_reject_callback_kills_agent(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Full flow: plan reject callback -> response file, cleanup, and kill."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="reject",
+            expected_response={"action": "reject"},
+            expected_confirmation=None,
+            expected_answer="Plan rejected",
+            agent_name="9u.cld",
+            expected_kill="9u.cld",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_plan_epic_callback_sends_copy_confirmation(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
@@ -464,6 +521,65 @@ class TestInboundIntegration:
             expected_response={"action": "legend"},
             expected_confirmation="Legend created",
         )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_plan_feedback_callback_does_not_kill_agent(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Plan feedback starts the two-step flow and does not kill the agent."""
+        from sase_telegram import pending_actions
+        from sase_telegram.inbound import load_awaiting_feedback
+
+        response_dir = tmp_path / "responses"
+        response_dir.mkdir()
+        (response_dir / "plan_request.json").write_text("{}")
+        pending_actions.add(
+            "abcd1234",
+            {
+                "notification_id": "abcd1234-0000-0000-0000-000000000000",
+                "action": "PlanApproval",
+                "action_data": {
+                    "response_dir": str(response_dir),
+                    "agent_name": "9u.cld",
+                },
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+        callback_query = SimpleNamespace(
+            id="cb_feedback",
+            data="plan:abcd1234:feedback",
+            message=SimpleNamespace(message_id=42),
+        )
+        update = SimpleNamespace(
+            update_id=101,
+            callback_query=callback_query,
+            message=None,
+        )
+        mock_tg.get_updates.return_value = [update]
+        mock_tg.answer_callback_query.return_value = True
+        mock_tg.edit_message_reply_markup.return_value = True
+
+        with patch("sase.agent.running.kill_named_agent") as mock_kill:
+            result = inbound_main(["--once"])
+
+        assert result == 0
+        assert not (response_dir / "plan_response.json").exists()
+        awaiting = load_awaiting_feedback("42")
+        assert awaiting is not None
+        assert awaiting["prefix"] == "abcd1234"
+        assert awaiting["action_info"] == {
+            "action_type": "plan",
+            "response_dir": str(response_dir),
+        }
+        mock_tg.answer_callback_query.assert_called_with(
+            "cb_feedback", "Send your feedback as a text message"
+        )
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        mock_kill.assert_not_called()
+        assert pending_actions.get("abcd1234") is not None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_hitl_accept_callback(
