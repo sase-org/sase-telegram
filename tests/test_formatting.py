@@ -246,6 +246,35 @@ class TestFormatPlanApproval:
 
         Path(plan_file).unlink()
 
+    def test_includes_runtime_before_notes_and_plan_body(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("# Short Plan\n\nSome content here.")
+            plan_file = f.name
+
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready for review: test.md"],
+            files=[plan_file],
+            action_data={
+                "response_dir": "/tmp/test",
+                "session_id": "s1",
+                "agent_name": "test_agent",
+                "llm_provider": "claude",
+                "model": "opus",
+                "runtime": "4m32s",
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert text.startswith(
+            "📋 *CLAUDE\\(opus\\) Plan Review*  _@test\\_agent_\n*Runtime:* 4m32s\n\n"
+        )
+        assert text.index("*Runtime:* 4m32s") < text.index("Plan ready")
+        assert text.index("Plan ready") < text.index("*Short Plan*")
+
+        Path(plan_file).unlink()
+
     def test_plan_with_code_blocks_no_triple_backticks_in_blockquote(self):
         """Code blocks inside expandable blockquotes are converted to inline code."""
         # Content must exceed EXPANDABLE_THRESHOLD (500 chars) after conversion

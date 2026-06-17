@@ -349,6 +349,10 @@ def _format_plan_approval(
         plan_title = f"📋 *{label} Plan Review*"
     else:
         plan_title = "📋 *Plan Review*"
+    header_text = f"{plan_title}{name_line}"
+    runtime = n.action_data.get("runtime")
+    if runtime:
+        header_text += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
 
     plan_content = ""
     if n.files:
@@ -360,7 +364,7 @@ def _format_plan_approval(
 
     if plan_content:
         converted = markdown_to_telegram_v2(plan_content)
-        header = f"{plan_title}{name_line}\n\n{notes_text}\n\n"
+        header = f"{header_text}\n\n{notes_text}\n\n"
 
         if len(converted) > EXPANDABLE_THRESHOLD:
             # Telegram's MarkdownV2 parser splits expandable blockquotes
@@ -395,7 +399,7 @@ def _format_plan_approval(
         if n.files:
             attachments.append(n.files[0])
     else:
-        text = f"{plan_title}{name_line}\n\n{notes_text}"
+        text = f"{header_text}\n\n{notes_text}"
 
     row1 = [
         InlineKeyboardButton(
