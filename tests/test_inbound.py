@@ -1338,6 +1338,85 @@ class TestLaunchAgent:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_success_sends_confirmation_without_default_llm_provider(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = SimpleNamespace(pid=42, workspace_num=3)
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch(
+                "sase.llm_provider.registry.get_default_provider_name",
+                side_effect=RuntimeError(
+                    "No LLM provider is available. Install a provider plugin "
+                    "or set llm_provider.provider explicitly."
+                ),
+            ),
+            patch(
+                "sase.llm_provider.registry.get_provider",
+                side_effect=AssertionError("default provider fallback should stop"),
+            ),
+        ):
+            _launch_agent("List all open beads")
+
+        mock_tg.send_message.assert_called_once()
+        call_args = mock_tg.send_message.call_args
+        assert call_args[0][0] == "12345"
+        assert "Agent Launched" in call_args[0][1]
+        assert "List all open beads" in call_args[0][1]
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_success_uses_explicit_model_label_without_default_llm_provider(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = SimpleNamespace(pid=42, workspace_num=3)
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch(
+                "sase.llm_provider.registry.resolve_model_provider",
+                return_value=(None, "opus"),
+            ) as mock_resolve,
+            patch(
+                "sase.llm_provider.registry.get_default_provider_name",
+                side_effect=RuntimeError(
+                    "No LLM provider is available. Install a provider plugin "
+                    "or set llm_provider.provider explicitly."
+                ),
+            ),
+        ):
+            _launch_agent("%model:opus List all open beads")
+
+        mock_resolve.assert_called_once_with("opus")
+        mock_tg.send_message.assert_called_once()
+        call_args = mock_tg.send_message.call_args
+        assert call_args[0][0] == "12345"
+        assert "opus Launched" in call_args[0][1]
+        assert "List all open beads" in call_args[0][1]
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_failure_sends_error(
         self,
         mock_creds: MagicMock,

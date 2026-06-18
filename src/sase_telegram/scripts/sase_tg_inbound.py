@@ -1292,6 +1292,43 @@ def _launch_result_artifacts_dir(result: Any) -> Path | None:
     )
 
 
+def _launch_provider_model_label(directives: Any | None) -> str:
+    """Return the launch display label without requiring provider autodetection."""
+    from sase.llm_provider.registry import (
+        format_provider_model_label,
+        get_default_provider_name,
+        get_provider,
+        resolve_model_provider,
+    )
+
+    explicit_model = directives.model if directives is not None else None
+    if explicit_model:
+        try:
+            provider, model = resolve_model_provider(explicit_model)
+            if provider is None:
+                provider = get_default_provider_name()
+            return format_provider_model_label(provider, model)
+        except Exception:
+            log.warning(
+                "Falling back to explicit launch model label %r",
+                explicit_model,
+                exc_info=True,
+            )
+            return explicit_model
+
+    try:
+        provider = get_default_provider_name()
+        model = get_provider().resolve_model_name()
+        return format_provider_model_label(provider, model)
+    except Exception:
+        log.warning(
+            "Falling back to generic launch label because no LLM provider "
+            "could be resolved",
+            exc_info=True,
+        )
+        return "Agent"
+
+
 def _send_launch_notification(
     *,
     slot_prompt: str,
@@ -1304,12 +1341,6 @@ def _send_launch_notification(
     resolved_agent_name: str | None,
 ) -> None:
     """Send one Telegram launch notification for a spawned agent."""
-    from sase.llm_provider.registry import (
-        format_provider_model_label,
-        get_default_provider_name,
-        get_provider,
-        resolve_model_provider,
-    )
     from sase.xprompt.directives import extract_prompt_directives
 
     if single_directives is not None:
@@ -1326,13 +1357,7 @@ def _send_launch_notification(
         directive_name = directives.name if directives is not None else None
         agent_name = resolved_agent_name or directive_name
 
-    if directives is not None and directives.model:
-        provider, model = resolve_model_provider(directives.model)
-        provider = provider or get_default_provider_name()
-    else:
-        provider = get_default_provider_name()
-        model = get_provider().resolve_model_name()
-    label = format_provider_model_label(provider, model)
+    label = _launch_provider_model_label(directives)
 
     display = slot_prompt[:200] + ("..." if len(slot_prompt) > 200 else "")
     escaped_label = escape_markdown_v2(label)
