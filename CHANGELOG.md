@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.2](https://github.com/sase-org/sase-telegram/compare/v0.1.1...v0.1.2) (2026-06-18)
+
+
+### Features
+
+* show planner runtime in plan review messages ([5cfc480](https://github.com/sase-org/sase-telegram/commit/5cfc48094f7d314f5174673a309a7b998d0fbf8f))
+
+
+### Bug Fixes
+
+* keep Telegram launch notifications best-effort ([74bdd1d](https://github.com/sase-org/sase-telegram/commit/74bdd1d7feb02d11fe89fee37407f4a3109325af))
+* kill agent after plain Telegram plan rejection ([36b2d25](https://github.com/sase-org/sase-telegram/commit/36b2d257d87f567b5e7fcc77e8c52ad8ed511ffe))
+
 ## [0.1.1](https://github.com/sase-org/sase-telegram/compare/v0.1.0...v0.1.1) (2026-06-13)
 
 
