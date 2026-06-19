@@ -1380,7 +1380,9 @@ def _send_launch_notification(
             if _prompt_has_pr_xprompt(slot_prompt):
                 vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
             vcs_prefix = f"{vcs_tag}"
-        fork_text = f"{vcs_prefix}#fork:{agent_name} %w:{agent_name} "
+        # #fork:<name> implies %w:<name>, so the fork button omits the
+        # redundant explicit wait. The Wait button below stays a pure wait.
+        fork_text = f"{vcs_prefix}#fork:{agent_name} "
         wait_text = f"{vcs_prefix}%w:{agent_name} "
         retry_prompt = _build_retry_prompt_for_agent(agent_name, original_prompt)
         if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
@@ -1819,7 +1821,8 @@ def _handle_fork_command() -> None:
             vcs_tag = extract_vcs_workflow_tag(a.prompt)
             if vcs_tag:
                 vcs_prefix = vcs_tag
-        fork_text = f"{vcs_prefix}#fork:{name} %w:{name} "
+        # #fork:<name> implies %w:<name>; no explicit wait directive needed.
+        fork_text = f"{vcs_prefix}#fork:{name} "
         buttons.append(
             [
                 InlineKeyboardButton(

@@ -1584,7 +1584,7 @@ class TestLaunchAgent:
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].text == "🍴 Fork"
-        assert buttons[0][0].copy_text.text == "#fork:c %w:c "
+        assert buttons[0][0].copy_text.text == "#fork:c "
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
 
@@ -1627,7 +1627,7 @@ class TestLaunchAgent:
         assert len(buttons) == 2
         assert len(buttons[0]) == 2
         assert buttons[0][0].text == "🍴 Fork"
-        assert buttons[0][0].copy_text.text == "#fork:c %w:c "
+        assert buttons[0][0].copy_text.text == "#fork:c "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "%w:c "
         assert len(buttons[1]) == 2
@@ -1750,7 +1750,7 @@ class TestLaunchAgent:
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].text == "🍴 Fork"
-        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo %w:foo "
+        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
@@ -1797,7 +1797,7 @@ class TestLaunchAgent:
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].text == "🍴 Fork"
-        assert buttons[0][0].copy_text.text == "#gh:@foo #fork:foo %w:foo "
+        assert buttons[0][0].copy_text.text == "#gh:@foo #fork:foo "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:@foo %w:foo "
 
@@ -1839,7 +1839,7 @@ class TestLaunchAgent:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         buttons = keyboard.inline_keyboard
-        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo %w:foo "
+        assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo "
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
