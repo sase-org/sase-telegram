@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/sase-org/sase-telegram/compare/v0.1.2...v0.1.3) (2026-06-23)
+
+
+### Features
+
+* **inbound:** copy `#fork:<name>` without redundant `%w:<name>` ([b6288f9](https://github.com/sase-org/sase-telegram/commit/b6288f91d66e2af0cc8bb20ee04018c9567e8693))
+
+
+### Documentation
+
+* update multi-model fanout examples ([535273b](https://github.com/sase-org/sase-telegram/commit/535273bffb9e54c9283e889fbaefd5fbf4db0d88))
+
 ## [0.1.2](https://github.com/sase-org/sase-telegram/compare/v0.1.1...v0.1.2) (2026-06-18)
 
 
