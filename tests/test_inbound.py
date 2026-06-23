@@ -1851,7 +1851,7 @@ class TestLaunchAgent:
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        # %m(opus,sonnet) must dispatch through ``launch_agents_from_cwd``
+        # %{%m:opus | %m:sonnet} must dispatch through ``launch_agents_from_cwd``
         # ONCE — never per-model — so workspace allocation, naming, and
         # retries all happen inside one shared execute_launch_plan invocation.
         from sase_telegram.scripts.sase_tg_inbound import _launch_agent
@@ -1879,14 +1879,14 @@ class TestLaunchAgent:
                 return_value=slot_prompts,
             ),
         ):
-            _launch_agent("%m(opus,sonnet) Do work")
+            _launch_agent("%{%m:opus | %m:sonnet} Do work")
 
         # The canonical pipeline must be called exactly once with the original
         # multi-model prompt — not split per-model upstream.
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
         assert not launched_prompt.startswith("%n:")
-        assert "%m(opus,sonnet)" in launched_prompt
+        assert "%{%m:opus | %m:sonnet}" in launched_prompt
         assert "Do work" in launched_prompt
 
         # One Telegram launch notification per spawned agent, with the
@@ -1911,7 +1911,7 @@ class TestLaunchAgent:
         for call in mock_pa.add.call_args_list:
             if call.args and call.args[0].startswith("kill-"):
                 # Kill confirmations reuse the source prompt for Redo.
-                assert call.args[1]["prompt"] == "%m(opus,sonnet) Do work"
+                assert call.args[1]["prompt"] == "%{%m:opus | %m:sonnet} Do work"
 
     @patch("sase_telegram.scripts.sase_tg_inbound._record_project_context")
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
@@ -1940,7 +1940,7 @@ class TestLaunchAgent:
         photo.file_id = "abc123"
         message = MagicMock()
         message.photo = [photo]
-        message.caption = "%m(opus,sonnet) describe this"
+        message.caption = "%{%m:opus | %m:sonnet} describe this"
         message.caption_entities = []
 
         with (
@@ -1969,7 +1969,7 @@ class TestLaunchAgent:
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
         assert not launched_prompt.startswith("%n:")
-        assert "%m(opus,sonnet)" in launched_prompt
+        assert "%{%m:opus | %m:sonnet}" in launched_prompt
         assert "describe this" in launched_prompt
 
         # Two notifications, one per spawned agent.

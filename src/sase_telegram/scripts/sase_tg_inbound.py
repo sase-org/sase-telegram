@@ -1134,8 +1134,9 @@ def _prompt_has_pr_xprompt(prompt: str) -> bool:
 def _launch_agents_with_notifications(original_prompt: str) -> None:
     """Launch one or more agents via the canonical pipeline and notify Telegram.
 
-    Unifies the single-agent and multi-model fan-out paths: ``%m(opus,sonnet)``
-    and friends are dispatched through ``launch_agents_from_cwd`` (plural) so
+    Unifies the single-agent and multi-model fan-out paths:
+    ``%{%m:opus | %m:sonnet}`` and friends are dispatched through
+    ``launch_agents_from_cwd`` (plural) so
     workspace allocation, naming, and retries follow the same retry-aware code
     path as every other multi-model launch surface.  One Telegram notification
     is emitted per spawned ``AgentLaunchResult``.

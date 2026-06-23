@@ -58,7 +58,7 @@ Installing sase-telegram adds the following commands:
 - **Agent launching** — send a text message to spawn a new sase agent from Telegram
 - **Auto-naming** — agents launched from Telegram automatically get assigned names
 - **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
-- **Multi-model directives** — use `%m(opus,sonnet)` to launch the same prompt across multiple models
+- **Multi-model directives** — use `%{%m:opus | %m:sonnet}` to launch the same prompt across multiple models
 - **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — `/list`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)

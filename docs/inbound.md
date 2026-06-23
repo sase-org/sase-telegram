@@ -93,7 +93,7 @@ When a text message or photo triggers an agent launch:
 
 - **XPrompt expansion**: References like `#mentor` or `#gh(...)` in the message are expanded
 - **VCS shorthand**: Telegram launch prompts can use `#gh@sase`; it is normalized to `#gh:sase` before launch
-- **Multi-model directives**: `%m(opus,sonnet)` launches the prompt across multiple models
+- **Multi-model directives**: `%{%m:opus | %m:sonnet}` launches the prompt across multiple models
 - **Auto-naming**: Agents launched from Telegram are automatically assigned names
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts
   them using Telegram's entity metadata
