@@ -11,8 +11,6 @@
 integration. It sends notifications to Telegram when you're away from the TUI, and lets you respond to plan approvals,
 HITL requests, user questions, and even launch new agents — all from Telegram.
 
-<!-- Tiny field note: messages over 4096 chars are just novels wearing notification hats. -->
-
 ## Installation
 
 ```bash
