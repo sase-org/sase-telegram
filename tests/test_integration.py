@@ -26,6 +26,7 @@ MEDIA_GROUP_TEST_FILE = Path("/tmp/test_integration_media_groups.json")
 OUTBOUND_LOCK_TEST_FILE = Path("/tmp/test_integration_outbound.lock")
 UPDATE_COMPLETION_TEST_DIR = Path("/tmp/test_integration_update_completions")
 IMAGES_TEST_DIR = Path("/tmp/test_integration_images")
+CORE_PENDING_TEST_FILE = Path("/tmp/test_integration_core_pending.json")
 
 
 def _cleanup_files() -> None:
@@ -37,6 +38,7 @@ def _cleanup_files() -> None:
         AWAITING_TEST_FILE,
         MEDIA_GROUP_TEST_FILE,
         OUTBOUND_LOCK_TEST_FILE,
+        CORE_PENDING_TEST_FILE,
     ]:
         f.unlink(missing_ok=True)
     shutil.rmtree(UPDATE_COMPLETION_TEST_DIR, ignore_errors=True)
@@ -82,6 +84,16 @@ def _patch_paths():
         patch(
             "sase_telegram.scripts.sase_tg_inbound._UPDATE_COMPLETION_PENDING_DIR",
             UPDATE_COMPLETION_TEST_DIR,
+        ),
+        # Isolate the shared host pending-action store and point its legacy
+        # source at the plugin's test pending file (mirrors production wiring).
+        patch(
+            "sase.notifications.pending_actions.PENDING_ACTIONS_PATH",
+            CORE_PENDING_TEST_FILE,
+        ),
+        patch(
+            "sase.notifications.pending_actions.LEGACY_TELEGRAM_PENDING_ACTIONS_PATH",
+            PENDING_TEST_FILE,
         ),
     ]
     for p in patchers:
@@ -222,6 +234,48 @@ class TestOutboundIntegration:
         assert "sent=1" in captured.out
         assert "pending_action_writes=1" in captured.out
         assert f"ids={n.id[:8]}" in captured.out
+
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
+    def test_registers_telegram_transport_in_shared_store(
+        self,
+        mock_chat_id: MagicMock,
+        _mock_idle: MagicMock,
+        mock_load: MagicMock,
+        mock_send: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Sending a plan notification records a Telegram transport in the store."""
+        from sase.notifications import pending_actions as core_pending
+
+        mock_chat_id.return_value = "12345"
+        mock_send.return_value = MagicMock(message_id=99)
+
+        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
+
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            action_data={"response_dir": str(tmp_path), "session_id": "s1"},
+            files=[str(tmp_path / "plan.md")],
+        )
+        # The host store entry exists because the notification was registered
+        # when it was appended; model that here.
+        core_pending.register_notification(n, now=10.0)
+        mock_load.return_value = [n]
+
+        assert outbound_main([]) == 0
+
+        store = core_pending.read_pending_action_store()
+        entry = store["actions"][n.id[:8]]
+        telegram = next(t for t in entry["transports"] if t["transport"] == "telegram")
+        assert telegram["record"] == {"chat_id": "12345", "message_id": 99}
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
@@ -448,6 +502,149 @@ class TestInboundIntegration:
         assert "tg_inbound:" in captured.out
         assert "updates=0" in captured.out
         assert "reason=no_updates" in captured.out
+
+    def _register_handled_shared_plan(self, response_dir: Path, plan_file: Path) -> str:
+        """Seed a plan action that is registered + already_handled in the store."""
+        from sase.notifications import pending_actions as core_pending
+        from sase.notifications.models import Notification
+
+        notif_id = "abcd1234-0000-0000-0000-000000000000"
+        action_data = {
+            "response_dir": str(response_dir),
+            "agent_name": "plan.agent",
+        }
+        n = Notification(
+            id=notif_id,
+            timestamp="2026-05-06T12:00:00+00:00",
+            sender="plan",
+            files=[str(plan_file)],
+            action="PlanApproval",
+            action_data=action_data,
+        )
+        # Far-future timestamps keep the entry from looking stale, so the test
+        # exercises the already_handled state rather than deadline expiry.
+        core_pending.register_notification(n, now=2_000_000_000.0)
+        core_pending.merge_transport_record(
+            n.id,
+            "telegram",
+            {"chat_id": "12345", "message_id": 42},
+            now=2_000_000_000.0,
+        )
+        core_pending.mark_already_handled(
+            n.id, source="auto_approve", action="approve", now=2_000_000_001.0
+        )
+        from sase_telegram import pending_actions
+
+        pending_actions.add(
+            "abcd1234",
+            {
+                "notification_id": notif_id,
+                "action": "PlanApproval",
+                "action_data": action_data,
+                "plan_file": str(plan_file),
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+        return notif_id
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_shared_store_handled_dismisses_keyboard(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """An auto-approved plan's stale keyboard is removed via shared state.
+
+        The response dir still looks pending on disk (the auto path never wrote
+        a response there), so only the shared already_handled state can drive
+        cleanup.
+        """
+        from sase_telegram import pending_actions
+
+        response_dir = tmp_path / "responses"
+        response_dir.mkdir()
+        (response_dir / "plan_request.json").write_text("{}")
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan\n")
+        self._register_handled_shared_plan(response_dir, plan_file)
+
+        mock_tg.get_updates.return_value = []
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        assert pending_actions.get("abcd1234") is None
+        assert not (response_dir / "plan_response.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_callback_on_already_handled_action_is_rejected(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """A late button press loses the race to an already-resolved plan."""
+        from sase_telegram import pending_actions
+
+        response_dir = tmp_path / "responses"
+        response_dir.mkdir()
+        (response_dir / "plan_request.json").write_text("{}")
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan\n")
+        self._register_handled_shared_plan(response_dir, plan_file)
+
+        callback_query = SimpleNamespace(
+            id="cb_1",
+            data="plan:abcd1234:approve",
+            message=SimpleNamespace(message_id=42),
+        )
+        update = SimpleNamespace(
+            update_id=100, callback_query=callback_query, message=None
+        )
+        mock_tg.get_updates.return_value = [update]
+        mock_tg.answer_callback_query.return_value = True
+        mock_tg.edit_message_reply_markup.return_value = True
+
+        assert inbound_main(["--once"]) == 0
+
+        # No competing response file is written behind the resolved action.
+        assert not (response_dir / "plan_response.json").exists()
+        mock_tg.answer_callback_query.assert_called_once_with(
+            "cb_1", "This action has already been handled"
+        )
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        assert pending_actions.get("abcd1234") is None
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_legacy_filesystem_handled_still_cleaned(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Legacy records with no shared state still clean via filesystem checks."""
+        from sase_telegram import pending_actions
+
+        response_dir = tmp_path / "responses"
+        response_dir.mkdir()
+        (response_dir / "plan_request.json").write_text("{}")
+        # Handled on disk, but never registered in the shared store.
+        (response_dir / "plan_response.json").write_text("{}")
+        pending_actions.add(
+            "abcd1234",
+            {
+                "notification_id": "abcd1234-0000-0000-0000-000000000000",
+                "action": "PlanApproval",
+                "action_data": {"response_dir": str(response_dir)},
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+        mock_tg.get_updates.return_value = []
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        assert pending_actions.get("abcd1234") is None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_processes_plan_approve_callback(
@@ -956,7 +1153,7 @@ class TestInboundIntegration:
             patch.object(
                 inbound.time,
                 "time",
-                side_effect=[100.0, 100.5, 100.5, 100.5],
+                side_effect=[100.0, 100.5, 100.5, 100.5, 100.5],
             ),
         ):
             assert inbound_main(["--once"]) == 0

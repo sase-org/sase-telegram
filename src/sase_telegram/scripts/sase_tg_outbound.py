@@ -29,6 +29,30 @@ _SUMMARY_ID_LIMIT = 5
 _chats_dir: str | None = None
 
 
+def _register_shared_transport(n: Any, message_id: int, chat_id: str) -> None:
+    """Record this Telegram message in the shared host pending-action store.
+
+    Lets cross-surface cleanup (e.g. auto-approved plans whose keyboard
+    outlived the resolution) find and dismiss the inline keyboard. The legacy
+    Telegram pending-action file is still written, so a failure here must not
+    break the callback path — it is logged and swallowed.
+    """
+    try:
+        from sase.notifications.pending_actions import merge_transport_record
+
+        merge_transport_record(
+            n.id,
+            "telegram",
+            {"chat_id": chat_id, "message_id": message_id},
+        )
+    except Exception:
+        log.warning(
+            "Failed to register Telegram transport for notification %s",
+            n.id[:8],
+            exc_info=True,
+        )
+
+
 def is_idle() -> bool:
     from sase.ace.tui_activity import is_idle
 
@@ -409,6 +433,7 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                 entry["plan_file"] = n.files[0]
             pending_actions.add(n.id[:8], entry)
             pending_action_writes += 1
+            _register_shared_transport(n, msg.message_id, chat_id)
 
         pdf_temps: list[Path] = []
         response_temps: list[Path] = []

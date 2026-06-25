@@ -579,6 +579,65 @@ def find_externally_handled(
     return handled
 
 
+_TELEGRAM_TRANSPORTS = ("telegram", "telegram_legacy")
+_RESOLVED_SHARED_STATES = {"already_handled", "stale"}
+
+
+def _telegram_transport_record(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the Telegram transport record (chat_id + message_id) for *entry*."""
+    transports = entry.get("transports")
+    if not isinstance(transports, list):
+        return None
+    for item in transports:
+        if (
+            not isinstance(item, dict)
+            or item.get("transport") not in _TELEGRAM_TRANSPORTS
+        ):
+            continue
+        record = item.get("record")
+        if not isinstance(record, dict):
+            continue
+        if record.get("chat_id") is not None and record.get("message_id") is not None:
+            return record
+    return None
+
+
+def _shared_action_resolved(entry: dict[str, Any], now: float) -> bool:
+    """Return True when a shared pending-action entry is no longer actionable."""
+    if entry.get("state") in _RESOLVED_SHARED_STATES:
+        return True
+    deadline = entry.get("stale_deadline_unix")
+    return isinstance(deadline, (int, float)) and deadline <= now
+
+
+def find_shared_handled_transports(
+    store: dict[str, Any], *, now: float
+) -> list[tuple[str, int, str]]:
+    """Find Telegram messages whose shared pending action is already resolved.
+
+    Reads the shared host pending-action store (with legacy Telegram records
+    merged in) and returns ``(prefix, message_id, chat_id)`` for entries that
+    were handled, went stale, or expired and still carry a Telegram transport
+    record. The inbound chop removes those inline keyboards.
+    """
+    results: list[tuple[str, int, str]] = []
+    actions = store.get("actions")
+    if not isinstance(actions, dict):
+        return results
+    for prefix, entry in actions.items():
+        if not isinstance(entry, dict):
+            continue
+        record = _telegram_transport_record(entry)
+        if record is None or not _shared_action_resolved(entry, now):
+            continue
+        try:
+            message_id = int(record["message_id"])
+        except (TypeError, ValueError):
+            continue
+        results.append((str(prefix), message_id, str(record["chat_id"])))
+    return results
+
+
 def _normalized_caption(caption: str | None) -> str | None:
     if not caption:
         return None

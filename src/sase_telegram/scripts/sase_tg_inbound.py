@@ -30,6 +30,7 @@ from sase_telegram.inbound import (
     clear_awaiting_feedback_by_prefix,
     confirmation_text,
     find_externally_handled,
+    find_shared_handled_transports,
     get_last_offset,
     make_image_filename,
     normalize_launch_xprompt_at_refs,
@@ -836,6 +837,103 @@ def _handle_post_response_side_effects(
         )
 
 
+def _shared_action_resolution(prefix: str) -> str | None:
+    """Return the shared-store resolution for a notification prefix.
+
+    Returns ``"already_handled"`` or ``"stale"`` when the shared host store
+    (with legacy records merged in) reports the action is no longer actionable,
+    or ``None`` when the store has no opinion / is unavailable. Best-effort so
+    the legacy callback path keeps working against older `sase` installs.
+    """
+    try:
+        from sase.notifications.pending_actions import (
+            read_pending_action_store,
+            resolve_prefix,
+        )
+    except Exception:
+        return None
+    try:
+        identity = resolve_prefix(prefix)
+        if identity.resolution in {"missing", "ambiguous_prefix", "duplicate_full_id"}:
+            return None
+        store = read_pending_action_store(include_legacy=True)
+    except Exception:
+        log.warning("Failed to resolve shared pending-action state", exc_info=True)
+        return None
+
+    entry = next(
+        (
+            value
+            for value in store.get("actions", {}).values()
+            if isinstance(value, dict)
+            and value.get("notification_id") == identity.notification_id
+        ),
+        None,
+    )
+    if not isinstance(entry, dict):
+        return None
+    state = entry.get("state")
+    if state in {"already_handled", "stale"}:
+        return str(state)
+    deadline = entry.get("stale_deadline_unix")
+    if isinstance(deadline, (int, float)) and deadline <= time.time():
+        return "stale"
+    return None
+
+
+def _resolve_callback_already_handled(
+    data_str: str, pending: dict[str, Any]
+) -> tuple[str, dict[str, Any], str] | None:
+    """Return ``(prefix, action, resolution)`` when a callback is already resolved.
+
+    Only notification-backed callbacks (plan/hitl/question) with a live pending
+    record are guarded — agent management callbacks and unknown actions fall
+    through to the existing handlers.
+    """
+    try:
+        cb = decode(data_str)
+    except ValueError:
+        return None
+    if cb.action_type not in {"plan", "hitl", "question"}:
+        return None
+    action = pending.get(cb.notif_id_prefix)
+    if action is None:
+        return None
+    resolution = _shared_action_resolution(cb.notif_id_prefix)
+    if resolution is None:
+        return None
+    return cb.notif_id_prefix, action, resolution
+
+
+def _answer_resolved_callback(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    resolution: str,
+) -> None:
+    """Answer + dismiss a callback whose action was resolved elsewhere."""
+    message = (
+        "This request has expired"
+        if resolution == "stale"
+        else "This action has already been handled"
+    )
+    try:
+        telegram_client.answer_callback_query(callback_query.id, message)
+    except Exception:
+        pass
+    message_id = action.get("message_id")
+    chat_id = action.get("chat_id")
+    if message_id is not None and chat_id is not None:
+        try:
+            telegram_client.edit_message_reply_markup(
+                chat_id, message_id, reply_markup=None
+            )
+        except Exception:
+            pass
+    pending_actions.remove(prefix)
+    clear_awaiting_feedback_by_prefix(prefix)
+
+
 def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle an inline keyboard button press."""
     data_str: str = callback_query.data
@@ -854,6 +952,18 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             return
     except ValueError:
         pass
+
+    # Race guard: if this notification action was resolved outside Telegram
+    # (auto-approved plan, or handled in the TUI/CLI/mobile), do not start a
+    # feedback flow or write a competing response. Dismiss the defunct keyboard
+    # and answer the user deterministically.
+    guard = _resolve_callback_already_handled(data_str, pending)
+    if guard is not None:
+        guard_prefix, guard_action, guard_resolution = guard
+        _answer_resolved_callback(
+            callback_query, guard_action, guard_prefix, guard_resolution
+        )
+        return
 
     # Check two-step first (feedback/custom -> save awaiting state)
     twostep = process_callback_twostep(data_str, pending)
@@ -2367,6 +2477,45 @@ def _register_commands_if_needed() -> None:
         )
 
 
+def _dismiss_resolved_button(prefix: str, message_id: int, chat_id: str) -> None:
+    """Remove a resolved action's inline keyboard and drop its legacy record."""
+    try:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=None
+        )
+    except Exception:
+        pass  # Message may have been deleted or already edited
+    pending_actions.remove(prefix)
+    clear_awaiting_feedback_by_prefix(prefix)
+
+
+def _find_shared_handled_transports(
+    live_prefixes: set[str],
+) -> list[tuple[str, int, str]]:
+    """Return Telegram messages whose shared pending action is resolved.
+
+    Gated on ``live_prefixes`` (the prefixes that still have a Telegram pending
+    record) so a resolved-but-retained shared row is dismissed exactly once
+    rather than re-edited on every tick until it goes stale. Best-effort: an
+    older installed `sase` package may lack the shared store, so any failure
+    degrades to the legacy filesystem cleanup path.
+    """
+    try:
+        from sase.notifications.pending_actions import read_pending_action_store
+    except Exception:
+        return []
+    try:
+        store = read_pending_action_store(include_legacy=True)
+    except Exception:
+        log.warning("Failed to read shared pending-action store", exc_info=True)
+        return []
+    return [
+        candidate
+        for candidate in find_shared_handled_transports(store, now=time.time())
+        if candidate[0] in live_prefixes
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Inbound Telegram chop entry point."""
     logging.basicConfig(
@@ -2454,16 +2603,24 @@ def main(argv: list[str] | None = None) -> int:
     _flush_ready_media_groups()
 
     # Clean up pending actions handled by the TUI (remove stale buttons).
+    # Legacy filesystem checks run first as the fallback for records that do
+    # not yet carry shared transport state.
     handled = find_externally_handled(pending)
+    handled_prefixes: set[str] = set()
     for prefix, message_id, chat_id in handled:
-        try:
-            telegram_client.edit_message_reply_markup(
-                chat_id, message_id, reply_markup=None
-            )
-        except Exception:
-            pass  # Message may have been deleted or already edited
-        pending_actions.remove(prefix)
-        clear_awaiting_feedback_by_prefix(prefix)
+        _dismiss_resolved_button(prefix, message_id, chat_id)
+        handled_prefixes.add(prefix)
+
+    # Cross-surface cleanup via the shared pending-action store: covers plans
+    # resolved outside the Telegram callback path (auto-approved `%auto` plans,
+    # or actions handled in the TUI/CLI/mobile) whose keyboard outlived them.
+    # Gated on the live Telegram pending records so each is dismissed once.
+    live_prefixes = set(pending_actions.list_all())
+    for prefix, message_id, chat_id in _find_shared_handled_transports(live_prefixes):
+        if prefix in handled_prefixes:
+            continue
+        _dismiss_resolved_button(prefix, message_id, chat_id)
+        handled_prefixes.add(prefix)
 
     _print_inbound_summary(
         offset=offset,
@@ -2475,7 +2632,7 @@ def main(argv: list[str] | None = None) -> int:
         document_count=document_count,
         unsupported_count=unsupported_count,
         ready_completions_sent=ready_completions_sent,
-        pending_actions_cleaned=len(stale_pending) + len(handled),
+        pending_actions_cleaned=len(stale_pending) + len(handled_prefixes),
         reason=None if updates else "no_updates",
     )
     return 0

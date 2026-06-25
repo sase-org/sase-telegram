@@ -13,6 +13,7 @@ from sase_telegram.inbound import (
     clear_awaiting_feedback,
     clear_awaiting_feedback_by_prefix,
     find_externally_handled,
+    find_shared_handled_transports,
     get_last_offset,
     load_all_awaiting_feedback,
     load_awaiting_feedback,
@@ -3469,3 +3470,90 @@ class TestFindExternallyHandled:
         pending = _make_pending_hitl("hitl0003", str(tmp_path))
         result = find_externally_handled(pending)
         assert result == [("hitl0003", 42, "12345")]
+
+
+def _shared_entry(
+    *,
+    state: str = "available",
+    transport: str = "telegram",
+    chat_id: str | None = "12345",
+    message_id: int | None = 42,
+    stale_deadline_unix: float = 10_000.0,
+) -> dict[str, object]:
+    record: dict[str, object] = {}
+    if chat_id is not None:
+        record["chat_id"] = chat_id
+    if message_id is not None:
+        record["message_id"] = message_id
+    return {
+        "action": "PlanApproval",
+        "state": state,
+        "stale_deadline_unix": stale_deadline_unix,
+        "transports": [
+            {"transport": "notification_store", "record": {}},
+            {"transport": transport, "record": record},
+        ],
+    }
+
+
+class TestFindSharedHandledTransports:
+    """Tests for shared-store transport cleanup detection."""
+
+    def test_already_handled_entry_returned(self) -> None:
+        store = {"actions": {"plan0001": _shared_entry(state="already_handled")}}
+        assert find_shared_handled_transports(store, now=0.0) == [
+            ("plan0001", 42, "12345")
+        ]
+
+    def test_available_entry_skipped(self) -> None:
+        store = {"actions": {"plan0001": _shared_entry(state="available")}}
+        assert find_shared_handled_transports(store, now=0.0) == []
+
+    def test_stale_state_returned(self) -> None:
+        store = {"actions": {"plan0001": _shared_entry(state="stale")}}
+        assert find_shared_handled_transports(store, now=0.0) == [
+            ("plan0001", 42, "12345")
+        ]
+
+    def test_passed_deadline_returned(self) -> None:
+        store = {
+            "actions": {
+                "plan0001": _shared_entry(state="available", stale_deadline_unix=5.0)
+            }
+        }
+        assert find_shared_handled_transports(store, now=9.0) == [
+            ("plan0001", 42, "12345")
+        ]
+
+    def test_legacy_transport_returned(self) -> None:
+        store = {
+            "actions": {
+                "plan0001": _shared_entry(
+                    state="already_handled", transport="telegram_legacy"
+                )
+            }
+        }
+        assert find_shared_handled_transports(store, now=0.0) == [
+            ("plan0001", 42, "12345")
+        ]
+
+    def test_entry_without_telegram_transport_skipped(self) -> None:
+        store = {
+            "actions": {
+                "plan0001": {
+                    "action": "PlanApproval",
+                    "state": "already_handled",
+                    "stale_deadline_unix": 10_000.0,
+                    "transports": [{"transport": "notification_store", "record": {}}],
+                }
+            }
+        }
+        assert find_shared_handled_transports(store, now=0.0) == []
+
+    def test_record_missing_ids_skipped(self) -> None:
+        store = {
+            "actions": {
+                "plan0001": _shared_entry(state="already_handled", message_id=None)
+            }
+        }
+        assert find_shared_handled_transports(store, now=0.0) == []
