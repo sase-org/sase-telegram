@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.4](https://github.com/sase-org/sase-telegram/compare/v0.1.3...v0.1.4) (2026-06-26)
+
+
+### Features
+
+* dismiss stale plan keyboards via shared action store ([e8e11d2](https://github.com/sase-org/sase-telegram/commit/e8e11d2bd9dad05bd541b17b756c7f54e3abaf6a))
+* support sequential Telegram questions ([2fee66e](https://github.com/sase-org/sase-telegram/commit/2fee66ee836e540e6ed979a6943c2aa61d2d6969))
+
+
+### Documentation
+
+* add tiny field note ([58b1a60](https://github.com/sase-org/sase-telegram/commit/58b1a60ba434c63be4b66be51be39836988f7782))
+
 ## [0.1.3](https://github.com/sase-org/sase-telegram/compare/v0.1.2...v0.1.3) (2026-06-23)
 
 
