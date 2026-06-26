@@ -172,7 +172,7 @@ class TestProcessCallbackHITL:
 
 
 class TestProcessCallbackQuestion:
-    def test_option_selection(self, tmp_path: Path) -> None:
+    def test_option_selection_is_not_single_shot(self, tmp_path: Path) -> None:
         response_dir = str(tmp_path)
         request = {
             "questions": [
@@ -189,12 +189,7 @@ class TestProcessCallbackQuestion:
 
         pending = _make_pending_question("ques0001", response_dir)
         result = process_callback("question:ques0001:0", pending)
-        assert result is not None
-        assert result.action_type == "question"
-        assert result.response_data["answers"][0]["selected"] == ["Option A"]
-        assert result.response_data["answers"][0]["question"] == "Which approach?"
-        assert result.response_data["answers"][0]["custom_feedback"] is None
-        assert result.response_data["global_note"] == "Answered via Telegram"
+        assert result is None
 
     def test_custom_returns_none(self, tmp_path: Path) -> None:
         pending = _make_pending_question("ques0001", str(tmp_path))
@@ -218,11 +213,7 @@ class TestProcessCallbackTwostep:
 
         pending = _make_pending_question("ques0001", str(tmp_path))
         result = process_callback_twostep("question:ques0001:custom", pending)
-        assert result is not None
-        prefix, info = result
-        assert prefix == "ques0001"
-        assert info["action_type"] == "question"
-        assert info["question_text"] == "What do you think?"
+        assert result is None
 
     def test_non_twostep_returns_none(self, tmp_path: Path) -> None:
         pending = _make_pending_plan("abcd1234", str(tmp_path))
@@ -274,12 +265,7 @@ class TestProcessTextMessage:
             },
         )
         result = process_text_message("Use the second approach")
-        assert result is not None
-        assert result.action_type == "question"
-        assert result.response_data["answers"][0]["custom_feedback"] == (
-            "Use the second approach"
-        )
-        assert result.response_data["answers"][0]["selected"] == []
+        assert result is None
 
     def test_without_awaiting(self) -> None:
         result = process_text_message("Random text")
@@ -442,6 +428,137 @@ class TestHandleTextMessageAgentLaunch:
         ) as mock_launch:
             _handle_text_message(msg)
             mock_launch.assert_not_called()
+
+
+class TestHandleQuestionFlow:
+    def setup_method(self) -> None:
+        _cleanup()
+        self._patcher = patch(
+            "sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_PATH
+        )
+        self._patcher.start()
+
+    def teardown_method(self) -> None:
+        self._patcher.stop()
+        _cleanup()
+
+    @staticmethod
+    def _callback(data: str, message_id: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=f"cb-{message_id}",
+            data=data,
+            message=SimpleNamespace(
+                message_id=message_id,
+                chat=SimpleNamespace(id="12345"),
+            ),
+        )
+
+    @staticmethod
+    def _text_message(text: str, message_id: int, reply_to: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            text=text,
+            entities=None,
+            message_id=message_id,
+            reply_to_message=SimpleNamespace(message_id=reply_to),
+            chat=SimpleNamespace(id="12345"),
+        )
+
+    def test_multi_question_callbacks_write_one_final_response(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        request = {
+            "session_id": "s1",
+            "questions": [
+                {"question": "First?", "options": [{"label": "A"}]},
+                {"question": "Second?", "options": [{"label": "B"}, {"label": "C"}]},
+            ],
+        }
+        (tmp_path / "question_request.json").write_text(json.dumps(request))
+        pending1 = _make_pending_question("ques0001", str(tmp_path))
+        pending2 = _make_pending_question("ques0001", str(tmp_path))
+        pending2["ques0001"]["message_id"] = 43
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                return_value=None,
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+        ):
+            mock_tg.send_message.side_effect = [
+                SimpleNamespace(message_id=43),
+                SimpleNamespace(message_id=99),
+            ]
+
+            _handle_callback(self._callback("question:ques0001:0", 42), pending1)
+
+            assert not (tmp_path / "question_response.json").exists()
+            progress = json.loads((tmp_path / "question_progress.json").read_text())
+            assert progress["current_index"] == 1
+            assert progress["active_message_id"] == 43
+            assert progress["answers"][0]["selected"] == ["A"]
+            assert mock_pa.add.call_args.args[0] == "ques0001"
+            assert mock_pa.add.call_args.args[1]["message_id"] == 43
+
+            _handle_callback(self._callback("question:ques0001:1", 43), pending2)
+
+            response = json.loads((tmp_path / "question_response.json").read_text())
+            assert response["answers"] == [
+                {"question": "First?", "selected": ["A"], "custom_feedback": None},
+                {"question": "Second?", "selected": ["C"], "custom_feedback": None},
+            ]
+            assert response["global_note"] == "Answered via Telegram"
+            assert not (tmp_path / "question_progress.json").exists()
+            assert mock_tg.edit_message_text.call_count == 2
+            assert mock_tg.send_message.call_count == 2
+            mock_pa.remove.assert_called_with("ques0001")
+
+    def test_custom_text_advances_to_next_question(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_callback,
+            _handle_text_message,
+        )
+
+        request = {
+            "session_id": "s1",
+            "questions": [
+                {"question": "Any notes?", "options": []},
+                {"question": "Proceed?", "options": [{"label": "Yes"}]},
+            ],
+        }
+        (tmp_path / "question_request.json").write_text(json.dumps(request))
+        pending = _make_pending_question("ques0001", str(tmp_path))
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                return_value=None,
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as launch,
+        ):
+            mock_pa.get.return_value = pending["ques0001"]
+            mock_tg.send_message.return_value = SimpleNamespace(message_id=43)
+
+            _handle_callback(self._callback("question:ques0001:custom", 42), pending)
+            _handle_text_message(self._text_message("Use the new tool", 100, 42))
+
+            progress = json.loads((tmp_path / "question_progress.json").read_text())
+            assert progress["current_index"] == 1
+            assert progress["answers"] == [
+                {
+                    "question": "Any notes?",
+                    "selected": ["Other"],
+                    "custom_feedback": "Use the new tool",
+                }
+            ]
+            assert progress["active_message_id"] == 43
+            assert not AWAITING_TEST_PATH.exists()
+            launch.assert_not_called()
 
 
 class TestHandleImageMessageLaunchDisabled:

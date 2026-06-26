@@ -364,28 +364,10 @@ def process_callback(
         # "feedback" handled by twostep
 
     elif cb.action_type == "question":
-        response_dir = action_data["response_dir"]
-        response_path = Path(response_dir) / "question_response.json"
-        if cb.choice != "custom":
-            idx = int(cb.choice)
-            question_text, label = _get_question_info(response_dir, idx)
-            return ResponseAction(
-                action_type="question",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={
-                    "answers": [
-                        {
-                            "question": question_text,
-                            "selected": [label],
-                            "custom_feedback": None,
-                        }
-                    ],
-                    "global_note": "Answered via Telegram",
-                },
-                answer_text=f"Selected: {label}",
-            )
-        # "custom" handled by twostep
+        # Telegram question sessions are progress-aware and handled by
+        # scripts.sase_tg_inbound so multi-question requests cannot be
+        # resolved from a single callback.
+        return None
 
     return None
 
@@ -426,16 +408,7 @@ def process_callback_twostep(
         )
 
     if cb.action_type == "question" and cb.choice == "custom":
-        response_dir = action_data["response_dir"]
-        question_text = _get_question_text(response_dir)
-        return (
-            cb.notif_id_prefix,
-            {
-                "action_type": "question",
-                "response_dir": response_dir,
-                "question_text": question_text,
-            },
-        )
+        return None
 
     return None
 
@@ -486,22 +459,7 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
         )
 
     if info["action_type"] == "question":
-        return ResponseAction(
-            action_type="question",
-            notif_id_prefix=prefix,
-            response_path=Path(info["response_dir"]) / "question_response.json",
-            response_data={
-                "answers": [
-                    {
-                        "question": info.get("question_text", ""),
-                        "selected": [],
-                        "custom_feedback": text,
-                    }
-                ],
-                "global_note": "Answered via Telegram",
-            },
-            answer_text=None,
-        )
+        return None
 
     return None
 

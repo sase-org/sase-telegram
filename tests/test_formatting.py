@@ -16,8 +16,11 @@ from sase_telegram.formatting import (
     _format_notes_text,
     _wrap_expandable_blockquote,
     escape_markdown_v2,
+    format_answered_question,
     format_notification,
+    format_questions_complete,
     markdown_to_telegram_v2,
+    render_question_message,
 )
 
 
@@ -399,6 +402,30 @@ class TestFormatUserQuestion:
         assert "Custom" in buttons[2][0].text
         assert attachments == []
 
+    def test_multi_question_numbering(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            request_file = Path(tmpdir) / "question_request.json"
+            request_data = {
+                "questions": [
+                    {"question": "First?", "options": [{"label": "A"}]},
+                    {"question": "Second?", "options": [{"label": "B"}]},
+                ]
+            }
+            request_file.write_text(json.dumps(request_data))
+
+            n = _make_notification(
+                action="UserQuestion",
+                sender="question",
+                notes=["Claude is asking a question"],
+                action_data={"response_dir": tmpdir, "session_id": "s1"},
+            )
+            text, keyboard, _ = format_notification(n)
+
+        assert "Question 1 of 2" in text
+        assert "First?" in text
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][0].text == "A"
+
     def test_without_request_file(self):
         n = _make_notification(
             action="UserQuestion",
@@ -412,6 +439,55 @@ class TestFormatUserQuestion:
         # Only Custom button when request file is missing
         assert len(keyboard.inline_keyboard) == 1
         assert "Custom" in keyboard.inline_keyboard[0][0].text
+
+
+class TestQuestionRenderingHelpers:
+    def test_multi_select_buttons_include_checks_and_submit(self):
+        text, keyboard = render_question_message(
+            {
+                "question": "Which DB?",
+                "options": [{"label": "PostgreSQL"}, {"label": "SQLite"}],
+                "multiSelect": True,
+            },
+            index=1,
+            total=3,
+            selected=["PostgreSQL"],
+            prefix="abcd1234",
+        )
+
+        assert "Question 2 of 3" in text
+        assert "Which DB?" in text
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "☑️ PostgreSQL"
+        assert buttons[1][0].text == "⬜ SQLite"
+        assert buttons[2][0].text == "✅ Submit"
+        assert buttons[2][1].text == "💬 Custom"
+        assert buttons[2][0].callback_data == "question:abcd1234:submit"
+
+    def test_answered_question_escapes_summary_and_question(self):
+        text = format_answered_question(
+            {"question": "Use v2.0?", "header": "API"},
+            index=1,
+            total=2,
+            selected=["REST"],
+            custom_feedback=None,
+        )
+
+        assert "Question 2 of 2" in text
+        assert "REST" in text
+        assert "Use v2\\.0?" in text
+
+    def test_completion_summary_numbers_answers(self):
+        text = format_questions_complete(
+            [
+                {"selected": ["PostgreSQL", "SQLite"], "custom_feedback": None},
+                {"selected": ["Other"], "custom_feedback": "Use v2.0"},
+            ]
+        )
+
+        assert "All 2 questions answered" in text
+        assert "1\\. PostgreSQL, SQLite" in text
+        assert '2\\. "Use v2\\.0" \\(custom\\)' in text
 
 
 class TestFormatWorkflowComplete:

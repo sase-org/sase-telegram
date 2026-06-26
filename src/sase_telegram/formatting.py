@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.notifications.models import Notification
 
 from sase_telegram import callback_data
+from sase_telegram.question_flow import CUSTOM_SELECTED_LABEL, is_multi_select
 
 # Telegram message limit
 MAX_MESSAGE_LENGTH = 4096
@@ -459,6 +461,156 @@ def _format_hitl(n: Notification) -> tuple[str, InlineKeyboardMarkup | None, lis
     return text, keyboard, []
 
 
+def _question_header(index: int, total: int) -> str:
+    if total > 1:
+        return f"❓ *Question {index + 1} of {total}*"
+    return "❓ *Question*"
+
+
+def _answered_question_header(index: int, total: int) -> str:
+    if total > 1:
+        return f"✅ *Question {index + 1} of {total}*"
+    return "✅ *Question answered*"
+
+
+def _question_text(question: dict[str, Any]) -> str:
+    text = question.get("question")
+    return text if isinstance(text, str) else ""
+
+
+def _question_header_detail(question: dict[str, Any]) -> str:
+    header = question.get("header")
+    return header if isinstance(header, str) else ""
+
+
+def _option_label(option: Any, index: int) -> str:
+    if isinstance(option, dict):
+        label = option.get("label")
+        if isinstance(label, str) and label:
+            return label
+    return f"Option {index + 1}"
+
+
+def _question_options(question: dict[str, Any]) -> list[Any]:
+    options = question.get("options", [])
+    return options if isinstance(options, list) else []
+
+
+def render_question_message(
+    question: dict[str, Any],
+    *,
+    index: int,
+    total: int,
+    selected: list[str] | None,
+    prefix: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Render one live user question and its inline keyboard."""
+    selected_set = set(selected or [])
+    lines = [_question_header(index, total), ""]
+    header = _question_header_detail(question)
+    if header:
+        lines.extend([f"_{escape_markdown_v2(header)}_", ""])
+    lines.append(escape_markdown_v2(_question_text(question)))
+    text = "\n".join(lines).rstrip()
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    options = _question_options(question)
+    multi_select = is_multi_select(question)
+    for i, opt in enumerate(options):
+        label = _option_label(opt, i)
+        if multi_select:
+            checked = "☑️" if label in selected_set else "⬜"
+            button_text = f"{checked} {label}"
+        else:
+            button_text = label
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=callback_data.encode("question", prefix, str(i)),
+                )
+            ]
+        )
+
+    if multi_select and options:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "✅ Submit",
+                    callback_data=callback_data.encode("question", prefix, "submit"),
+                ),
+                InlineKeyboardButton(
+                    "💬 Custom",
+                    callback_data=callback_data.encode("question", prefix, "custom"),
+                ),
+            ]
+        )
+    else:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "💬 Custom",
+                    callback_data=callback_data.encode("question", prefix, "custom"),
+                )
+            ]
+        )
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
+def _answer_summary(selected: list[str] | None, custom_feedback: str | None) -> str:
+    selected = list(selected or [])
+    custom = (custom_feedback or "").strip()
+    non_custom = [label for label in selected if label != CUSTOM_SELECTED_LABEL]
+    if custom and non_custom:
+        return f'{", ".join(non_custom)}; "{custom}" (custom)'
+    if custom:
+        return f'"{custom}" (custom)'
+    if non_custom:
+        return ", ".join(non_custom)
+    if CUSTOM_SELECTED_LABEL in selected:
+        return CUSTOM_SELECTED_LABEL
+    return "No selection"
+
+
+def format_answered_question(
+    question: dict[str, Any],
+    *,
+    index: int,
+    total: int,
+    selected: list[str] | None,
+    custom_feedback: str | None,
+) -> str:
+    """Render a collapsed answered-question message."""
+    summary = _answer_summary(selected, custom_feedback)
+    lines = [
+        f"{_answered_question_header(index, total)} · {escape_markdown_v2(summary)}",
+        "",
+    ]
+    header = _question_header_detail(question)
+    if header:
+        lines.extend([f"_{escape_markdown_v2(header)}_", ""])
+    lines.append(escape_markdown_v2(_question_text(question)))
+    return "\n".join(lines).rstrip()
+
+
+def format_questions_complete(answers: list[dict[str, Any]]) -> str:
+    """Render the final completion summary for a question sequence."""
+    total = len(answers)
+    if total == 1:
+        lines = ["✅ *Answer received*"]
+    else:
+        lines = [f"✅ *All {total} questions answered*"]
+    for i, answer in enumerate(answers, 1):
+        selected = answer.get("selected") if isinstance(answer, dict) else []
+        if not isinstance(selected, list):
+            selected = []
+        custom = answer.get("custom_feedback") if isinstance(answer, dict) else None
+        summary = _answer_summary(selected, custom if isinstance(custom, str) else None)
+        lines.append(f"{i}\\. {escape_markdown_v2(summary)}")
+    return "\n".join(lines)
+
+
 def _format_user_question(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
@@ -468,41 +620,34 @@ def _format_user_question(
 
     # Try to load question options from request file
     response_dir = n.action_data.get("response_dir", "")
-    buttons: list[list[InlineKeyboardButton]] = []
     if response_dir:
         request_file = Path(response_dir) / "question_request.json"
         try:
             request_data = json.loads(request_file.read_text())
             questions = request_data.get("questions", [])
             if questions:
-                # Use first question's options
-                options = questions[0].get("options", [])
-                for i, opt in enumerate(options):
-                    label = opt.get("label", f"Option {i + 1}")
-                    buttons.append(
-                        [
-                            InlineKeyboardButton(
-                                label,
-                                callback_data=callback_data.encode(
-                                    "question", prefix, str(i)
-                                ),
-                            )
-                        ]
-                    )
+                text, keyboard = render_question_message(
+                    questions[0],
+                    index=0,
+                    total=len(questions),
+                    selected=[],
+                    prefix=prefix,
+                )
+                return text, keyboard, []
         except (OSError, json.JSONDecodeError):
             pass
 
     # Always add a Custom button
-    buttons.append(
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton(
-                "💬 Custom",
-                callback_data=callback_data.encode("question", prefix, "custom"),
-            )
+            [
+                InlineKeyboardButton(
+                    "💬 Custom",
+                    callback_data=callback_data.encode("question", prefix, "custom"),
+                )
+            ]
         ]
     )
-
-    keyboard = InlineKeyboardMarkup(buttons)
     return text, keyboard, []
 
 

@@ -34,6 +34,7 @@ def mock_bot(mocker: MockerFixture) -> MagicMock:
     bot.get_updates = AsyncMock(return_value=[])
     bot.answer_callback_query = AsyncMock(return_value=True)
     bot.edit_message_reply_markup = AsyncMock()
+    bot.edit_message_text = AsyncMock()
     bot.set_my_commands = AsyncMock(return_value=True)
     bot.get_file = AsyncMock()
     mocker.patch.object(telegram_client, "_get_bot", return_value=bot)
@@ -230,6 +231,42 @@ class TestEditMessageReplyMarkup:
         telegram_client.edit_message_reply_markup("chat-1", 42)
         kwargs = mock_bot.edit_message_reply_markup.await_args.kwargs
         assert kwargs["reply_markup"] is None
+
+
+class TestEditMessageText:
+    def test_delegates_to_bot(self, mock_bot: MagicMock) -> None:
+        markup = _markup()
+        telegram_client.edit_message_text(
+            "chat-1",
+            42,
+            "done",
+            reply_markup=markup,
+            parse_mode="MarkdownV2",
+        )
+
+        mock_bot.edit_message_text.assert_awaited_once_with(
+            chat_id="chat-1",
+            message_id=42,
+            text="done",
+            reply_markup=markup,
+            parse_mode="MarkdownV2",
+        )
+
+    def test_parse_mode_fallback_on_failure(self, mock_bot: MagicMock) -> None:
+        ok = MagicMock(message_id=7)
+        mock_bot.edit_message_text.side_effect = [BadRequest("bad markdown"), ok]
+
+        msg = telegram_client.edit_message_text(
+            "chat-1",
+            42,
+            "done",
+            parse_mode="MarkdownV2",
+        )
+
+        assert msg is ok
+        assert mock_bot.edit_message_text.await_count == 2
+        retry_kwargs = mock_bot.edit_message_text.await_args_list[1].kwargs
+        assert "parse_mode" not in retry_kwargs
 
 
 class TestSetMyCommands:

@@ -235,6 +235,43 @@ def edit_message_reply_markup(
 
 
 @_with_retry
+def edit_message_text(
+    chat_id: str,
+    message_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+) -> Message | bool:
+    """Edit an existing message's text, falling back to plain text on parse errors."""
+    try:
+        return _run_async(
+            _get_bot().edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+        )
+    except Exception:
+        if parse_mode:
+            log.warning(
+                "Failed to edit with parse_mode=%s, falling back to plain text",
+                parse_mode,
+                exc_info=True,
+            )
+            return _run_async(
+                _get_bot().edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
+            )
+        raise
+
+
+@_with_retry
 def set_my_commands(commands: list[tuple[str, str]]) -> bool:
     """Register bot commands for the Telegram auto-complete menu."""
     from telegram import BotCommand
