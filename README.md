@@ -13,15 +13,37 @@ HITL requests, user questions, and even launch new agents — all from Telegram.
 
 ## Installation
 
+For a managed SASE install, install `sase-telegram` into the same `uv tool` environment as `sase` so its CLI scripts
+are available to SASE's chop automation.
+
+### Recommended: SASE Admin Center Updates tab
+
+If SASE is already installed with `uv tool install sase`, open `sase ace`, press `#` for the SASE Admin Center, then go
+to the **Updates** tab (`5`, or `[` / `]`). Highlight `sase-telegram` in the plugin list (`j` / `k`, or `/` to filter),
+press `i` to install, and confirm the preview modal. The preview shows the exact `uv` command and resolved package set;
+the install runs as a tracked background task and is discovered on the next `sase` run.
+
+See the core SASE docs for the
+[Updates tab](https://github.com/sase-org/sase/blob/master/docs/configuration.md#updates-tab) and
+[`sase plugin` commands](https://github.com/sase-org/sase/blob/master/docs/plugins.md).
+
+### Alternative: install SASE and the plugin together
+
 ```bash
-pip install sase-telegram
+uv tool install sase --with sase-telegram
 ```
 
-Or with [uv](https://docs.astral.sh/uv/):
+Repeat `--with` for additional plugins, for example `--with sase-telegram --with sase-github`. Add `--force` to replace
+an existing tool install.
+
+### Equivalent CLI for an existing install
 
 ```bash
-uv pip install sase-telegram
+sase plugin install telegram
 ```
+
+`pip install sase-telegram` is only an escape hatch for non-managed or library-style environments. It is not the normal
+path for a `uv tool`-managed SASE command.
 
 Requires `sase>=0.1.0` as a dependency (installed automatically).
 
