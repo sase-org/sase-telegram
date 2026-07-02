@@ -37,12 +37,11 @@ pdf_convert.py
 ### Outbound
 
 1. `sase_chop_tg_outbound` acquires an exclusive file lock (`outbound.lock`)
-2. Checks TUI activity state — skips if user is active
-3. Loads unsent notifications using a high-water mark timestamp (`last_sent_ts`)
-4. Formats each notification as MarkdownV2 with inline keyboards (`formatting.py`)
-5. Sends via `telegram_client.py` (with rate limiting, retry/backoff, message splitting)
-6. Saves actionable notifications (plan/HITL/question) to `pending_actions.json`
-7. Advances the high-water mark only after successful delivery
+2. Loads unsent notifications using a high-water mark timestamp (`last_sent_ts`)
+3. Formats each notification as MarkdownV2 with inline keyboards (`formatting.py`)
+4. Sends via `telegram_client.py` (with rate limiting, retry/backoff, message splitting)
+5. Saves actionable notifications (plan/HITL/question) to `pending_actions.json`
+6. Advances the high-water mark only after successful delivery
 
 ### Inbound
 

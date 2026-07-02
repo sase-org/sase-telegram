@@ -8,8 +8,8 @@
 ## Overview
 
 **sase-telegram** is a plugin for [sase](https://github.com/sase-org/sase) that provides two-way Telegram
-integration. It sends notifications to Telegram when you're away from the TUI, and lets you respond to plan approvals,
-HITL requests, user questions, and even launch new agents — all from Telegram.
+integration. It sends SASE notifications to Telegram, and lets you respond to plan approvals, HITL requests, user
+questions, and even launch new agents — all from Telegram.
 
 ## Installation
 
@@ -73,7 +73,7 @@ Installing sase-telegram adds the following commands:
 
 ### Features
 
-- **Activity-aware sending** — only sends when SASE's TUI idle state says you're inactive
+- **Outbound notifications** — sends unread, non-silent SASE notifications to Telegram
 - **Rate limiting** — sliding-window rate limiter prevents message flooding
 - **Exclusive outbound locking** — prevents concurrent outbound runs from duplicating sends
 - **Two-step feedback** — press a Feedback/Custom button, then type your response
@@ -106,19 +106,16 @@ Installing sase-telegram adds the following commands:
 | `SASE_TELEGRAM_RATE_LIMIT`               | `8/15`  | Rate limit as `max_messages/window_seconds` |
 | `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED`  | unset   | When present with any value, inbound callbacks, feedback, and slash commands still work, but plain text/photo/image-document messages do not launch agents. |
 
-Note: Idle detection is handled by sase's TUI process (which writes an idle state file). The outbound script reads
-this state — there is no separate inactivity threshold to configure in sase-telegram.
-
 ## How It Works
 
 ### Outbound
 
-The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), checks if
-you're inactive (via sase's TUI activity tracking), loads unsent notifications using a high-water mark timestamp, and
-formats them as Telegram MarkdownV2 messages with inline keyboards. Long plans are wrapped in expandable blockquotes
-or truncated and paired with a document attachment. Chat file attachments are trimmed to just the response portion,
-with commit messages and diffs embedded into the response PDF when possible. Actionable notifications (plan approvals,
-HITL requests, user questions) are saved as pending actions for the inbound script to match against.
+The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), loads unsent
+notifications using a high-water mark timestamp, and formats them as Telegram MarkdownV2 messages with inline
+keyboards. Long plans are wrapped in expandable blockquotes or truncated and paired with a document attachment. Chat
+file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
+PDF when possible. Actionable notifications (plan approvals, HITL requests, user questions) are saved as pending
+actions for the inbound script to match against.
 
 ### Inbound
 

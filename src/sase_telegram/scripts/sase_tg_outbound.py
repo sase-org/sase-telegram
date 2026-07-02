@@ -53,12 +53,6 @@ def _register_shared_transport(n: Any, message_id: int, chat_id: str) -> None:
         )
 
 
-def is_idle() -> bool:
-    from sase.ace.tui_activity import is_idle
-
-    return is_idle()
-
-
 def get_sase_directory(name: str) -> str:
     from sase.core.paths import get_sase_directory
 
@@ -214,39 +208,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _log_send_diagnostics(notifications: list) -> None:
     """Write diagnostic info to a debug log when notifications are about to be sent."""
-    from sase.ace.tui_activity import (
-        ACTIVITY_FILE,
-        IDLE_STATE_FILE,
-        LAST_KEYPRESS_FILE,
-        PID_FILE,
-    )
-
     try:
         now = time.time()
         now_str = datetime.fromtimestamp(now, tz=get_timezone()).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         lines = [f"\n=== SEND @ {now_str} ({now:.3f}) ==="]
-
-        # Read raw state files
-        for label, path in [
-            ("idle_state", IDLE_STATE_FILE),
-            ("pid", PID_FILE),
-            ("last_activity", ACTIVITY_FILE),
-            ("last_keypress", LAST_KEYPRESS_FILE),
-        ]:
-            if path is None:
-                lines.append(f"  {label}: <unset>")
-                continue
-            try:
-                val = path.read_text().strip()
-                if label in ("last_activity", "last_keypress"):
-                    age = now - float(val)
-                    lines.append(f"  {label}: {val} (age={age:.1f}s)")
-                else:
-                    lines.append(f"  {label}: {val}")
-            except (FileNotFoundError, ValueError) as e:
-                lines.append(f"  {label}: <{type(e).__name__}>")
 
         # Notification details
         lines.append(f"  notifications_count: {len(notifications)}")
@@ -281,7 +248,6 @@ def _print_outbound_summary(
     pending_action_writes: int = 0,
     attachment_failures: int = 0,
     high_water_updates: int = 0,
-    stopped_active_count: int = 0,
     notification_ids: str = "-",
 ) -> None:
     parts = [
@@ -294,7 +260,6 @@ def _print_outbound_summary(
         f"attachment_failures={attachment_failures}",
         f"high_water_updates={high_water_updates}",
         f"pending_actions_cleaned={pending_actions_cleaned}",
-        f"stopped_active={stopped_active_count}",
         f"ids={notification_ids}",
     ]
     if reason:
@@ -315,13 +280,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # Clean up stale pending actions
     stale_pending = pending_actions.cleanup_stale()
-
-    if not is_idle():
-        _print_outbound_summary(
-            reason="user_active",
-            pending_actions_cleaned=len(stale_pending),
-        )
-        return 0
 
     # Acquire exclusive lock to prevent concurrent outbound runs from
     # sending the same notification multiple times.  Lumberjack fires
@@ -364,15 +322,8 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
     pending_action_writes = 0
     attachment_failures = 0
     high_water_updates = 0
-    stopped_active_count = 0
 
     for n in notifications:
-        # Re-check idle state before each notification — stop sending
-        # if the user became active while we were processing the batch.
-        if not args.dry_run and not is_idle():
-            stopped_active_count += 1
-            break
-
         # Check rate limit before sending
         if not args.dry_run and not rate_limit.check_rate_limit():
             wait = rate_limit.wait_time()
@@ -519,7 +470,6 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
         pending_action_writes=pending_action_writes,
         attachment_failures=attachment_failures,
         high_water_updates=high_water_updates,
-        stopped_active_count=stopped_active_count,
         notification_ids=_short_notification_ids(notifications),
     )
     return 0

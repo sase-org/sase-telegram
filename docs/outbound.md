@@ -1,6 +1,6 @@
 # Outbound
 
-The outbound script (`sase_chop_tg_outbound`) sends sase notifications to Telegram when the user is inactive.
+The outbound script (`sase_chop_tg_outbound`) sends sase notifications to Telegram.
 
 ## CLI Usage
 
@@ -14,18 +14,17 @@ sase_chop_tg_outbound --context X  # Pass context string for logging
 
 1. **Lock acquisition** — `try_acquire_outbound_lock()` takes an exclusive lock on `~/.sase/telegram/outbound.lock`.
    If another outbound process is running, this one exits immediately.
-2. **Idle check** — Reads the TUI activity state. If the user is active, skips sending.
-3. **Load unsent** — `get_unsent_notifications()` loads notifications newer than the high-water mark in `last_sent_ts`,
-   filtered to `read == False` and `silent == False`. Dismissed notifications are **not** filtered out (TUI dismissal
-   is an active-user action; outbound only runs when idle).
-4. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
-5. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
+2. **Load unsent** — `get_unsent_notifications()` loads notifications newer than the high-water mark in `last_sent_ts`,
+   filtered to `read == False` and `silent == False`. Dismissed notifications are **not** filtered out because TUI
+   dismissal is a UI cleanup action, not a notification-read signal.
+3. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
+4. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
    keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send.
-6. **Save pending** — Actionable notifications (plan approval, HITL, user question) are saved to
+5. **Save pending** — Actionable notifications (plan approval, HITL, user question) are saved to
    `pending_actions.json` with their Telegram `message_id` so inbound can edit the keyboard later.
-7. **Advance HWM** — `mark_sent()` updates the high-water mark after each successfully delivered notification. If
+6. **Advance HWM** — `mark_sent()` updates the high-water mark after each successfully delivered notification. If
    outbound crashes mid-batch, only notifications after the last successful send are retried.
-8. **Release lock** — `release_outbound_lock()` releases the file lock.
+7. **Release lock** — `release_outbound_lock()` releases the file lock.
 
 ## Notification Formatting
 

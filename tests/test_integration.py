@@ -107,23 +107,9 @@ def _patch_paths():
 class TestOutboundIntegration:
     """Integration tests for the outbound main() entry point."""
 
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=False)
-    def test_exits_early_when_user_active(
-        self, _mock_idle: MagicMock, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """When user is active, no messages should be sent."""
-        result = outbound_main(["--dry-run"])
-        assert result == 0
-        captured = capsys.readouterr()
-        assert "tg_outbound:" in captured.out
-        assert "reason=user_active" in captured.out
-        assert "unsent=0" in captured.out
-
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     def test_first_run_initializes_without_sending(
         self,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -137,10 +123,8 @@ class TestOutboundIntegration:
         assert "reason=no_unsent_notifications" in captured.out
 
     @patch("sase_telegram.outbound.try_acquire_outbound_lock", return_value=None)
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     def test_lock_held_outputs_skip_summary(
         self,
-        _mock_idle: MagicMock,
         _mock_lock: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -152,16 +136,14 @@ class TestOutboundIntegration:
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
-    def test_sends_notification_when_inactive(
+    def test_sends_notification(
         self,
         mock_chat_id: MagicMock,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         mock_send: MagicMock,
     ) -> None:
-        """Full flow: inactive user with unsent notification -> Telegram message sent."""
+        """Full flow: unsent notification -> Telegram message sent."""
         mock_chat_id.return_value = "12345"
         mock_send.return_value = MagicMock(message_id=42)
 
@@ -187,12 +169,10 @@ class TestOutboundIntegration:
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_saves_pending_action_for_plan_approval(
         self,
         mock_chat_id: MagicMock,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         mock_send: MagicMock,
         tmp_path: Path,
@@ -237,12 +217,10 @@ class TestOutboundIntegration:
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_registers_telegram_transport_in_shared_store(
         self,
         mock_chat_id: MagicMock,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         mock_send: MagicMock,
         tmp_path: Path,
@@ -279,12 +257,10 @@ class TestOutboundIntegration:
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_advances_high_water_mark_per_notification(
         self,
         mock_chat_id: MagicMock,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         mock_send: MagicMock,
     ) -> None:
@@ -341,12 +317,10 @@ class TestOutboundIntegration:
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
-    @patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True)
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_failed_send_does_not_advance_high_water_mark(
         self,
         mock_chat_id: MagicMock,
-        _mock_idle: MagicMock,
         mock_load: MagicMock,
         mock_send: MagicMock,
     ) -> None:
@@ -388,7 +362,6 @@ class TestOutboundIntegration:
         n = _make_notification(sender="crs", notes=["Done!"])
 
         with (
-            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
             patch("sase_telegram.outbound.load_notifications", return_value=[n]),
         ):
             result = outbound_main(["--dry-run"])

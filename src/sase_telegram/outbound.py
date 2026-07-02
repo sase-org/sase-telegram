@@ -1,4 +1,4 @@
-"""Core outbound logic: detect inactivity, load unsent notifications, track sent."""
+"""Core outbound logic: load unsent notifications and track sent ones."""
 
 from __future__ import annotations
 
@@ -20,13 +20,12 @@ def get_unsent_notifications() -> list[Notification]:
     Uses a high-water mark timestamp file to track what's already been sent.
     The high-water mark is only advanced by ``mark_sent()`` after a
     notification is actually delivered to Telegram.  We deliberately do
-    NOT advance it based on TUI activity — doing so can silently drop
-    notifications when the outbound chop was offline during the activity
-    window.  The ``n.read`` filter suppresses notifications the user
-    has already read in the TUI.  We intentionally do NOT filter on
-    ``n.dismissed`` — TUI agent-dismissal is a UI cleanup action that
-    happens while the user is active, but the outbound only runs when
-    idle, so filtering on dismissed would silently drop notifications.
+    NOT advance it based on anything other than successful delivery,
+    because doing so can silently drop notifications when the outbound
+    chop was offline.  The ``n.read`` filter suppresses notifications
+    the user has already read in the TUI.  We intentionally do NOT
+    filter on ``n.dismissed`` — TUI agent-dismissal is a UI cleanup
+    action, not a notification-read signal.
 
     On first run (no file), initializes the file to now and returns empty
     to avoid dumping backlog.

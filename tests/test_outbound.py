@@ -87,9 +87,8 @@ class TestGetUnsentNotifications:
         n_read = _make_notification(
             id="read0000-0000-0000-0000-000000000000", timestamp=new_ts, read=True
         )
-        # Dismissed notifications should still be sent — TUI dismissal is a
-        # UI cleanup action that happens while active, but the outbound only
-        # runs when idle.
+        # Dismissed notifications should still be sent. TUI dismissal is a UI
+        # cleanup action, not a notification-read signal.
         n_dismissed = _make_notification(
             id="dism0000-0000-0000-0000-000000000000", timestamp=new_ts, dismissed=True
         )
@@ -286,7 +285,6 @@ class TestRunOutboundAttachments:
                 "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
                 return_value="chat-1",
             ),
-            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
             patch(
                 "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
                 return_value=True,
@@ -334,7 +332,6 @@ class TestRunOutboundAttachments:
                 "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
                 return_value="chat-1",
             ),
-            patch("sase_telegram.scripts.sase_tg_outbound.is_idle", return_value=True),
             patch(
                 "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
                 return_value=True,
@@ -399,10 +396,6 @@ class TestRunOutboundAttachments:
                 patch(
                     "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
                     return_value="chat-1",
-                ),
-                patch(
-                    "sase_telegram.scripts.sase_tg_outbound.is_idle",
-                    return_value=True,
                 ),
                 patch(
                     "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
@@ -478,10 +471,6 @@ class TestRunOutboundAttachments:
                 patch(
                     "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
                     return_value="chat-1",
-                ),
-                patch(
-                    "sase_telegram.scripts.sase_tg_outbound.is_idle",
-                    return_value=True,
                 ),
                 patch(
                     "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
