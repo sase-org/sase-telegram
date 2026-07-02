@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/sase-org/sase-telegram/compare/v0.1.4...v0.2.0) (2026-07-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* Telegram outbound delivery no longer waits for SASE TUI idle/activity state before sending pending notifications.
+
+### Features
+
+* send Telegram outbound notifications without idle gate ([17ef088](https://github.com/sase-org/sase-telegram/commit/17ef0885aeb6542a995dd5d3d55bb13268a78484))
+
+
+### Documentation
+
+* rewrite Installation section around the SASE Updates tab ([86331f5](https://github.com/sase-org/sase-telegram/commit/86331f52bf0d2a4205c988926153076268c4929a))
+
 ## [0.1.4](https://github.com/sase-org/sase-telegram/compare/v0.1.3...v0.1.4) (2026-06-26)
 
 
