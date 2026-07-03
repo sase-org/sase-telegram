@@ -4,12 +4,20 @@ from typing import Any
 
 
 def inbound_main(*args: Any, **kwargs: Any) -> int:
+    from sase_telegram.enabled import is_telegram_enabled
+
+    if not is_telegram_enabled():
+        return 0
     from sase_telegram.scripts.sase_tg_inbound import main
 
     return main(*args, **kwargs)
 
 
 def outbound_main(*args: Any, **kwargs: Any) -> int:
+    from sase_telegram.enabled import is_telegram_enabled
+
+    if not is_telegram_enabled():
+        return 0
     from sase_telegram.scripts.sase_tg_outbound import main
 
     return main(*args, **kwargs)

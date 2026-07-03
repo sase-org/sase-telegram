@@ -2,6 +2,12 @@
 
 The inbound script (`sase_chop_tg_inbound`) polls Telegram for user responses and dispatches them back to sase.
 
+## Machine Enable Flag
+
+The chop is a **no-op unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent, the script exits
+immediately with status `0`, prints nothing, and skips all heavy imports and network calls. Enable a machine with
+`touch ~/.sase/telegram_is_enabled`.
+
 ## CLI Usage
 
 ```bash

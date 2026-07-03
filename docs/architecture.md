@@ -54,6 +54,10 @@ pdf_convert.py
 
 ## Key Design Decisions
 
+- **Machine enable gate**: Both console-script wrappers (`scripts/__init__.py`) check `~/.sase/telegram_is_enabled`
+  via `enabled.py` before doing anything else. If the flag is absent, the wrapper returns `0` immediately — before the
+  lazy import of the entry-point module — so a disabled machine skips all heavy imports, network, and locks and stays
+  silent. This lets the telegram lumberjack be configured globally while only flagged machines talk to Telegram.
 - **Pure logic separation**: `inbound.py` contains no API calls — all logic is independently testable. The entry point
   script handles I/O and wiring.
 - **High-water mark**: The outbound process tracks the timestamp of the last sent notification rather than individual

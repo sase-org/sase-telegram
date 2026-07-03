@@ -91,6 +91,19 @@ Installing sase-telegram adds the following commands:
 
 ## Configuration
 
+### Machine Enable Flag
+
+The chops are **no-ops unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent,
+`sase_chop_tg_outbound` and `sase_chop_tg_inbound` exit immediately with status `0`, print nothing, and skip all heavy
+imports, network calls, and locks. This lets the telegram lumberjack be configured globally (on every machine) while
+only explicitly-enabled machines actually talk to Telegram.
+
+Enable a machine with:
+
+```bash
+touch ~/.sase/telegram_is_enabled
+```
+
 ### Credentials
 
 | Source                                | Description                       |
