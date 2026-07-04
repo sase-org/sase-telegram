@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/sase-org/sase-telegram/compare/v0.2.0...v0.2.1) (2026-07-03)
+
+
+### Features
+
+* gate telegram chops behind ~/.sase/telegram_is_enabled flag ([43c2a74](https://github.com/sase-org/sase-telegram/commit/43c2a741f9353718e2cd0c43dd01b700a43d2b16))
+
 ## [0.2.0](https://github.com/sase-org/sase-telegram/compare/v0.1.4...v0.2.0) (2026-07-02)
 
 
