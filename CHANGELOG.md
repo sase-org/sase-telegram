@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/sase-org/sase-telegram/compare/v0.2.1...v0.2.2) (2026-07-04)
+
+
+### Bug Fixes
+
+* support telegram bot token fallback sources ([2028275](https://github.com/sase-org/sase-telegram/commit/2028275f8e64403f32f400623e7fc8f39297a8e0))
+
 ## [0.2.1](https://github.com/sase-org/sase-telegram/compare/v0.2.0...v0.2.1) (2026-07-03)
 
 
