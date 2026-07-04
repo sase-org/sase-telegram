@@ -87,8 +87,13 @@ def _get_chats_dir() -> str:
 
 def _is_chat_file(file_path: str) -> bool:
     """Check if a file path points to a chat history file."""
-    resolved = str(Path(file_path).expanduser().resolve())
-    return resolved.startswith(_get_chats_dir())
+    try:
+        resolved = Path(file_path).expanduser().resolve()
+        chats_dir = Path(_get_chats_dir()).expanduser().resolve()
+        resolved.relative_to(chats_dir)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _make_response_only_file(chat_path: str) -> tuple[Path | None, str | None]:

@@ -106,11 +106,20 @@ touch ~/.sase/telegram_is_enabled
 
 ### Credentials
 
-| Source                                | Description                       |
-| ------------------------------------- | --------------------------------- |
-| `pass show telegram_sase_bot_token`   | Bot token (retrieved from `pass`) |
-| `SASE_TELEGRAM_BOT_CHAT_ID`          | Chat ID to send messages to       |
-| `SASE_TELEGRAM_BOT_USERNAME`         | Bot username                      |
+Bot token sources are checked in order:
+
+| Source                              | Description                                      |
+| ----------------------------------- | ------------------------------------------------ |
+| `SASE_TELEGRAM_BOT_TOKEN`           | Bot token from the environment                   |
+| `~/.sase/telegram_bot_token`        | Bot token file; must not be group/other-readable |
+| `pass show telegram_sase_bot_token` | Bot token from `pass`                            |
+
+The chat target and bot username are required separately:
+
+| Source                       | Description                 |
+| ---------------------------- | --------------------------- |
+| `SASE_TELEGRAM_BOT_CHAT_ID`  | Chat ID to send messages to |
+| `SASE_TELEGRAM_BOT_USERNAME` | Bot username                |
 
 ### Environment Variables
 
@@ -211,7 +220,7 @@ just clean      # Remove build artifacts
 src/sase_telegram/
 ├── __init__.py              # Package init
 ├── callback_data.py         # Encode/decode inline keyboard callback data (64-byte limit)
-├── credentials.py           # Bot token (via pass), chat ID and username (env vars)
+├── credentials.py           # Bot token sources, chat ID, and username
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling
 ├── bead_format.py           # Convert `sase bead` output to Markdown for Telegram rendering
