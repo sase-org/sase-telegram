@@ -22,6 +22,9 @@ from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.launch_approval_actions import LaunchApprovalActionError
 from sase_telegram.formatting import (
+    display_cl_name,
+    display_cl_names_in_text,
+    display_project_name,
     escape_markdown_v2,
     format_answered_question,
     format_questions_complete,
@@ -1506,7 +1509,7 @@ def _send_kill_result(
 
     try:
         if result.success:
-            escaped_name = escape_markdown_v2(name)
+            escaped_name = escape_markdown_v2(display_cl_name(name))
             redo_source_prompt = (
                 kill_info.get("prompt") if kill_info else None
             ) or prompt_fallback
@@ -1549,7 +1552,9 @@ def _send_kill_result(
                 reply_markup=keyboard,
             )
         else:
-            escaped_msg = escape_markdown_v2(result.message)
+            escaped_msg = escape_markdown_v2(
+                display_cl_names_in_text(str(result.message))
+            )
             telegram_client.send_message(
                 chat_id,
                 f"⚠️ *Kill failed:* {escaped_msg}",
@@ -1857,9 +1862,10 @@ def _send_launch_notification(
     label = _launch_provider_model_label(directives)
 
     display = slot_prompt[:200] + ("..." if len(slot_prompt) > 200 else "")
+    display = display_cl_names_in_text(display)
     escaped_label = escape_markdown_v2(label)
     if agent_name:
-        escaped_name = escape_markdown_v2(agent_name)
+        escaped_name = escape_markdown_v2(display_cl_name(agent_name))
         name_line = f"  _@{escaped_name}_"
     elif is_repeat and repeat_count is not None:
         name_line = f"  _repeat×{escape_markdown_v2(str(repeat_count))}_"
@@ -2167,13 +2173,13 @@ def _format_agent_description(
     """
     import html
 
-    label = html.escape(name)
+    label = html.escape(display_cl_name(name))
     model_esc = html.escape(model or "?")
     line = f"<b>{label}</b>  {model_esc}, {duration}"
     if status and status != "DONE":
         line += f" · {html.escape(status)}"
     if prompt:
-        snippet = prompt.replace("\n", " ").strip()
+        snippet = display_cl_names_in_text(prompt.replace("\n", " ").strip())
         if len(snippet) > 80:
             snippet = snippet[:80] + "…"
         line += f"\n<i>{html.escape(snippet)}</i>"
@@ -2189,14 +2195,14 @@ def _format_agent_list_block(agent: Any) -> str:
     duration_value = (
         agent.duration if isinstance(agent.duration, str) and agent.duration else "?"
     )
-    label = html.escape(name)
+    label = html.escape(display_cl_name(name))
     model = html.escape(model_value)
     duration = html.escape(duration_value)
 
     details: list[str] = []
     project = getattr(agent, "project", None)
     if isinstance(project, str) and project:
-        details.append(html.escape(project))
+        details.append(html.escape(display_project_name(project)))
     workspace_num = getattr(agent, "workspace_num", None)
     if isinstance(workspace_num, int):
         details.append(f"ws#{workspace_num}")
@@ -2211,7 +2217,7 @@ def _format_agent_list_block(agent: Any) -> str:
         block += f"\n{' · '.join(details)}"
     prompt = getattr(agent, "prompt", None)
     if isinstance(prompt, str) and prompt:
-        snippet = prompt.replace("\n", " ").strip()
+        snippet = display_cl_names_in_text(prompt.replace("\n", " ").strip())
         if len(snippet) > 120:
             snippet = snippet[:120] + "…"
         block += f"\n<i>{html.escape(snippet)}</i>"
@@ -2238,7 +2244,12 @@ def _show_kill_selection(chat_id: str) -> None:
     ]
     text = "Select an agent to kill:\n\n" + "\n\n".join(descriptions)
     buttons = [
-        [InlineKeyboardButton(name, callback_data=encode("kill", name, "go"))]
+        [
+            InlineKeyboardButton(
+                display_cl_name(name),
+                callback_data=encode("kill", name, "go"),
+            )
+        ]
         for _, name in named_agents
     ]
 
@@ -2323,7 +2334,7 @@ def _handle_fork_command() -> None:
         buttons.append(
             [
                 InlineKeyboardButton(
-                    f"🍴 {name}",
+                    f"🍴 {display_cl_name(name)}",
                     copy_text=CopyTextButton(text=fork_text),
                 )
             ]
@@ -2360,7 +2371,7 @@ def _handle_changes_command(args: str) -> None:
         message = (
             "No active ChangeSpecs."
             if project is None
-            else f"No active ChangeSpecs for {project}."
+            else f"No active ChangeSpecs for {display_project_name(project)}."
         )
         if skipped:
             message += f"\n{_format_changespec_skipped_note(len(skipped))}"
@@ -2371,7 +2382,7 @@ def _handle_changes_command(args: str) -> None:
     for start in range(0, total, _CHANGES_BUTTON_CHUNK_SIZE):
         chunk = entries[start : start + _CHANGES_BUTTON_CHUNK_SIZE]
         header = (
-            f"Active ChangeSpecs for {project} ({total})"
+            f"Active ChangeSpecs for {display_project_name(project)} ({total})"
             if project is not None
             else f"Active ChangeSpecs ({total})"
         )
@@ -2406,7 +2417,12 @@ def _format_changespec_skipped_note(skipped_count: int) -> str:
 
 
 def _changes_button_label(entry: Any, *, filtered: bool) -> str:
-    label = entry.name if filtered else f"{entry.project}/{entry.name}"
+    entry_name = display_cl_name(entry.name)
+    label = (
+        entry_name
+        if filtered
+        else f"{display_project_name(entry.project)}/{entry_name}"
+    )
     if len(label) <= 64:
         return label
     return label[:61] + "..."
@@ -2542,7 +2558,7 @@ def _project_bead_entries(
         )
         if result.returncode != 0:
             err = result.stderr.strip() or "sase bead list failed"
-            errors.append(f"{project.project}: {err}")
+            errors.append(f"{display_project_name(project.project)}: {err}")
             continue
         for entry in parse_bead_list_output(result.stdout):
             entries.append(
@@ -2592,8 +2608,8 @@ def _render_bead_selection(
     for entry in shown:
         label_id = entry.bead_id
         if entry.project and bead_id_counts.get(entry.bead_id, 0) > 1:
-            label_id = f"{entry.project}/{entry.bead_id}"
-        label = f"{entry.icon} {label_id}: {entry.title}"
+            label_id = f"{display_project_name(entry.project)}/{entry.bead_id}"
+        label = f"{entry.icon} {label_id}: {display_cl_names_in_text(entry.title)}"
         if len(label) > _BEAD_BUTTON_LABEL_MAX:
             label = label[: _BEAD_BUTTON_LABEL_MAX - 1] + "…"
 
@@ -2675,7 +2691,7 @@ def _bead_show_result(
                 ["sase", "bead", "show", bead_id],
                 1,
                 "",
-                f"Unable to resolve bead project: {project}",
+                f"Unable to resolve bead project: {display_project_name(project)}",
             )
         return bead_id, _run_bead_command(["show", bead_id], cwd=cwd)
 

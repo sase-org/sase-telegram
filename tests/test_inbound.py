@@ -1596,6 +1596,53 @@ class TestChangesCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_humanizes_unfiltered_button_labels_only(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(
+            entries=[
+                SimpleNamespace(
+                    project="sase",
+                    name="sase_foo",
+                    tag="#hg:sase_foo",
+                )
+            ],
+            skipped=[],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+                return_value=listing,
+            ) as mock_list,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                side_effect=lambda project: (
+                    "SASE Core" if project == "sase" else project
+                ),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                side_effect=lambda name: (
+                    "SASE Core_foo" if name == "sase_foo" else name
+                ),
+            ),
+        ):
+            _handle_changes_command("")
+
+        mock_list.assert_called_once_with(None)
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "SASE Core/SASE Core_foo"
+        assert button.copy_text.text == "#hg:sase_foo"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_changes_project_filter_uses_short_labels(
         self,
         mock_creds: MagicMock,
@@ -1623,6 +1670,47 @@ class TestChangesCommand:
         buttons = keyboard.inline_keyboard
         assert buttons[0][0].text == "foo"
         assert buttons[0][0].copy_text.text == "#hg:foo"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_changes_project_filter_humanizes_header_but_uses_raw_filter(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        listing = SimpleNamespace(
+            entries=[SimpleNamespace(project="sase", name="sase_foo", tag="#hg:foo")],
+            skipped=[],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+                return_value=listing,
+            ) as mock_list,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                return_value="SASE Core",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                return_value="SASE Core_foo",
+            ),
+        ):
+            _handle_changes_command("sase")
+
+        mock_list.assert_called_once_with("sase")
+        assert mock_tg.send_message.call_args.args[:2] == (
+            "12345",
+            "Active ChangeSpecs for SASE Core (1)",
+        )
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "SASE Core_foo"
+        assert button.copy_text.text == "#hg:foo"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -1951,6 +2039,49 @@ class TestLaunchAgent:
         assert buttons[0][0].copy_text.text == "#fork:c "
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_humanizes_visible_agent_name_only(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_result = MagicMock()
+        mock_result.pid = 42
+        mock_result.workspace_num = 3
+        mock_result.agent_name = "sase_agent"
+        mock_result.artifacts_dir = None
+        mock_result.project_name = ""
+        mock_result.timestamp = ""
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[mock_result],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                side_effect=lambda name: (
+                    "SASE Core_agent" if name == "sase_agent" else name
+                ),
+            ),
+        ):
+            _launch_agent("List all open beads")
+
+        call_args = mock_tg.send_message.call_args
+        assert "SASE Core\\_agent" in call_args.args[1]
+        keyboard = call_args.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].copy_text.text == "#fork:sase_agent "
+        assert buttons[0][1].copy_text.text == "%w:sase_agent "
+        assert buttons[1][0].callback_data == "kill:sase_agent:go"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -3119,6 +3250,36 @@ class TestSendKillResult:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_success_humanizes_visible_agent_name_only(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+
+        mock_creds.get_chat_id.return_value = "12345"
+        result = SimpleNamespace(success=True, message="Killed")
+        kill_info = {"prompt": "short prompt", "chat_id": "12345", "message_id": 1}
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+            side_effect=lambda name: (
+                "SASE Core_agent" if name == "sase_agent" else name
+            ),
+        ):
+            _send_kill_result("sase_agent", result, kill_info)
+
+        call_args = mock_tg.send_message.call_args
+        assert "SASE Core\\_agent" in call_args.args[1]
+        keyboard = call_args.kwargs.get("reply_markup")
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "short prompt"
+        mock_pending.remove.assert_called_once_with("kill-sase_agent")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_long_prompt_uses_callback_redo_button(
         self,
         mock_creds: MagicMock,
@@ -3262,6 +3423,30 @@ class TestHandleListCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_project_detail_uses_display_project_name(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [_running_agent("alpha", project="sase-core")]
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                return_value="SASE & Core",
+            ),
+        ):
+            _handle_list_command()
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "SASE &amp; Core · ws#1 · PID 1234" in text
+        assert "sase-core · ws#1" not in text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_multiple_statuses_use_bucket_order_and_preserve_agent_order(
         self,
         mock_creds: MagicMock,
@@ -3285,6 +3470,67 @@ class TestHandleListCommand:
         done_idx = text.index("<b>✓ Done (1)</b>")
         assert needs_idx < running_idx < done_idx
         assert text.index("run-1") < text.index("run-2")
+
+
+class TestHandleKillSelection:
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_humanizes_visible_labels_but_keeps_callback_raw(
+        self,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _show_kill_selection
+
+        agents = [_running_agent("sase_agent")]
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                side_effect=lambda name: (
+                    "SASE Core_agent" if name == "sase_agent" else name
+                ),
+            ),
+        ):
+            _show_kill_selection("12345")
+
+        call_args = mock_tg.send_message.call_args
+        text = call_args.args[1]
+        assert "<b>SASE Core_agent</b>" in text
+        keyboard = call_args.kwargs["reply_markup"]
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "SASE Core_agent"
+        assert button.callback_data == "kill:sase_agent:go"
+
+
+class TestHandleForkCommand:
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_humanizes_visible_labels_but_keeps_copy_raw(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_fork_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [_running_agent("sase_agent", prompt="#gh:sase Fix")]
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch("sase.xprompt.extract_vcs_workflow_tag", return_value="#gh:sase "),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                side_effect=lambda name: (
+                    "SASE Core_agent" if name == "sase_agent" else name
+                ),
+            ),
+        ):
+            _handle_fork_command()
+
+        call_args = mock_tg.send_message.call_args
+        assert "<b>SASE Core_agent</b>" in call_args.args[1]
+        keyboard = call_args.kwargs["reply_markup"]
+        button = keyboard.inline_keyboard[0][0]
+        assert button.text == "🍴 SASE Core_agent"
+        assert button.copy_text.text == "#gh:sase #fork:sase_agent "
 
 
 class TestHandleRetryFromCallback:
@@ -3533,6 +3779,67 @@ class TestBeadCommand:
         assert decode(rows[0][0].callback_data) == ("bead", "zorg/zorg-1", "show")
         assert rows[1][0].text == "◐ zorg-2: Follow-up routing"
         assert decode(rows[1][0].callback_data) == ("bead", "zorg/zorg-2", "show")
+
+    def test_duplicate_project_bead_labels_use_display_project_only(self) -> None:
+        from sase_telegram.callback_data import decode
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        entries = [
+            inbound._ProjectBeadEntry(
+                project="sase",
+                workspace="/tmp/sase",
+                icon="○",
+                bead_id="same-1",
+                title="First",
+            ),
+            inbound._ProjectBeadEntry(
+                project="zorg",
+                workspace="/tmp/zorg",
+                icon="◐",
+                bead_id="same-1",
+                title="Second",
+            ),
+        ]
+
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                side_effect=lambda project: {
+                    "sase": "SASE Core",
+                    "zorg": "Zorg App",
+                }.get(project, project),
+            ),
+        ):
+            inbound._render_bead_selection("12345", entries)
+
+        keyboard = tc_mock.send_message.call_args.kwargs["reply_markup"]
+        rows = keyboard.inline_keyboard
+        assert rows[0][0].text == "○ SASE Core/same-1: First"
+        assert decode(rows[0][0].callback_data) == ("bead", "sase/same-1", "show")
+        assert rows[1][0].text == "◐ Zorg App/same-1: Second"
+        assert decode(rows[1][0].callback_data) == ("bead", "zorg/same-1", "show")
+
+    def test_project_bead_errors_use_display_project_name(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
+        failed = SimpleNamespace(returncode=1, stdout="", stderr="db locked")
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._run_bead_command",
+                return_value=failed,
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                return_value="SASE Core",
+            ),
+        ):
+            entries, errors = inbound._project_bead_entries(projects)
+
+        assert entries == []
+        assert errors == ["SASE Core: db locked"]
 
     def test_missing_arg_list_uses_resolved_bead_cwd(self, tmp_path: Path) -> None:
         workspace = tmp_path / "sase"

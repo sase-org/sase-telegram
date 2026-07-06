@@ -41,6 +41,45 @@ _INLINE_PATTERN = re.compile(
 )
 
 
+def display_project_name(project: str) -> str:
+    """Return the Telegram-visible project name for a canonical project key."""
+    try:
+        from sase.project_display_names import project_display_name_for
+    except ImportError:
+        return project
+
+    try:
+        return project_display_name_for(project)
+    except Exception:
+        return project
+
+
+def display_cl_name(name: str) -> str:
+    """Return the Telegram-visible ChangeSpec/agent name."""
+    try:
+        from sase.project_display_names import humanize_cl_name
+    except ImportError:
+        return name
+
+    try:
+        return humanize_cl_name(name)
+    except Exception:
+        return name
+
+
+def display_cl_names_in_text(text: str) -> str:
+    """Humanize standalone ChangeSpec/agent names in Telegram-visible text."""
+    try:
+        from sase.project_display_names import humanize_cl_names_in_text
+    except ImportError:
+        return text
+
+    try:
+        return humanize_cl_names_in_text(text)
+    except Exception:
+        return text
+
+
 def escape_markdown_v2(text: str) -> str:
     """Escape special characters for Telegram MarkdownV2 format."""
     return re.sub(r"([" + re.escape(_MARKDOWN_V2_SPECIAL) + r"])", r"\\\1", text)
@@ -269,7 +308,7 @@ def _format_notes_text(
     Long notes (> EXPANDABLE_THRESHOLD) are wrapped in an expandable blockquote.
     Very long notes (> max_length) are truncated before wrapping.
     """
-    text = "\n".join(notes)
+    text = display_cl_names_in_text("\n".join(notes))
     use_blockquote = len(text) > EXPANDABLE_THRESHOLD
     if len(text) > max_length:
         text = text[:max_length] + "\n\n... (see TUI for full output)"
@@ -340,8 +379,8 @@ def _format_plan_approval(
     from sase.llm_provider.registry import format_provider_model_label
 
     agent_name = n.action_data.get("agent_name")
-    if agent_name:
-        escaped_name = escape_markdown_v2(agent_name)
+    if isinstance(agent_name, str) and agent_name:
+        escaped_name = escape_markdown_v2(display_cl_name(agent_name))
         name_line = f"  _@{escaped_name}_"
     else:
         name_line = ""
@@ -751,15 +790,17 @@ def _format_workflow_complete(
             n.action_data.get("model"),
         )
     )
-    if agent_name:
-        escaped_name = escape_markdown_v2(agent_name)
+    if isinstance(agent_name, str) and agent_name:
+        escaped_name = escape_markdown_v2(display_cl_name(agent_name))
         name_line = f"  _@{escaped_name}_"
     else:
         name_line = ""
     header = f"{icon} *{label} Complete*{name_line}"
     bead_display = n.action_data.get("bead_display")
-    if bead_display:
-        header += f"\n*Bead:* {escape_markdown_v2(bead_display)}"
+    if isinstance(bead_display, str) and bead_display:
+        header += (
+            f"\n*Bead:* {escape_markdown_v2(display_cl_names_in_text(bead_display))}"
+        )
     runtime = n.action_data.get("runtime")
     if runtime:
         header += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
@@ -771,18 +812,19 @@ def _format_workflow_complete(
         text += f"\n\n🔗 *PR:* {escaped_url}"
 
     prompt = n.action_data.get("prompt")
-    if prompt:
+    if isinstance(prompt, str) and prompt:
+        display_prompt = display_cl_names_in_text(prompt)
         truncated = (
-            prompt
-            if len(prompt) <= PROMPT_DISPLAY_MAX
-            else (prompt[:PROMPT_DISPLAY_MAX] + "…")
+            display_prompt
+            if len(display_prompt) <= PROMPT_DISPLAY_MAX
+            else (display_prompt[:PROMPT_DISPLAY_MAX] + "…")
         )
         text += f"\n\n📝 *Prompt:*\n{escape_markdown_v2(truncated)}"
 
     attachments = [str(p) for f in n.files if (p := Path(f).expanduser()).exists()]
 
     keyboard: InlineKeyboardMarkup | None = None
-    if agent_name:
+    if isinstance(agent_name, str) and agent_name:
         from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
 
         fork_text = f"#fork:{agent_name} "

@@ -6,6 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 from sase.notifications.models import Notification
+import sase_telegram.formatting as formatting
 from sase_telegram.formatting import (
     EXPANDABLE_THRESHOLD,
     MAX_MESSAGE_LENGTH,
@@ -345,6 +346,24 @@ class TestFormatPlanApproval:
         assert "Plan Review" in text
         assert keyboard is not None
 
+    def test_humanizes_agent_name_in_header(self, monkeypatch):
+        monkeypatch.setattr(
+            formatting,
+            "display_cl_name",
+            lambda name: "SASE Core_plan" if name == "sase_plan" else name,
+        )
+
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready for review"],
+            files=["/nonexistent/plan.md"],
+            action_data={"agent_name": "sase_plan"},
+        )
+        text, _, _ = format_notification(n)
+
+        assert "_@SASE Core\\_plan_" in text
+
 
 class TestFormatLaunchApproval:
     def test_with_preview_and_keyboard(self):
@@ -594,6 +613,38 @@ class TestFormatWorkflowComplete:
         button = keyboard.inline_keyboard[0][0]
         assert button.copy_text is not None
         assert button.copy_text.text == "#fork:sase-x.3 "
+
+    def test_humanizes_visible_text_but_keeps_fork_copy_raw(self, monkeypatch):
+        monkeypatch.setattr(
+            formatting,
+            "display_cl_name",
+            lambda name: "SASE Core_task" if name == "sase_task" else name,
+        )
+        monkeypatch.setattr(
+            formatting,
+            "display_cl_names_in_text",
+            lambda text: text.replace("sase_task", "SASE Core_task"),
+        )
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: sase_task"],
+            action_data={
+                "agent_name": "sase_task",
+                "bead_display": "sase_task - Fix the thing",
+                "prompt": "Continue sase_task",
+            },
+        )
+
+        text, keyboard, _ = format_notification(n)
+
+        assert "_@SASE Core\\_task_" in text
+        assert "*Bead:* SASE Core\\_task \\- Fix the thing" in text
+        assert "Agent completed: SASE Core\\_task" in text
+        assert "Continue SASE Core\\_task" in text
+        assert keyboard is not None
+        button = keyboard.inline_keyboard[0][0]
+        assert button.copy_text is not None
+        assert button.copy_text.text == "#fork:sase_task "
 
     def test_includes_runtime_without_changing_existing_fields(self):
         from unittest.mock import patch
