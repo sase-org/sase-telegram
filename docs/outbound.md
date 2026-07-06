@@ -72,5 +72,6 @@ The visible plan **✅ Approve** button maps to the internal `run` payload for c
 - **Diff sections**: Diffs from chat files and commit messages are embedded into the response PDF
 - **Research files**: Detected research files in diffs are mentioned in the notification
 - **Digest files**: Error digest files are sent as document attachments
-- **Images and PDFs**: Image attachments are sent inline as photos; existing PDFs are sent as documents without
-  conversion
+- **Media and PDFs**: Static images are sent inline as photos, GIFs as animations, videos as videos, and existing PDFs
+  as documents without conversion. If Telegram rejects a GIF or video as inline media, outbound retries that file as a
+  document.

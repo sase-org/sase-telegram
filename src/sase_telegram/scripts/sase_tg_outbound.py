@@ -15,7 +15,13 @@ from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import format_notification
 from sase_telegram.outbound import get_unsent_notifications, mark_sent
-from sase_telegram.telegram_client import send_document, send_message, send_photo
+from sase_telegram.telegram_client import (
+    send_animation,
+    send_document,
+    send_message,
+    send_photo,
+    send_video,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,13 +130,40 @@ def _is_diff_file(file_path: str) -> bool:
 
 
 def _is_image_file(file_path: str) -> bool:
-    """Check if a file path points to a common image format."""
-    return Path(file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    """Check if a file path points to a static image format."""
+    return Path(file_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _is_animation_file(file_path: str) -> bool:
+    """Check if a file path points to an animation format."""
+    return Path(file_path).suffix.lower() == ".gif"
+
+
+def _is_video_file(file_path: str) -> bool:
+    """Check if a file path points to a common video format."""
+    return Path(file_path).suffix.lower() in {".mp4", ".m4v", ".mov", ".webm"}
 
 
 def _is_pdf_file(file_path: str) -> bool:
     """Check if a file path points to a PDF."""
     return Path(file_path).suffix.lower() == ".pdf"
+
+
+def _send_media_with_document_fallback(
+    chat_id: str,
+    file_path: str,
+    send_media: Any,
+) -> None:
+    """Send inline media, retrying as a document if Telegram rejects it."""
+    try:
+        send_media(chat_id, file_path)
+    except Exception:
+        log.warning(
+            "Failed to send media %s inline; retrying as document",
+            file_path,
+            exc_info=True,
+        )
+        send_document(chat_id, file_path)
 
 
 def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None:
@@ -426,6 +459,18 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
 
                 if _is_image_file(actual_path):
                     send_photo(chat_id, actual_path)
+                    rate_limit.record_send()
+                    continue
+
+                if _is_animation_file(actual_path):
+                    _send_media_with_document_fallback(
+                        chat_id, actual_path, send_animation
+                    )
+                    rate_limit.record_send()
+                    continue
+
+                if _is_video_file(actual_path):
+                    _send_media_with_document_fallback(chat_id, actual_path, send_video)
                     rate_limit.record_send()
                     continue
 

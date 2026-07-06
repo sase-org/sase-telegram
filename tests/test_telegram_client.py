@@ -31,6 +31,8 @@ def mock_bot(mocker: MockerFixture) -> MagicMock:
     bot.send_message = AsyncMock()
     bot.send_document = AsyncMock()
     bot.send_photo = AsyncMock()
+    bot.send_animation = AsyncMock()
+    bot.send_video = AsyncMock()
     bot.get_updates = AsyncMock(return_value=[])
     bot.answer_callback_query = AsyncMock(return_value=True)
     bot.edit_message_reply_markup = AsyncMock()
@@ -199,6 +201,24 @@ class TestSendPhoto:
         telegram_client.send_photo("chat-1", "/tmp/x.png", caption="hi")
         mock_bot.send_photo.assert_awaited_once_with(
             chat_id="chat-1", photo="/tmp/x.png", caption="hi"
+        )
+
+
+class TestSendAnimation:
+    def test_delegates_to_bot(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_animation.return_value = MagicMock(message_id=1)
+        telegram_client.send_animation("chat-1", "/tmp/x.gif", caption="hi")
+        mock_bot.send_animation.assert_awaited_once_with(
+            chat_id="chat-1", animation="/tmp/x.gif", caption="hi"
+        )
+
+
+class TestSendVideo:
+    def test_delegates_to_bot(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_video.return_value = MagicMock(message_id=1)
+        telegram_client.send_video("chat-1", "/tmp/x.mp4", caption="hi")
+        mock_bot.send_video.assert_awaited_once_with(
+            chat_id="chat-1", video="/tmp/x.mp4", caption="hi"
         )
 
 

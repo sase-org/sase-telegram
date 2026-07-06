@@ -732,25 +732,33 @@ class TestFormatWorkflowComplete:
         assert button.copy_text is not None
         assert button.copy_text.text == "#gh:sase #fork:c "
 
-    def test_preserves_workflow_complete_image_attachments(self):
+    def test_preserves_workflow_complete_media_attachments(self):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as png:
             png.write(b"\x89PNG\r\n\x1a\n")
             png_file = png.name
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as jpg:
             jpg.write(b"\xff\xd8\xff")
             jpg_file = jpg.name
+        with tempfile.NamedTemporaryFile(suffix=".gif", delete=False) as gif:
+            gif.write(b"GIF89a")
+            gif_file = gif.name
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as mp4:
+            mp4.write(b"\x00\x00\x00\x18ftypmp42")
+            mp4_file = mp4.name
 
         n = _make_notification(
             sender="user-agent",
-            notes=["Agent completed: image-update"],
-            files=[png_file, jpg_file, "/missing/not-attached.gif"],
+            notes=["Agent completed: media-update"],
+            files=[png_file, jpg_file, gif_file, mp4_file, "/missing/not-attached.gif"],
         )
         _text, _keyboard, attachments = format_notification(n)
 
-        assert attachments == [png_file, jpg_file]
+        assert attachments == [png_file, jpg_file, gif_file, mp4_file]
 
         Path(png_file).unlink()
         Path(jpg_file).unlink()
+        Path(gif_file).unlink()
+        Path(mp4_file).unlink()
 
 
 class TestFormatErrorDigest:

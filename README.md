@@ -65,7 +65,7 @@ Installing sase-telegram adds the following commands:
 | Plan Approval      | Shows plan content with Tale / ✅ Approve / Epic / Legend / Reject / Feedback buttons       |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
-| Workflow Complete   | Sends a summary message with diff/chat attachments and a Fork copy button                 |
+| Workflow Complete   | Sends a summary message with diff/chat/media attachments and a Fork copy button           |
 | Agent Launched      | Shows provider/model label, workspace number, prompt snippet, and Fork / Wait / Kill / Retry buttons |
 | Agent Killed        | Confirms termination with a Redo copy button to re-launch with the same prompt              |
 | Error Digest       | Sends error summary with digest file attachments                                            |
@@ -84,6 +84,8 @@ Installing sase-telegram adds the following commands:
 - **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — `/list`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
+  matching Telegram send method, with GIF/video document fallback
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -136,8 +138,9 @@ The outbound script acquires an exclusive file lock (to prevent concurrent runs 
 notifications using a high-water mark timestamp, and formats them as Telegram MarkdownV2 messages with inline
 keyboards. Long plans are wrapped in expandable blockquotes or truncated and paired with a document attachment. Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
-PDF when possible. Actionable notifications (plan approvals, HITL requests, user questions) are saved as pending
-actions for the inbound script to match against.
+PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
+and videos retry as documents if Telegram rejects inline media delivery. Actionable notifications (plan approvals, HITL
+requests, user questions) are saved as pending actions for the inbound script to match against.
 
 ### Inbound
 

@@ -18,9 +18,11 @@ from sase_telegram.outbound import (
 )
 from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
+    _is_animation_file,
     _is_diff_file,
     _is_image_file,
     _is_pdf_file,
+    _is_video_file,
     _prepend_commit_message_to_markdown,
     _run_outbound,
 )
@@ -167,11 +169,36 @@ class TestIsImageFile:
         assert _is_image_file("/path/to/file.jpeg")
         assert _is_image_file("/path/to/file.png")
         assert _is_image_file("/path/to/file.webp")
-        assert _is_image_file("/path/to/file.gif")
 
     def test_non_image_extension(self):
+        assert not _is_image_file("/path/to/file.gif")
         assert not _is_image_file("/path/to/file.md")
         assert not _is_image_file("/path/to/file.diff")
+
+
+class TestIsAnimationFile:
+    def test_gif_extension(self):
+        assert _is_animation_file("/path/to/file.gif")
+        assert _is_animation_file("/path/to/file.GIF")
+
+    def test_non_animation_extension(self):
+        assert not _is_animation_file("/path/to/file.png")
+        assert not _is_animation_file("/path/to/file.mp4")
+
+
+class TestIsVideoFile:
+    def test_known_extensions(self):
+        assert _is_video_file("/path/to/file.mp4")
+        assert _is_video_file("/path/to/file.m4v")
+        assert _is_video_file("/path/to/file.mov")
+        assert _is_video_file("/path/to/file.webm")
+
+    def test_case_insensitive(self):
+        assert _is_video_file("/path/to/file.MP4")
+
+    def test_non_video_extension(self):
+        assert not _is_video_file("/path/to/file.gif")
+        assert not _is_video_file("/path/to/file.pdf")
 
 
 class TestIsPdfFile:
@@ -356,6 +383,154 @@ class TestRunOutboundAttachments:
         md_to_pdf.assert_not_called()
 
         Path(image_path).unlink()
+
+    def test_workflow_complete_gif_sends_animation_not_photo(self):
+        with tempfile.NamedTemporaryFile(suffix=".gif", delete=False) as gif:
+            gif.write(b"GIF89a")
+            gif_path = gif.name
+
+        notification = Notification(
+            id="gif00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: gif-update"],
+            files=[gif_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_photo") as send_photo,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_animation"
+            ) as send_animation,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_animation.assert_called_once_with("chat-1", gif_path)
+        send_photo.assert_not_called()
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+
+        Path(gif_path).unlink()
+
+    def test_workflow_complete_video_sends_video_not_document(self):
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video:
+            video.write(b"\x00\x00\x00\x18ftypmp42")
+            video_path = video.name
+
+        notification = Notification(
+            id="vid00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: video-update"],
+            files=[video_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_video") as send_video,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_video.assert_called_once_with("chat-1", video_path)
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+
+        Path(video_path).unlink()
+
+    def test_workflow_complete_media_failure_falls_back_to_document(self):
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as video:
+            video.write(b"webm")
+            video_path = video.name
+
+        notification = Notification(
+            id="fbk00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: fallback-update"],
+            files=[video_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_video",
+                side_effect=RuntimeError("unsupported codec"),
+            ) as send_video,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_video.assert_called_once_with("chat-1", video_path)
+        send_document.assert_called_once_with("chat-1", video_path)
+        md_to_pdf.assert_not_called()
+
+        Path(video_path).unlink()
 
     def test_mixed_chat_diff_pdf_and_image_sends_expected_attachments(self):
         with tempfile.TemporaryDirectory() as tmpdir:

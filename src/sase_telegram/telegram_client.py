@@ -204,6 +204,30 @@ def send_photo(
 
 
 @_with_retry
+def send_animation(
+    chat_id: str,
+    animation: str | bytes,
+    caption: str | None = None,
+) -> Message:
+    """Send an animation to a Telegram chat (renders inline in chat)."""
+    bot = _get_bot()
+    return _run_async(
+        bot.send_animation(chat_id=chat_id, animation=animation, caption=caption)
+    )
+
+
+@_with_retry
+def send_video(
+    chat_id: str,
+    video: str | bytes,
+    caption: str | None = None,
+) -> Message:
+    """Send a video to a Telegram chat (renders inline in chat)."""
+    bot = _get_bot()
+    return _run_async(bot.send_video(chat_id=chat_id, video=video, caption=caption))
+
+
+@_with_retry
 def get_updates(offset: int | None = None, timeout: int = 0) -> list[Update]:
     """Fetch updates (new messages/callbacks) from the Telegram API."""
     bot = _get_bot()
