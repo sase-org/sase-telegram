@@ -553,6 +553,116 @@ class TestHandleTextMessageAgentLaunch:
             mock_handle.assert_called_once_with("/list", msg)
             mock_launch.assert_not_called()
 
+    def test_stale_launch_awaiting_does_not_consume_slash_command(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        save_awaiting_feedback(
+            "42",
+            "lnch0001",
+            {"action_type": "launch", "response_dir": str(tmp_path)},
+        )
+        msg = SimpleNamespace(
+            text="/list",
+            entities=None,
+            message_id=101,
+            chat=SimpleNamespace(id="12345"),
+        )
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_command"
+            ) as mock_handle,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+        ):
+            mock_pa.get.return_value = None
+
+            _handle_text_message(msg)
+
+        mock_handle.assert_called_once_with("/list", msg)
+        mock_launch.assert_not_called()
+        mock_tg.send_message.assert_not_called()
+        assert load_awaiting_feedback() is None
+
+    def test_stale_launch_awaiting_clears_before_plain_text_launch(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        save_awaiting_feedback(
+            "42",
+            "lnch0001",
+            {"action_type": "launch", "response_dir": str(tmp_path)},
+        )
+        msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
+            ) as mock_record,
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+        ):
+            mock_pa.get.return_value = None
+
+            _handle_text_message(msg)
+
+        assert load_awaiting_feedback() is None
+        mock_record.assert_called_once_with("List all open beads", msg)
+        mock_launch.assert_called_once_with("List all open beads")
+
+    def test_reply_to_stale_launch_awaiting_sends_friendly_message(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_text_message,
+        )
+
+        save_awaiting_feedback(
+            "42",
+            "lnch0001",
+            {"action_type": "launch", "response_dir": str(tmp_path)},
+        )
+        msg = SimpleNamespace(
+            text="Too many agents",
+            entities=None,
+            message_id=100,
+            reply_to_message=SimpleNamespace(message_id=42),
+            chat=SimpleNamespace(id="12345"),
+        )
+        with (
+            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+        ):
+            mock_pa.get.return_value = None
+
+            _handle_text_message(msg)
+
+        assert load_awaiting_feedback() is None
+        mock_launch.assert_not_called()
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "This action has already been handled",
+            reply_to_message_id=100,
+        )
+
+    def test_missing_launch_action_error_is_sanitized(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _launch_error_answer_text
+
+        exc = LaunchApprovalActionError(
+            "not_found",
+            "lnch0001",
+            "pending launch action is missing",
+        )
+
+        assert _launch_error_answer_text(exc) == "This action has already been handled"
+
     def test_slash_command_ignored(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,

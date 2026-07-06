@@ -79,6 +79,7 @@ _VCS_PROJECT_PATTERN = (
 _VCS_PROJECT_RE = re.compile(_VCS_PROJECT_PATTERN, re.IGNORECASE)
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 _LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
+_STALE_AWAITING_FEEDBACK_TEXT = "This action has already been handled"
 
 
 @dataclass(frozen=True)
@@ -743,9 +744,9 @@ def _write_response(response: ResponseAction) -> None:
 
 
 def _launch_error_answer_text(exc: LaunchApprovalActionError) -> str:
-    if exc.code == "conflict_already_handled":
-        return "This action has already been handled"
-    if exc.code == "invalid_request":
+    if exc.code in {"conflict_already_handled", "not_found"}:
+        return _STALE_AWAITING_FEEDBACK_TEXT
+    if exc.code in {"invalid_request", "stale", "expired"}:
         return "This request has expired"
     if exc.code == "dispatch_failed":
         return f"Launch dispatch failed: {exc}"
@@ -2851,8 +2852,71 @@ def _send_confirmation(response: ResponseAction, message_id: int) -> None:
         log.warning("Failed to send confirmation reply", exc_info=True)
 
 
+def _awaiting_feedback_prefix(reply_key: str | None) -> str | None:
+    awaiting = load_awaiting_feedback(reply_key)
+    if not isinstance(awaiting, dict):
+        return None
+
+    prefix = awaiting.get("prefix")
+    if not isinstance(prefix, str) or not prefix:
+        return None
+    return prefix
+
+
+def _pending_action_exists(prefix: str) -> bool:
+    try:
+        return pending_actions.get(prefix) is not None
+    except Exception:
+        log.warning(
+            "Failed to load pending action for awaiting-feedback cleanup",
+            exc_info=True,
+        )
+        return True
+
+
+def _clear_awaiting_feedback_entry(reply_key: str | None, prefix: str) -> None:
+    if reply_key is not None:
+        clear_awaiting_feedback(reply_key)
+    else:
+        clear_awaiting_feedback_by_prefix(prefix)
+
+
+def _clear_stale_awaiting_feedback_entry(reply_key: str | None, prefix: str) -> None:
+    if reply_key is not None:
+        clear_awaiting_feedback(reply_key)
+    clear_awaiting_feedback_by_prefix(prefix)
+
+
+def _clear_stale_awaiting_feedback(reply_key: str | None) -> str | None:
+    prefix = _awaiting_feedback_prefix(reply_key)
+    if prefix is None or _pending_action_exists(prefix):
+        return None
+
+    _clear_stale_awaiting_feedback_entry(reply_key, prefix)
+    return prefix
+
+
+def _send_stale_awaiting_feedback_reply(message: Any) -> None:
+    chat_id = _message_chat_id(message) or _configured_chat_id()
+    if chat_id is None:
+        return
+
+    kwargs: dict[str, Any] = {}
+    message_id = _message_id(message)
+    if message_id:
+        kwargs["reply_to_message_id"] = message_id
+    try:
+        telegram_client.send_message(
+            chat_id,
+            _STALE_AWAITING_FEEDBACK_TEXT,
+            **kwargs,
+        )
+    except Exception:
+        log.warning("Failed to send stale feedback reply", exc_info=True)
+
+
 def _handle_text_message(message: Any) -> None:
-    """Handle a text message: feedback completion, or new agent launch."""
+    """Handle a text message: command dispatch, feedback, or new agent launch."""
     text = reconstruct_code_markers(message.text, message.entities)
     reply_to = getattr(message, "reply_to_message", None)
     reply_key = (
@@ -2860,6 +2924,19 @@ def _handle_text_message(message: Any) -> None:
         if reply_to is not None and getattr(reply_to, "message_id", None) is not None
         else None
     )
+
+    # Slash commands are user-visible commands even when an old two-step
+    # feedback flow is still recorded.
+    if text.startswith("/"):
+        _clear_stale_awaiting_feedback(reply_key)
+        _handle_command(text, message)
+        return
+
+    stale_prefix = _clear_stale_awaiting_feedback(reply_key)
+    if stale_prefix is not None and reply_key is not None:
+        _send_stale_awaiting_feedback_reply(message)
+        return
+
     if _handle_question_text_message(message, text, reply_key=reply_key):
         return
 
@@ -2877,23 +2954,13 @@ def _handle_text_message(message: Any) -> None:
                     reply_to_message_id=message.message_id,
                 )
             pending_actions.remove(response.notif_id_prefix)
-            clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
-            if reply_key is not None:
-                clear_awaiting_feedback(reply_key)
+            _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
             return
         # Clear only the matched awaiting entry — leaves other concurrent
         # flows intact.
-        if reply_key is not None:
-            clear_awaiting_feedback(reply_key)
-        else:
-            clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
+        _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
         pending_actions.remove(response.notif_id_prefix)
         _send_confirmation(response, message.message_id)
-        return
-
-    # Dispatch slash commands (e.g. "/kill agent")
-    if text.startswith("/"):
-        _handle_command(text, message)
         return
 
     if _telegram_agent_launches_disabled():
