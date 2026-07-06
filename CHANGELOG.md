@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3](https://github.com/sase-org/sase-telegram/compare/v0.2.2...v0.2.3) (2026-07-06)
+
+
+### Features
+
+* support LaunchApproval actions in Telegram ([887c10a](https://github.com/sase-org/sase-telegram/commit/887c10a9bbc87a967a5a96bfb388bc3b4efdbc7f))
+
+
+### Bug Fixes
+
+* add MIT LICENSE file and bundle it in wheels ([01ecd97](https://github.com/sase-org/sase-telegram/commit/01ecd979bea5842d5624d160d00affeb2d13aefd))
+
 ## [0.2.2](https://github.com/sase-org/sase-telegram/compare/v0.2.1...v0.2.2) (2026-07-04)
 
 
