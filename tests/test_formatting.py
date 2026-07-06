@@ -346,6 +346,64 @@ class TestFormatPlanApproval:
         assert keyboard is not None
 
 
+class TestFormatLaunchApproval:
+    def test_with_preview_and_keyboard(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("# Launch Preview\n\n- Start agent A\n- Start agent B")
+            preview_file = f.name
+
+        n = _make_notification(
+            action="LaunchApproval",
+            sender="launch",
+            notes=["Launch approval requested: 2 slots", "Source: telegram"],
+            files=[preview_file],
+            action_data={
+                "response_dir": "/tmp/launch",
+                "request_id": "req_123",
+                "source_surface": "telegram",
+                "slot_count": "2",
+            },
+        )
+        text, keyboard, attachments = format_notification(n)
+
+        assert text.startswith("🚀 *Launch Approval*")
+        assert "*Slots:* 2 slots" in text
+        assert "*Source:* telegram" in text
+        assert "*Request:* `req_123`" in text
+        assert "**>" in text
+        assert "*Launch Preview*" in text
+        assert "Start agent A" in text
+        assert attachments == [preview_file]
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert len(buttons) == 1
+        assert [button.text for button in buttons[0]] == [
+            "✅ Approve",
+            "❌ Reject",
+            "💬 Feedback",
+        ]
+        assert buttons[0][0].callback_data == "launch:abcd1234:approve"
+        assert buttons[0][1].callback_data == "launch:abcd1234:reject"
+        assert buttons[0][2].callback_data == "launch:abcd1234:feedback"
+
+        Path(preview_file).unlink()
+
+    def test_missing_preview_file_still_attaches_path(self):
+        n = _make_notification(
+            action="LaunchApproval",
+            sender="launch",
+            notes=["Launch approval requested: 1 slot", "Source: cli"],
+            files=["/nonexistent/launch_preview.md"],
+            action_data={"slot_count": "1", "source_surface": "cli"},
+        )
+        text, keyboard, attachments = format_notification(n)
+
+        assert "Launch Approval" in text
+        assert "*Slots:* 1 slot" in text
+        assert keyboard is not None
+        assert attachments == ["/nonexistent/launch_preview.md"]
+
+
 class TestFormatHITL:
     def test_format_and_keyboard(self):
         n = _make_notification(

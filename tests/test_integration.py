@@ -216,6 +216,63 @@ class TestOutboundIntegration:
         assert f"ids={n.id[:8]}" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_document")
+    @patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf")
+    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
+    def test_saves_pending_action_for_launch_approval(
+        self,
+        mock_chat_id: MagicMock,
+        mock_load: MagicMock,
+        mock_md_to_pdf: MagicMock,
+        mock_send_document: MagicMock,
+        mock_send: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Launch approval notifications are saved as pending actions."""
+        mock_chat_id.return_value = "12345"
+        mock_send.return_value = MagicMock(message_id=99)
+        mock_md_to_pdf.return_value = None
+        mock_send_document.return_value = MagicMock(message_id=100)
+
+        LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_SENT_TEST_FILE.write_text(
+            str(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        )
+
+        preview_file = tmp_path / "launch_preview.md"
+        preview_file.write_text("# Launch Preview\n")
+        n = _make_notification(
+            action="LaunchApproval",
+            sender="launch",
+            notes=["Launch approval requested: 2 slots", "Source: telegram"],
+            action_data={
+                "response_dir": str(tmp_path / "responses"),
+                "request_id": "req_1",
+                "source_surface": "telegram",
+                "slot_count": "2",
+            },
+            files=[str(preview_file)],
+        )
+        mock_load.return_value = [n]
+
+        result = outbound_main([])
+        assert result == 0
+
+        from sase_telegram import pending_actions
+
+        pending = pending_actions.list_all()
+        prefix = n.id[:8]
+        assert pending[prefix]["action"] == "LaunchApproval"
+        assert pending[prefix]["action_data"]["request_id"] == "req_1"
+        assert pending[prefix]["files"] == [str(preview_file)]
+        assert pending[prefix]["message_id"] == 99
+        mock_send_document.assert_called()
+        captured = capsys.readouterr()
+        assert "pending_action_writes=1" in captured.out
+
+    @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound.load_notifications")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_registers_telegram_transport_in_shared_store(
@@ -793,6 +850,109 @@ class TestInboundIntegration:
         assert response_file.exists()
         data = json.loads(response_file.read_text())
         assert data == {"action": "accept", "approved": True}
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_launch_approve_callback_through_executor(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Launch approve callback resolves through the shared host executor."""
+        response_dir = tmp_path / "launch"
+        response_dir.mkdir()
+        (response_dir / "launch_request.json").write_text("{}")
+
+        from sase_telegram import pending_actions
+
+        pending_actions.add(
+            "lnch0001",
+            {
+                "notification_id": "lnch0001-0000-0000-0000-000000000000",
+                "action": "LaunchApproval",
+                "action_data": {
+                    "response_dir": str(response_dir),
+                    "request_id": "req_1",
+                },
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+
+        callback_query = SimpleNamespace(
+            id="cb_launch",
+            data="launch:lnch0001:approve",
+            message=SimpleNamespace(message_id=42),
+        )
+        update = SimpleNamespace(
+            update_id=210,
+            callback_query=callback_query,
+            message=None,
+        )
+        mock_tg.get_updates.return_value = [update]
+        mock_tg.answer_callback_query.return_value = True
+        mock_tg.edit_message_reply_markup.return_value = True
+
+        with patch(
+            "sase.agent.launch_request.dispatch_approved_launch_request",
+            return_value=SimpleNamespace(launched_count=2),
+        ) as mock_dispatch:
+            result = inbound_main(["--once"])
+        assert result == 0
+
+        mock_dispatch.assert_called_once_with(response_dir)
+        response_file = response_dir / "launch_response.json"
+        assert response_file.exists()
+        assert json.loads(response_file.read_text()) == {
+            "action": "approve",
+            "dispatch_status": "launched",
+            "launched_count": 2,
+        }
+        mock_tg.answer_callback_query.assert_called_with(
+            "cb_launch", "Launch approved and dispatched 2 agents"
+        )
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        assert pending_actions.get("lnch0001") is None
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_launch_callback_conflict_is_answered(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """A late LaunchApproval callback gets a deterministic handled answer."""
+        response_dir = tmp_path / "launch"
+        response_dir.mkdir()
+
+        from sase_telegram import pending_actions
+
+        pending_actions.add(
+            "lnch0001",
+            {
+                "notification_id": "lnch0001-0000-0000-0000-000000000000",
+                "action": "LaunchApproval",
+                "action_data": {"response_dir": str(response_dir)},
+                "message_id": 42,
+                "chat_id": "12345",
+            },
+        )
+        callback_query = SimpleNamespace(
+            id="cb_launch",
+            data="launch:lnch0001:approve",
+            message=SimpleNamespace(message_id=42),
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(update_id=211, callback_query=callback_query, message=None)
+        ]
+        mock_tg.answer_callback_query.return_value = True
+        mock_tg.edit_message_reply_markup.return_value = True
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_tg.answer_callback_query.assert_called_with(
+            "cb_launch", "This action has already been handled"
+        )
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 42, reply_markup=None
+        )
+        assert pending_actions.get("lnch0001") is None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_hitl_feedback_twostep_flow(

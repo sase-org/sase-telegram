@@ -297,6 +297,8 @@ def format_notification(
     match notification.action:
         case "PlanApproval":
             return _format_plan_approval(notification)
+        case "LaunchApproval":
+            return _format_launch_approval(notification)
         case "HITL":
             return _format_hitl(notification)
         case "UserQuestion":
@@ -432,6 +434,79 @@ def _format_plan_approval(
         ),
     ]
     keyboard = InlineKeyboardMarkup([row1, row2])
+    return text, keyboard, attachments
+
+
+def _format_launch_approval(
+    n: Notification,
+) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
+    prefix = _notif_prefix(n)
+    details: list[str] = []
+    slot_count = n.action_data.get("slot_count")
+    if slot_count:
+        label = "slot" if str(slot_count) == "1" else "slots"
+        details.append(f"*Slots:* {escape_markdown_v2(str(slot_count))} {label}")
+    source = n.action_data.get("source_surface") or n.action_data.get("source")
+    if source:
+        details.append(f"*Source:* {escape_markdown_v2(str(source))}")
+    request_id = n.action_data.get("request_id")
+    if request_id:
+        details.append(f"*Request:* `{_escape_code_entity(str(request_id))}`")
+    if not details and n.notes:
+        details.append(_format_notes_text(n.notes))
+
+    header = "🚀 *Launch Approval*"
+    if details:
+        header = f"{header}\n" + "\n".join(details)
+
+    attachments: list[str] = []
+    preview_content = ""
+    if n.files:
+        preview_file = n.files[0]
+        attachments.append(preview_file)
+        try:
+            preview_content = Path(preview_file).read_text()
+        except OSError:
+            preview_content = ""
+
+    if not preview_content:
+        text = header
+    else:
+        converted = _code_blocks_to_inline(markdown_to_telegram_v2(preview_content))
+        block = _wrap_expandable_blockquote(converted)
+        text = f"{header}\n\n{block}"
+        if len(text) > MAX_MESSAGE_LENGTH:
+            suffix = f"\n\n{escape_markdown_v2('... (truncated, see attached)')}"
+            budget = MAX_MESSAGE_LENGTH - len(header) - len(suffix) - 2
+            target = int(budget * 0.75)
+            while target > 100:
+                trunc_pos = converted.rfind("\n", 0, target)
+                if trunc_pos == -1:
+                    trunc_pos = target
+                block = _wrap_expandable_blockquote(converted[:trunc_pos] + suffix)
+                text = f"{header}\n\n{block}"
+                if len(text) <= MAX_MESSAGE_LENGTH:
+                    break
+                target = int(target * 0.8)
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=callback_data.encode("launch", prefix, "approve"),
+                ),
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=callback_data.encode("launch", prefix, "reject"),
+                ),
+                InlineKeyboardButton(
+                    "💬 Feedback",
+                    callback_data=callback_data.encode("launch", prefix, "feedback"),
+                ),
+            ]
+        ]
+    )
     return text, keyboard, attachments
 
 

@@ -7,11 +7,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+from sase.launch_approval_actions import LaunchApprovalActionError
+
 from sase_telegram.inbound import (
     build_image_prompt,
     build_photo_prompt,
     clear_awaiting_feedback,
     clear_awaiting_feedback_by_prefix,
+    confirmation_text,
     find_externally_handled,
     find_shared_handled_transports,
     get_last_offset,
@@ -23,6 +27,7 @@ from sase_telegram.inbound import (
     process_callback_twostep,
     process_text_message,
     reconstruct_code_markers,
+    resolve_launch_response,
     save_awaiting_feedback,
     save_offset,
 )
@@ -66,6 +71,21 @@ def _make_pending_question(prefix: str, response_dir: str) -> dict:
             "notification_id": prefix + "00000000-0000-0000-0000-000000000000",
             "action": "UserQuestion",
             "action_data": {"response_dir": response_dir},
+            "message_id": 42,
+            "chat_id": "12345",
+        }
+    }
+
+
+def _make_pending_launch(prefix: str, response_dir: str) -> dict:
+    return {
+        prefix: {
+            "notification_id": prefix + "00000000-0000-0000-0000-000000000000",
+            "action": "LaunchApproval",
+            "action_data": {
+                "response_dir": response_dir,
+                "request_id": "req_1",
+            },
             "message_id": 42,
             "chat_id": "12345",
         }
@@ -171,6 +191,30 @@ class TestProcessCallbackHITL:
         assert result is None
 
 
+class TestProcessCallbackLaunch:
+    def test_approve(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        result = process_callback("launch:lnch0001:approve", pending)
+        assert result is not None
+        assert result.action_type == "launch"
+        assert result.response_data == {"action": "approve"}
+        assert result.answer_text == "Launch approved"
+        assert result.response_path == tmp_path / "launch_response.json"
+
+    def test_reject(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        result = process_callback("launch:lnch0001:reject", pending)
+        assert result is not None
+        assert result.action_type == "launch"
+        assert result.response_data == {"action": "reject"}
+        assert result.answer_text == "Launch rejected"
+
+    def test_feedback_returns_none(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        result = process_callback("launch:lnch0001:feedback", pending)
+        assert result is None
+
+
 class TestProcessCallbackQuestion:
     def test_option_selection_is_not_single_shot(self, tmp_path: Path) -> None:
         response_dir = str(tmp_path)
@@ -224,6 +268,14 @@ class TestProcessCallbackTwostep:
         result = process_callback_twostep("hitl:unknown1:feedback", {})
         assert result is None
 
+    def test_launch_feedback(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        result = process_callback_twostep("launch:lnch0001:feedback", pending)
+        assert result is not None
+        prefix, info = result
+        assert prefix == "lnch0001"
+        assert info == {"action_type": "launch", "response_dir": str(tmp_path)}
+
 
 class TestProcessTextMessage:
     def setup_method(self) -> None:
@@ -267,9 +319,93 @@ class TestProcessTextMessage:
         result = process_text_message("Use the second approach")
         assert result is None
 
+    def test_with_launch_awaiting(self, tmp_path: Path) -> None:
+        save_awaiting_feedback(
+            "42",
+            "lnch0001",
+            {"action_type": "launch", "response_dir": str(tmp_path)},
+        )
+        result = process_text_message("Too many agents", key="42")
+        assert result is not None
+        assert result.action_type == "launch"
+        assert result.notif_id_prefix == "lnch0001"
+        assert result.response_data == {
+            "action": "feedback",
+            "feedback": "Too many agents",
+        }
+        assert result.response_path == tmp_path / "launch_response.json"
+
     def test_without_awaiting(self) -> None:
         result = process_text_message("Random text")
         assert result is None
+
+
+class TestResolveLaunchResponse:
+    def _pending_response(
+        self, tmp_path: Path, callback: str = "launch:lnch0001:reject"
+    ) -> tuple[dict, object]:
+        (tmp_path / "launch_request.json").write_text("{}")
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        response = process_callback(callback, pending)
+        assert response is not None
+        return pending, response
+
+    @patch("sase.agent.launch_request.dispatch_approved_launch_request")
+    def test_approve_dispatches_inline(
+        self, mock_dispatch: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_dispatch.return_value = SimpleNamespace(launched_count=1)
+        pending, response = self._pending_response(tmp_path, "launch:lnch0001:approve")
+
+        message = resolve_launch_response(response, pending["lnch0001"])
+
+        assert message == "Launch approved and dispatched 1 agent"
+        mock_dispatch.assert_called_once_with(tmp_path)
+        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
+            "action": "approve",
+            "dispatch_status": "launched",
+            "launched_count": 1,
+        }
+
+    def test_reject_writes_launch_response(self, tmp_path: Path) -> None:
+        pending, response = self._pending_response(tmp_path, "launch:lnch0001:reject")
+
+        message = resolve_launch_response(response, pending["lnch0001"])
+
+        assert message == "Launch rejected"
+        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
+            "action": "reject"
+        }
+
+    def test_feedback_rejects_with_text(self, tmp_path: Path) -> None:
+        (tmp_path / "launch_request.json").write_text("{}")
+        save_awaiting_feedback(
+            "42",
+            "lnch0001",
+            {"action_type": "launch", "response_dir": str(tmp_path)},
+        )
+        response = process_text_message("Need a smaller fanout", key="42")
+        assert response is not None
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+
+        message = resolve_launch_response(response, pending["lnch0001"])
+
+        assert message == "Feedback received"
+        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
+            "action": "reject",
+            "feedback": "Need a smaller fanout",
+        }
+        assert confirmation_text(response) == "✅ Feedback received — launch rejected"
+
+    def test_already_handled_conflict(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        response = process_callback("launch:lnch0001:reject", pending)
+        assert response is not None
+
+        with pytest.raises(LaunchApprovalActionError) as exc_info:
+            resolve_launch_response(response, pending["lnch0001"])
+
+        assert exc_info.value.code == "conflict_already_handled"
 
 
 class TestHandleTextMessageAgentLaunch:
@@ -3538,6 +3674,25 @@ class TestFindExternallyHandled:
 
     def test_hitl_still_pending(self, tmp_path: Path) -> None:
         pending = _make_pending_hitl("hitl0002", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert result == []
+
+    def test_launch_response_detected(self, tmp_path: Path) -> None:
+        (tmp_path / "launch_response.json").write_text("{}")
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "lnch0001"
+
+    def test_launch_request_gone_detected(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0002", str(tmp_path))
+        result = find_externally_handled(pending)
+        assert len(result) == 1
+        assert result[0][0] == "lnch0002"
+
+    def test_launch_still_pending(self, tmp_path: Path) -> None:
+        (tmp_path / "launch_request.json").write_text("{}")
+        pending = _make_pending_launch("lnch0003", str(tmp_path))
         result = find_externally_handled(pending)
         assert result == []
 

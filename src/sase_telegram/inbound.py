@@ -114,7 +114,7 @@ IMAGES_DIR = Path.home() / ".sase" / "telegram" / "images"
 class ResponseAction:
     """A response to write based on a user's Telegram interaction."""
 
-    action_type: str  # "plan", "hitl", "question"
+    action_type: str  # "plan", "hitl", "launch", "question"
     notif_id_prefix: str  # 8-char prefix
     response_path: Path  # Where to write response JSON
     response_data: dict[str, Any]  # JSON content
@@ -363,6 +363,27 @@ def process_callback(
             )
         # "feedback" handled by twostep
 
+    elif cb.action_type == "launch":
+        response_dir = action_data["response_dir"]
+        response_path = Path(response_dir) / "launch_response.json"
+        if cb.choice == "approve":
+            return ResponseAction(
+                action_type="launch",
+                notif_id_prefix=cb.notif_id_prefix,
+                response_path=response_path,
+                response_data={"action": "approve"},
+                answer_text="Launch approved",
+            )
+        elif cb.choice == "reject":
+            return ResponseAction(
+                action_type="launch",
+                notif_id_prefix=cb.notif_id_prefix,
+                response_path=response_path,
+                response_data={"action": "reject"},
+                answer_text="Launch rejected",
+            )
+        # "feedback" handled by twostep
+
     elif cb.action_type == "question":
         # Telegram question sessions are progress-aware and handled by
         # scripts.sase_tg_inbound so multi-question requests cannot be
@@ -404,6 +425,15 @@ def process_callback_twostep(
             {
                 "action_type": "hitl",
                 "artifacts_dir": action_data["artifacts_dir"],
+            },
+        )
+
+    if cb.action_type == "launch" and cb.choice == "feedback":
+        return (
+            cb.notif_id_prefix,
+            {
+                "action_type": "launch",
+                "response_dir": action_data["response_dir"],
             },
         )
 
@@ -458,10 +488,63 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
             answer_text=None,
         )
 
+    if info["action_type"] == "launch":
+        return ResponseAction(
+            action_type="launch",
+            notif_id_prefix=prefix,
+            response_path=Path(info["response_dir"]) / "launch_response.json",
+            response_data={
+                "action": "feedback",
+                "feedback": text,
+            },
+            answer_text=None,
+        )
+
     if info["action_type"] == "question":
         return None
 
     return None
+
+
+def resolve_launch_response(
+    response: ResponseAction,
+    action: dict[str, Any] | None,
+) -> str:
+    """Resolve a LaunchApproval response through the host shared executor."""
+    from sase.launch_approval_actions import (
+        LaunchApprovalActionContext,
+        LaunchApprovalActionError,
+        execute_launch_approval_response,
+    )
+
+    if action is None:
+        raise LaunchApprovalActionError(
+            "not_found",
+            response.notif_id_prefix,
+            "pending launch action is missing",
+        )
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        raise LaunchApprovalActionError(
+            "invalid_request",
+            "action_data",
+            "launch action data is missing",
+        )
+
+    choice = response.response_data.get("action")
+    feedback = response.response_data.get("feedback")
+    result = execute_launch_approval_response(
+        LaunchApprovalActionContext(
+            id=str(action.get("notification_id") or response.notif_id_prefix),
+            host_files=tuple(str(path) for path in action.get("files", [])),
+            host_action_data={
+                str(key): str(value) for key, value in action_data.items()
+            },
+        ),
+        str(choice),
+        feedback=str(feedback) if feedback is not None else None,
+    )
+    return result.message
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +558,8 @@ def confirmation_text(response: ResponseAction) -> str:
         return "\u2705 Feedback received \u2014 plan will be revised"
     if response.action_type == "hitl":
         return "\u2705 Feedback received"
+    if response.action_type == "launch":
+        return "\u2705 Feedback received \u2014 launch rejected"
     if response.action_type == "question":
         return "\u2705 Answer received"
     return "\u2705 Response received"
@@ -494,7 +579,7 @@ def make_image_filename(file_id: str) -> str:
     return f"{ts}_{file_id[:12]}.jpg"
 
 
-_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "UserQuestion"}
+_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "LaunchApproval", "UserQuestion"}
 
 
 def find_externally_handled(
@@ -527,6 +612,14 @@ def find_externally_handled(
         elif action == "HITL":
             artifacts_dir = Path(action_data.get("artifacts_dir", ""))
             if (artifacts_dir / "hitl_response.json").exists():
+                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+
+        elif action == "LaunchApproval":
+            response_dir = Path(action_data.get("response_dir", ""))
+            if (response_dir / "launch_response.json").exists() or (
+                response_dir != Path("")
+                and not (response_dir / "launch_request.json").exists()
+            ):
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 
         elif action == "UserQuestion":

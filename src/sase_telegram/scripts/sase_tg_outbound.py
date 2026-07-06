@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 _DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
 # Actions that should be tracked as pending (user needs to respond)
-_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "UserQuestion"}
+_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "LaunchApproval", "UserQuestion"}
 _SUMMARY_ID_LIMIT = 5
 
 # Lazily resolved path to ~/.sase/chats/
@@ -387,6 +387,9 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
             }
             if n.action == "PlanApproval" and n.files:
                 entry["plan_file"] = n.files[0]
+            if n.action == "LaunchApproval" and n.files:
+                entry["files"] = list(n.files)
+                entry["preview_file"] = n.files[0]
             pending_actions.add(n.id[:8], entry)
             pending_action_writes += 1
             _register_shared_transport(n, msg.message_id, chat_id)

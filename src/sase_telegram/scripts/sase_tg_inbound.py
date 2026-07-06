@@ -20,6 +20,7 @@ from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_out
 from sase_telegram.callback_data import decode, encode
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
+from sase.launch_approval_actions import LaunchApprovalActionError
 from sase_telegram.formatting import (
     escape_markdown_v2,
     format_answered_question,
@@ -45,6 +46,7 @@ from sase_telegram.inbound import (
     process_callback_twostep,
     process_text_message,
     reconstruct_code_markers,
+    resolve_launch_response,
     save_awaiting_feedback,
     save_offset,
 )
@@ -740,6 +742,25 @@ def _write_response(response: ResponseAction) -> None:
     response.response_path.write_text(json.dumps(response.response_data, indent=2))
 
 
+def _launch_error_answer_text(exc: LaunchApprovalActionError) -> str:
+    if exc.code == "conflict_already_handled":
+        return "This action has already been handled"
+    if exc.code == "invalid_request":
+        return "This request has expired"
+    if exc.code == "dispatch_failed":
+        return f"Launch dispatch failed: {exc}"
+    return str(exc)
+
+
+def _resolve_response(
+    response: ResponseAction, action: dict[str, Any] | None
+) -> str | None:
+    if response.action_type == "launch":
+        return resolve_launch_response(response, action)
+    _write_response(response)
+    return response.answer_text
+
+
 def _action_message_id(action: dict[str, Any] | None) -> int | None:
     if not action:
         return None
@@ -1239,7 +1260,7 @@ def _resolve_callback_already_handled(
         cb = decode(data_str)
     except ValueError:
         return None
-    if cb.action_type not in {"plan", "hitl", "question"}:
+    if cb.action_type not in {"plan", "hitl", "launch", "question"}:
         return None
     action = pending.get(cb.notif_id_prefix)
     if action is None:
@@ -1364,9 +1385,21 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         return
 
     action = pending.get(response.notif_id_prefix)
-    _write_response(response)
+    try:
+        answer_text = _resolve_response(response, action)
+    except LaunchApprovalActionError as exc:
+        telegram_client.answer_callback_query(
+            callback_query.id, _launch_error_answer_text(exc)
+        )
+        if action:
+            telegram_client.edit_message_reply_markup(
+                action["chat_id"], action["message_id"], reply_markup=None
+            )
+        pending_actions.remove(response.notif_id_prefix)
+        clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
+        return
     _handle_post_response_side_effects(response, action)
-    telegram_client.answer_callback_query(callback_query.id, response.answer_text)
+    telegram_client.answer_callback_query(callback_query.id, answer_text)
 
     if action:
         telegram_client.edit_message_reply_markup(
@@ -2832,7 +2865,22 @@ def _handle_text_message(message: Any) -> None:
 
     response = process_text_message(text, key=reply_key)
     if response is not None:
-        _write_response(response)
+        action = pending_actions.get(response.notif_id_prefix)
+        try:
+            _resolve_response(response, action)
+        except LaunchApprovalActionError as exc:
+            chat_id = _message_chat_id(message) or _configured_chat_id()
+            if chat_id is not None:
+                telegram_client.send_message(
+                    chat_id,
+                    _launch_error_answer_text(exc),
+                    reply_to_message_id=message.message_id,
+                )
+            pending_actions.remove(response.notif_id_prefix)
+            clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
+            if reply_key is not None:
+                clear_awaiting_feedback(reply_key)
+            return
         # Clear only the matched awaiting entry — leaves other concurrent
         # flows intact.
         if reply_key is not None:
