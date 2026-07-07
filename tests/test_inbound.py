@@ -1183,51 +1183,6 @@ class TestUpdateCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_update_acknowledges_missing_config(
-        self,
-        mock_creds: MagicMock,
-        mock_tg: MagicMock,
-    ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
-
-        mock_creds.get_chat_id.return_value = "12345"
-        result = SimpleNamespace(status="config_missing_command", message="missing")
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
-            return_value=result,
-        ) as launcher:
-            _handle_update_command()
-
-        launcher.assert_called_once_with()
-        mock_tg.send_message.assert_called_once_with(
-            "12345",
-            "Update not started: chat_install.command is not configured.",
-        )
-
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_update_acknowledges_workspace_failure(
-        self,
-        mock_creds: MagicMock,
-        mock_tg: MagicMock,
-    ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
-
-        mock_creds.get_chat_id.return_value = "12345"
-        result = SimpleNamespace(status="workspace_resolution_failed", message="no ws")
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
-            return_value=result,
-        ):
-            _handle_update_command()
-
-        mock_tg.send_message.assert_called_once_with(
-            "12345",
-            "Update not started: could not resolve the primary SASE workspace.",
-        )
-
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_update_acknowledges_already_running(
         self,
         mock_creds: MagicMock,
@@ -1334,6 +1289,7 @@ class TestUpdateCommand:
                     "status": "success",
                     "exit_code": 0,
                     "log_path": str(log_path),
+                    "message": "Already up to date.",
                 }
             )
         )
@@ -1344,12 +1300,53 @@ class TestUpdateCommand:
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            f"Update completed successfully; log: {log_path}",
+            f"Already up to date; log: {log_path}",
         )
         assert not (pending_dir / "job-1.json").exists()
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_update_completion_scan_sends_failure(
+    def test_update_completion_scan_prefers_failure_message(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        status_path = tmp_path / "completion.json"
+        log_path = tmp_path / "worker.log"
+        (pending_dir / "job-2.json").write_text(
+            json.dumps(
+                {
+                    "job_id": "job-2",
+                    "chat_id": "12345",
+                    "status_path": str(status_path),
+                    "log_path": str(log_path),
+                }
+            )
+        )
+        status_path.write_text(
+            json.dumps(
+                {
+                    "job_id": "job-2",
+                    "status": "failed",
+                    "exit_code": 17,
+                    "log_path": str(log_path),
+                    "message": "Update failed: could not detect uv-tool install.",
+                }
+            )
+        )
+
+        with patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", pending_dir):
+            inbound._send_ready_update_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            f"Update failed: could not detect uv-tool install; log: {log_path}",
+        )
+        assert not (pending_dir / "job-2.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_update_completion_scan_falls_back_to_exit_code(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
         from sase_telegram.scripts import sase_tg_inbound as inbound

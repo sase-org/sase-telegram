@@ -130,12 +130,12 @@ the remembered Telegram chat context first.
 ## Update
 
 `/update` calls the shared SASE chat-install launcher. The inbound handler does not stop axe or run the update inline;
-it only starts a detached worker, then posts an acknowledgement that distinguishes missing configuration, workspace
-resolution failure, an already-running worker, or a launched worker with a log path. The worker restarts axe in its
-cleanup path even if sync or the configured install command fails. When the detached worker writes its final completion
-record, the next inbound run sends a second message with either the success result or the failure exit code, including
-the same worker log path. Pending completion deliveries live under `~/.sase/telegram/update_completions/` and are
-retried until Telegram accepts the message.
+it only starts a detached worker, then posts an acknowledgement that distinguishes an already-running worker from a
+launched worker with a log path. The worker runs the built-in `sase update --json` engine, using SASE's normal
+managed-vs-dev update routing, then ensures axe is running afterward. When the detached worker writes its final
+completion record, the next inbound run sends a second message with the worker's update summary when present, falling
+back to the failure exit code, and includes the same worker log path. Pending completion deliveries live under
+`~/.sase/telegram/update_completions/` and are retried until Telegram accepts the message.
 
 Command registration is cached in `~/.sase/telegram/commands_registered_ts`; the cache includes a command-list
 fingerprint so deploys with command changes re-register immediately instead of waiting for the hourly refresh.

@@ -110,7 +110,7 @@ class _ChatInstallUnavailableResult:
     status: str = "chat_install_unavailable"
     message: str = (
         "Update not started: installed sase package does not provide "
-        "chat_install.command support."
+        "chat update worker support."
     )
 
 
@@ -2045,10 +2045,6 @@ def _handle_update_command() -> None:
 
 
 def _format_update_ack(result: Any) -> str:
-    if result.status == "config_missing_command":
-        return "Update not started: chat_install.command is not configured."
-    if result.status == "workspace_resolution_failed":
-        return "Update not started: could not resolve the primary SASE workspace."
     if result.status == "already_running":
         return "Update already running."
     if result.status == "chat_install_unavailable":
@@ -2129,6 +2125,10 @@ def _format_update_completion(
 ) -> str:
     log_path = completion.get("log_path") or pending.get("log_path") or ""
     log_text = _shorten_home(str(log_path)) if log_path else "(unknown)"
+    message = completion.get("message")
+    if isinstance(message, str) and message:
+        return f"{message.rstrip('.')}; log: {log_text}"
+
     exit_code = completion.get("exit_code")
 
     if completion.get("status") == "success" and exit_code == 0:

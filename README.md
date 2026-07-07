@@ -173,9 +173,9 @@ bead commands are narrowed to that project workspace. Without the override, deta
 prefers the chat-scoped project remembered from recent Telegram launch context.
 
 `/update` starts the shared SASE chat update worker in a detached process and immediately replies with the worker log
-path. The worker stops axe, syncs the primary SASE workspace, runs `chat_install.command` from that workspace, and
-attempts to start axe again even when sync or install fails. After the worker exits, the next inbound run sends a
-completion message that reports success or the failure exit code and includes the worker log path.
+path. The worker runs the built-in `sase update --json` engine, using SASE's normal managed-vs-dev update routing, then
+ensures axe is running afterward. After the worker exits, the next inbound run sends a completion message that reports
+the worker's update summary or the fallback failure exit code and includes the worker log path.
 
 Slash command registration is cached in `~/.sase/telegram/commands_registered_ts`, but the cache includes a fingerprint
 of the command list so renamed commands are registered immediately after deployment.
