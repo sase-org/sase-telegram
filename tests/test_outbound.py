@@ -23,6 +23,7 @@ from sase_telegram.scripts.sase_tg_outbound import (
     _is_image_file,
     _is_pdf_file,
     _is_video_file,
+    _make_response_only_file,
     _prepend_commit_message_to_markdown,
     _run_outbound,
 )
@@ -161,6 +162,33 @@ class TestIsDiffFile:
 
     def test_case_insensitive(self):
         assert _is_diff_file("/path/to/file.DIFF")
+
+
+class TestDisplayFilenames:
+    def test_make_response_only_file_humanizes_chat_stem(self) -> None:
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.extract_response_from_chat_file",
+                return_value="Done.",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.display_safe_stem",
+                return_value="sase-ace_run-260707_011513",
+            ) as display_safe_stem,
+        ):
+            response_file, response = _make_response_only_file(
+                "/tmp/chats/gh_sase_org__sase-ace_run-260707_011513.md"
+            )
+
+        assert response == "Done."
+        assert response_file is not None
+        try:
+            assert response_file.name.startswith("response-sase-ace_run-260707_011513-")
+            display_safe_stem.assert_called_once_with(
+                "gh_sase_org__sase-ace_run-260707_011513"
+            )
+        finally:
+            response_file.unlink(missing_ok=True)
 
 
 class TestIsImageFile:
@@ -609,6 +637,60 @@ class TestRunOutboundAttachments:
             send_document.assert_any_call("chat-1", str(generated_pdf))
             assert send_document.call_count == 2
             send_photo.assert_called_once_with("chat-1", str(image_file))
+
+    def test_unembedded_diff_uses_humanized_document_filename(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            diff_file = tmp / "gh_sase_org__sase_fix-260707.diff"
+            diff_file.write_text("diff --git a/foo.py b/foo.py\n-old\n+new\n")
+
+            notification = Notification(
+                id="dif00000-0000-0000-0000-000000000000",
+                timestamp=datetime.now(UTC).isoformat(),
+                sender="user-agent",
+                notes=["Agent completed: diff-update"],
+                files=[str(diff_file)],
+            )
+
+            with (
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                    return_value=[notification],
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                    return_value="chat-1",
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                    return_value=True,
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+                patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_message",
+                    return_value=SimpleNamespace(message_id=123),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.display_safe_stem",
+                    side_effect=lambda stem: (
+                        "sase_fix-260707"
+                        if stem == "gh_sase_org__sase_fix-260707"
+                        else stem
+                    ),
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_document"
+                ) as send_document,
+            ):
+                result = _run_outbound(argparse.Namespace(dry_run=False))
+
+            assert result == 0
+            send_document.assert_called_once_with(
+                "chat-1",
+                str(diff_file),
+                filename="sase_fix-260707.diff",
+            )
 
     def test_chat_pdf_embeds_full_commit_message_before_conversion(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -13,7 +13,7 @@ from typing import Any
 
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
-from sase_telegram.formatting import format_notification
+from sase_telegram.formatting import display_safe_stem, format_notification
 from sase_telegram.outbound import get_unsent_notifications, mark_sent
 from sase_telegram.telegram_client import (
     send_animation,
@@ -111,7 +111,7 @@ def _make_response_only_file(chat_path: str) -> tuple[Path | None, str | None]:
     response = extract_response_from_chat_file(chat_path)
     if not response:
         return None, None
-    original_name = Path(chat_path).stem
+    original_name = display_safe_stem(Path(chat_path).stem)
     tmp = tempfile.NamedTemporaryFile(
         prefix=f"response-{original_name}-",
         suffix=".md",
@@ -164,6 +164,22 @@ def _send_media_with_document_fallback(
             exc_info=True,
         )
         send_document(chat_id, file_path)
+
+
+def _display_filename_override(file_path: str) -> str | None:
+    path = Path(file_path)
+    display_stem = display_safe_stem(path.stem)
+    if display_stem == path.stem:
+        return None
+    return f"{display_stem}{path.suffix}"
+
+
+def _send_document_with_display_filename(chat_id: str, file_path: str) -> None:
+    filename = _display_filename_override(file_path)
+    if filename is None:
+        send_document(chat_id, file_path)
+    else:
+        send_document(chat_id, file_path, filename=filename)
 
 
 def _append_diff_to_markdown(response_file: Path, diff_paths: list[str]) -> None:
@@ -475,16 +491,16 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                     continue
 
                 if _is_pdf_file(actual_path):
-                    send_document(chat_id, actual_path)
+                    _send_document_with_display_filename(chat_id, actual_path)
                     rate_limit.record_send()
                     continue
 
                 pdf_path = md_to_pdf(actual_path)
                 if pdf_path:
                     pdf_temps.append(Path(pdf_path))
-                    send_document(chat_id, pdf_path)
+                    _send_document_with_display_filename(chat_id, pdf_path)
                 else:
-                    send_document(chat_id, actual_path)
+                    _send_document_with_display_filename(chat_id, actual_path)
                 rate_limit.record_send()
             except Exception:
                 attachment_failures += 1
@@ -499,7 +515,7 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
         if not diff_embedded:
             for dp in diff_paths:
                 try:
-                    send_document(chat_id, dp)
+                    _send_document_with_display_filename(chat_id, dp)
                     rate_limit.record_send()
                 except Exception:
                     attachment_failures += 1

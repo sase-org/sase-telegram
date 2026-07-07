@@ -1615,7 +1615,7 @@ class TestChangesCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_changes_humanizes_unfiltered_button_labels_only(
+    def test_changes_humanizes_unfiltered_button_labels_and_copy_vcs_refs(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -1628,7 +1628,7 @@ class TestChangesCommand:
                 SimpleNamespace(
                     project="sase",
                     name="sase_foo",
-                    tag="#hg:sase_foo",
+                    tag="#hg:gh_sase-org__sase_foo",
                 )
             ],
             skipped=[],
@@ -1650,6 +1650,10 @@ class TestChangesCommand:
                 side_effect=lambda name: (
                     "SASE Core_foo" if name == "sase_foo" else name
                 ),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
             _handle_changes_command("")
@@ -2280,7 +2284,7 @@ class TestLaunchAgent:
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_launch_wait_keyboard_includes_vcs_tag(
+    def test_launch_copy_buttons_humanize_vcs_tags(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -2302,10 +2306,15 @@ class TestLaunchAgent:
             ),
             patch(
                 "sase.xprompt.extract_vcs_workflow_tag",
-                return_value="#gh:sase ",
+                return_value="#gh:gh_sase-org__sase ",
+            ),
+            patch("sase.agent.names.allocate_retry_name", return_value="foo.r1"),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
-            _launch_agent("%n:foo #gh:sase Fix a bug")
+            _launch_agent("%n:foo #gh:gh_sase-org__sase Fix a bug")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -2315,6 +2324,8 @@ class TestLaunchAgent:
         assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo "
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
+        assert buttons[1][1].text == "🔄 Retry"
+        assert buttons[1][1].copy_text.text == "%n:foo.r1 #gh:sase Fix a bug"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -3389,7 +3400,7 @@ class TestSendKillResult:
         from sase_telegram.scripts.sase_tg_inbound import _handle_kill_from_callback
 
         (tmp_path / "raw_xprompt.md").write_text(
-            "%n:a Do work",
+            "%n:a #gh:gh_sase-org__sase Do work",
             encoding="utf-8",
         )
         mock_creds.get_chat_id.return_value = "12345"
@@ -3403,6 +3414,10 @@ class TestSendKillResult:
                 return_value=SimpleNamespace(artifacts_dir=str(tmp_path)),
             ),
             patch("sase.agent.running.kill_named_agent", return_value=result),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
+            ),
         ):
             _handle_kill_from_callback(callback, "a")
 
@@ -3410,7 +3425,9 @@ class TestSendKillResult:
         keyboard = call_kwargs.kwargs.get("reply_markup")
         assert keyboard is not None
         assert keyboard.inline_keyboard[0][0].text == "🔄 Redo"
-        assert keyboard.inline_keyboard[0][0].copy_text.text == "%n:a Do work"
+        assert keyboard.inline_keyboard[0][0].copy_text.text == (
+            "%n:a #gh:sase Do work"
+        )
 
 
 def _running_agent(
@@ -3514,6 +3531,29 @@ class TestHandleListCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_prompt_snippet_humanizes_vcs_refs(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [_running_agent("alpha", prompt="#gh:gh_sase-org__sase Fix")]
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_cl_names_in_text",
+                side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
+            ),
+        ):
+            _handle_list_command()
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "<i>#gh:sase Fix</i>" in text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_multiple_statuses_use_bucket_order_and_preserve_agent_order(
         self,
         mock_creds: MagicMock,
@@ -3571,7 +3611,7 @@ class TestHandleKillSelection:
 class TestHandleForkCommand:
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    def test_humanizes_visible_labels_but_keeps_copy_raw(
+    def test_humanizes_visible_labels_and_copy_vcs_but_keeps_agent_ref_raw(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
@@ -3579,15 +3619,22 @@ class TestHandleForkCommand:
         from sase_telegram.scripts.sase_tg_inbound import _handle_fork_command
 
         mock_creds.get_chat_id.return_value = "12345"
-        agents = [_running_agent("sase_agent", prompt="#gh:sase Fix")]
+        agents = [_running_agent("sase_agent", prompt="#gh:gh_sase-org__sase Fix")]
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
-            patch("sase.xprompt.extract_vcs_workflow_tag", return_value="#gh:sase "),
+            patch(
+                "sase.xprompt.extract_vcs_workflow_tag",
+                return_value="#gh:gh_sase-org__sase ",
+            ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
                 side_effect=lambda name: (
                     "SASE Core_agent" if name == "sase_agent" else name
                 ),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
             _handle_fork_command()

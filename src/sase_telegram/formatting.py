@@ -68,16 +68,43 @@ def display_cl_name(name: str) -> str:
 
 
 def display_cl_names_in_text(text: str) -> str:
-    """Humanize standalone ChangeSpec/agent names in Telegram-visible text."""
+    """Humanize project refs and standalone CL/agent names in visible text."""
+    display_text = display_vcs_refs_in_text(text)
     try:
         from sase.project_display_names import humanize_cl_names_in_text
+    except ImportError:
+        return display_text
+
+    try:
+        return humanize_cl_names_in_text(display_text)
+    except Exception:
+        return display_text
+
+
+def display_vcs_refs_in_text(text: str) -> str:
+    """Humanize canonical project refs in Telegram copy/display text."""
+    try:
+        from sase.project_display_names import humanize_vcs_refs_in_text
     except ImportError:
         return text
 
     try:
-        return humanize_cl_names_in_text(text)
+        return humanize_vcs_refs_in_text(text)
     except Exception:
         return text
+
+
+def display_safe_stem(stem: str) -> str:
+    """Return the Telegram-visible filename stem for safe project prefixes."""
+    try:
+        from sase.project_display_names import humanize_safe_stem
+    except ImportError:
+        return stem
+
+    try:
+        return humanize_safe_stem(stem)
+    except Exception:
+        return stem
 
 
 def escape_markdown_v2(text: str) -> str:
@@ -835,7 +862,7 @@ def _format_workflow_complete(
                 cl_name = n.action_data.get("cl_name")
                 if cl_name:
                     vcs_tag = replace_ref_in_vcs_tag(vcs_tag, cl_name)
-                fork_text = f"{vcs_tag}{fork_text}"
+                fork_text = f"{display_vcs_refs_in_text(vcs_tag)}{fork_text}"
         keyboard = InlineKeyboardMarkup(
             [
                 [

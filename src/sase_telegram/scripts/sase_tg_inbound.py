@@ -25,6 +25,7 @@ from sase_telegram.formatting import (
     display_cl_name,
     display_cl_names_in_text,
     display_project_name,
+    display_vcs_refs_in_text,
     escape_markdown_v2,
     format_answered_question,
     format_questions_complete,
@@ -1514,6 +1515,8 @@ def _send_kill_result(
                 kill_info.get("prompt") if kill_info else None
             ) or prompt_fallback
             redo_prompt = _build_redo_prompt_for_killed_agent(redo_source_prompt)
+            if redo_prompt:
+                redo_prompt = display_vcs_refs_in_text(redo_prompt)
             # Telegram CopyTextButton limit is 256 characters
             keyboard: InlineKeyboardMarkup | None = None
             if redo_prompt and len(redo_prompt) <= _COPY_TEXT_MAX:
@@ -1888,12 +1891,14 @@ def _send_launch_notification(
         if vcs_tag:
             if _prompt_has_pr_xprompt(slot_prompt):
                 vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
-            vcs_prefix = f"{vcs_tag}"
+            vcs_prefix = display_vcs_refs_in_text(vcs_tag)
         # #fork:<name> implies %w:<name>, so the fork button omits the
         # redundant explicit wait. The Wait button below stays a pure wait.
         fork_text = f"{vcs_prefix}#fork:{agent_name} "
         wait_text = f"{vcs_prefix}%w:{agent_name} "
         retry_prompt = _build_retry_prompt_for_agent(agent_name, original_prompt)
+        if retry_prompt:
+            retry_prompt = display_vcs_refs_in_text(retry_prompt)
         if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
             retry_button = InlineKeyboardButton(
                 "🔄 Retry",
@@ -2334,7 +2339,7 @@ def _handle_fork_command() -> None:
         if a.prompt:
             vcs_tag = extract_vcs_workflow_tag(a.prompt)
             if vcs_tag:
-                vcs_prefix = vcs_tag
+                vcs_prefix = display_vcs_refs_in_text(vcs_tag)
         # #fork:<name> implies %w:<name>; no explicit wait directive needed.
         fork_text = f"{vcs_prefix}#fork:{name} "
         buttons.append(
@@ -2402,7 +2407,7 @@ def _handle_changes_command(args: str) -> None:
             [
                 InlineKeyboardButton(
                     _changes_button_label(entry, filtered=project is not None),
-                    copy_text=CopyTextButton(text=entry.tag),
+                    copy_text=CopyTextButton(text=display_vcs_refs_in_text(entry.tag)),
                 )
             ]
             for entry in chunk

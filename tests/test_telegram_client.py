@@ -192,6 +192,18 @@ class TestSendDocument:
             document="/tmp/x.pdf",
             caption="c",
             parse_mode=None,
+            filename=None,
+        )
+
+    def test_delegates_filename_to_bot(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_document.return_value = MagicMock(message_id=1)
+        telegram_client.send_document("chat-1", "/tmp/x.pdf", filename="report.pdf")
+        mock_bot.send_document.assert_awaited_once_with(
+            chat_id="chat-1",
+            document="/tmp/x.pdf",
+            caption=None,
+            parse_mode=None,
+            filename="report.pdf",
         )
 
 

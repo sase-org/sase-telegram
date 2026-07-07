@@ -179,6 +179,7 @@ def send_document(
     document: str | bytes,
     caption: str | None = None,
     parse_mode: str | None = None,
+    filename: str | None = None,
 ) -> Message:
     """Send a document to a Telegram chat."""
     bot = _get_bot()
@@ -188,6 +189,7 @@ def send_document(
             document=document,
             caption=caption,
             parse_mode=parse_mode,
+            filename=filename,
         )
     )
 

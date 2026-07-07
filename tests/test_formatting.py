@@ -43,6 +43,31 @@ def _make_notification(
     )
 
 
+class TestDisplayHumanizers:
+    def test_display_cl_names_in_text_also_humanizes_vcs_refs(
+        self, monkeypatch
+    ) -> None:
+        import sase.project_display_names as pdn
+
+        monkeypatch.setattr(
+            pdn,
+            "humanize_vcs_refs_in_text",
+            lambda text: text.replace("gh_sase-org__sase", "sase"),
+        )
+        monkeypatch.setattr(
+            pdn,
+            "humanize_cl_names_in_text",
+            lambda text: text.replace("sase_task", "sase-task"),
+        )
+
+        assert (
+            formatting.display_cl_names_in_text(
+                "#gh:gh_sase-org__sase Continue sase_task"
+            )
+            == "#gh:sase Continue sase-task"
+        )
+
+
 class TestEscapeMarkdownV2:
     def test_escapes_all_special_chars(self):
         text = "Hello_World *bold* [link](url) ~strike~ `code` >quote #h +p -m =e |p {b} .d !e"
@@ -614,7 +639,9 @@ class TestFormatWorkflowComplete:
         assert button.copy_text is not None
         assert button.copy_text.text == "#fork:sase-x.3 "
 
-    def test_humanizes_visible_text_but_keeps_fork_copy_raw(self, monkeypatch):
+    def test_humanizes_visible_text_and_copy_vcs_but_keeps_agent_ref_raw(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(
             formatting,
             "display_cl_name",
@@ -623,7 +650,14 @@ class TestFormatWorkflowComplete:
         monkeypatch.setattr(
             formatting,
             "display_cl_names_in_text",
-            lambda text: text.replace("sase_task", "SASE Core_task"),
+            lambda text: text.replace("gh_sase-org__sase", "sase").replace(
+                "sase_task", "SASE Core_task"
+            ),
+        )
+        monkeypatch.setattr(
+            formatting,
+            "display_vcs_refs_in_text",
+            lambda text: text.replace("gh_sase-org__sase", "sase"),
         )
         n = _make_notification(
             sender="user-agent",
@@ -631,20 +665,27 @@ class TestFormatWorkflowComplete:
             action_data={
                 "agent_name": "sase_task",
                 "bead_display": "sase_task - Fix the thing",
-                "prompt": "Continue sase_task",
+                "prompt": "#gh:gh_sase-org__sase Continue sase_task",
+                "cl_name": "gh_sase-org__sase_foo",
             },
         )
 
-        text, keyboard, _ = format_notification(n)
+        from unittest.mock import patch
+
+        with patch(
+            "sase.xprompt.extract_vcs_workflow_tag",
+            return_value="#gh:gh_sase-org__sase ",
+        ):
+            text, keyboard, _ = format_notification(n)
 
         assert "_@SASE Core\\_task_" in text
         assert "*Bead:* SASE Core\\_task \\- Fix the thing" in text
         assert "Agent completed: SASE Core\\_task" in text
-        assert "Continue SASE Core\\_task" in text
+        assert "\\#gh:sase Continue SASE Core\\_task" in text
         assert keyboard is not None
         button = keyboard.inline_keyboard[0][0]
         assert button.copy_text is not None
-        assert button.copy_text.text == "#fork:sase_task "
+        assert button.copy_text.text == "#gh:sase_foo #fork:sase_task "
 
     def test_includes_runtime_without_changing_existing_fields(self):
         from unittest.mock import patch
