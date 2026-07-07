@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/sase-org/sase-telegram/compare/v0.2.3...v0.3.0) (2026-07-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* Telegram `/update` formatting no longer handles the retired `config_missing_command` or `workspace_resolution_failed` launch states from older SASE chat install workers.
+
+### Features
+
+* humanize project refs in Telegram surfaces ([4f66b03](https://github.com/sase-org/sase-telegram/commit/4f66b03642a78ccf73c321180d8045116dd876a7))
+* route completion media attachments ([7dcec6c](https://github.com/sase-org/sase-telegram/commit/7dcec6c0a90084cff545f762ea97459d6e5fba73))
+* route launch preview PDFs to dedicated renderer ([b858374](https://github.com/sase-org/sase-telegram/commit/b85837421ccf573e79c9e748c7044068c33510c0))
+* use built-in SASE update worker ([15eed42](https://github.com/sase-org/sase-telegram/commit/15eed42779fbd95d4a27a0990126c904038015b4))
+
+
+### Bug Fixes
+
+* preserve Telegram commands with stale launch feedback ([a4a1666](https://github.com/sase-org/sase-telegram/commit/a4a1666ea9fa79e9fb92dc26ca36be43aeff0f96))
+* resolve sharded launch metadata ([e92c786](https://github.com/sase-org/sase-telegram/commit/e92c78626a049f3d3b640b6798ce45ddf089efc6))
+* use project display names in Telegram surfaces ([e90260b](https://github.com/sase-org/sase-telegram/commit/e90260b9c1b28cb561abf6f206436a7800a78deb))
+
 ## [0.2.3](https://github.com/sase-org/sase-telegram/compare/v0.2.2...v0.2.3) (2026-07-06)
 
 
