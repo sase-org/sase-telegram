@@ -68,7 +68,7 @@ def display_cl_name(name: str) -> str:
 
 
 def display_cl_names_in_text(text: str) -> str:
-    """Humanize project refs and standalone CL/agent names in visible text."""
+    """Humanize project refs and standalone ChangeSpec/agent names in visible text."""
     display_text = display_vcs_refs_in_text(text)
     try:
         from sase.project_display_names import humanize_cl_names_in_text
