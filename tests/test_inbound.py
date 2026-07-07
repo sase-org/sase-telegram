@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sase.agent.launcher import AgentLaunchResult
 from sase.launch_approval_actions import LaunchApprovalActionError
 
 from sase_telegram.inbound import (
@@ -34,6 +35,27 @@ from sase_telegram.inbound import (
 
 OFFSET_TEST_PATH = Path("/tmp/test_update_offset.txt")
 AWAITING_TEST_PATH = Path("/tmp/test_awaiting_feedback.json")
+
+
+def _launch_result(
+    *,
+    pid: int = 42,
+    workspace_num: int = 3,
+    project_name: str = "proj",
+    timestamp: str = "260706_232107",
+    artifacts_dir: str = "",
+    agent_name: str | None = None,
+) -> AgentLaunchResult:
+    return AgentLaunchResult(
+        pid=pid,
+        workspace_num=workspace_num,
+        workspace_dir="/tmp/workspace",
+        output_path="/tmp/out.txt",
+        project_name=project_name,
+        timestamp=timestamp,
+        artifacts_dir=artifacts_dir,
+        agent_name=agent_name,
+    )
 
 
 def _cleanup() -> None:
@@ -2006,20 +2028,14 @@ class TestLaunchAgent:
         )
 
         mock_creds.get_chat_id.return_value = "12345"
-        mock_result = MagicMock()
-        mock_result.pid = 42
-        mock_result.workspace_num = 3
-        mock_result.agent_name = "c"
-        # No artifacts_dir / agent_meta.json on disk — the result name alone
-        # must be enough to render the inline keyboard.
-        mock_result.artifacts_dir = None
-        mock_result.project_name = ""
-        mock_result.timestamp = ""
+        # No agent_meta.json on disk: the result name alone must be enough to
+        # render the inline keyboard.
+        result = _launch_result(project_name="", timestamp="", agent_name="c")
 
         with (
             patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
-                return_value=[mock_result],
+                return_value=[result],
             ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
@@ -2049,18 +2065,16 @@ class TestLaunchAgent:
         from sase_telegram.scripts.sase_tg_inbound import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
-        mock_result = MagicMock()
-        mock_result.pid = 42
-        mock_result.workspace_num = 3
-        mock_result.agent_name = "sase_agent"
-        mock_result.artifacts_dir = None
-        mock_result.project_name = ""
-        mock_result.timestamp = ""
+        result = _launch_result(
+            project_name="",
+            timestamp="",
+            agent_name="sase_agent",
+        )
 
         with (
             patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
-                return_value=[mock_result],
+                return_value=[result],
             ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
@@ -2095,10 +2109,7 @@ class TestLaunchAgent:
         )
 
         mock_creds.get_chat_id.return_value = "12345"
-        mock_result = MagicMock()
-        mock_result.pid = 42
-        mock_result.workspace_num = 3
-        mock_result.artifacts_dir = str(tmp_path)
+        result = _launch_result(artifacts_dir=str(tmp_path))
         (tmp_path / "agent_meta.json").write_text(
             json.dumps({"name": "c"}), encoding="utf-8"
         )
@@ -2106,7 +2117,7 @@ class TestLaunchAgent:
         with (
             patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
-                return_value=[mock_result],
+                return_value=[result],
             ),
             patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
         ):
@@ -2127,6 +2138,65 @@ class TestLaunchAgent:
         assert buttons[1][0].callback_data == "kill:c:go"
         assert buttons[1][1].text == "🔄 Retry"
         assert buttons[1][1].copy_text.text == "%n:c.r1\nList all open beads"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_launch_fallback_reads_day_sharded_agent_meta(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pa: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _launch_agent,
+        )
+
+        monkeypatch.setenv("SASE_HOME", str(tmp_path / ".sase"))
+        mock_creds.get_chat_id.return_value = "12345"
+        artifacts_dir = (
+            tmp_path
+            / ".sase"
+            / "projects"
+            / "proj"
+            / "artifacts"
+            / "ace-run"
+            / "202607"
+            / "06"
+            / "20260706232107"
+        )
+        artifacts_dir.mkdir(parents=True)
+        (artifacts_dir / "agent_meta.json").write_text(
+            json.dumps({"name": "c"}), encoding="utf-8"
+        )
+        result = _launch_result(
+            project_name="proj",
+            timestamp="260706_232107",
+        )
+
+        with (
+            patch(
+                "sase.agent.launcher.launch_agents_from_cwd",
+                return_value=[result],
+            ),
+            patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
+        ):
+            _launch_agent("List all open beads")
+
+        keyboard = mock_tg.send_message.call_args.kwargs.get("reply_markup")
+        assert keyboard is not None
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "#fork:c "
+        assert buttons[0][1].text == "⏳ Wait"
+        assert buttons[0][1].copy_text.text == "%w:c "
+        assert buttons[1][0].text == "🗡️ Kill"
+        assert buttons[1][0].callback_data == "kill:c:go"
+        assert buttons[1][1].text == "🔄 Retry"
+        mock_pa.add.assert_called_once()
+        assert mock_pa.add.call_args.args[0] == "kill-c"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")

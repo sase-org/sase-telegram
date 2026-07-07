@@ -1695,11 +1695,19 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
         else:
             resolved_agent_name = _resolve_launch_result_agent_name(result)
             if resolved_agent_name is None:
+                artifacts_dir = _launch_result_artifacts_dir(result)
+                meta_path = (
+                    artifacts_dir / "agent_meta.json"
+                    if artifacts_dir is not None
+                    else None
+                )
                 log.warning(
                     "Telegram launch fallback: result.agent_name unset and "
-                    "agent_meta.json poll timed out (pid=%s, timestamp=%s)",
+                    "agent_meta.json poll timed out "
+                    "(pid=%s, timestamp=%s, path=%s)",
                     getattr(result, "pid", None),
                     getattr(result, "timestamp", None),
+                    meta_path,
                 )
         _send_launch_notification(
             slot_prompt=slot_prompt,
@@ -1777,21 +1785,19 @@ def _launch_result_artifacts_dir(result: Any) -> Path | None:
 
     try:
         from sase.artifacts import convert_timestamp_to_artifacts_format
+        from sase.core.agent_artifact_paths import (
+            resolve_agent_artifact_timestamp_path,
+        )
 
         artifacts_timestamp = convert_timestamp_to_artifacts_format(timestamp)
+        return resolve_agent_artifact_timestamp_path(
+            project_name,
+            "ace-run",
+            artifacts_timestamp,
+        )
     except Exception:
         log.warning("Failed to derive artifacts dir for launch result", exc_info=True)
         return None
-
-    return (
-        Path.home()
-        / ".sase"
-        / "projects"
-        / project_name
-        / "artifacts"
-        / "ace-run"
-        / artifacts_timestamp
-    )
 
 
 def _launch_provider_model_label(directives: Any | None) -> str:
