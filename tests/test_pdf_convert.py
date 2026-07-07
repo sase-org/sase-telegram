@@ -28,6 +28,26 @@ def test_md_to_pdf_delegates_to_core_renderer(
     )
 
 
+def test_md_to_pdf_routes_launch_preview_to_dedicated_renderer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markdown = tmp_path / "launch_preview.md"
+    markdown.write_text("# Launch Preview\n", encoding="utf-8")
+    pdf = tmp_path / "launch_preview.pdf"
+    render_launch_preview_pdf = Mock(return_value=pdf)
+    render_markdown_pdf = Mock()
+
+    monkeypatch.setattr(
+        pdf_convert, "render_launch_preview_pdf", render_launch_preview_pdf
+    )
+    monkeypatch.setattr(pdf_convert, "render_markdown_pdf", render_markdown_pdf)
+
+    assert pdf_convert.md_to_pdf(str(markdown)) == str(pdf)
+    render_launch_preview_pdf.assert_called_once_with(markdown, pdf)
+    render_markdown_pdf.assert_not_called()
+
+
 def test_md_to_pdf_returns_none_for_non_markdown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
