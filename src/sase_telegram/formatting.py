@@ -26,6 +26,12 @@ EXPANDABLE_THRESHOLD = 500
 # Max chars of prompt text to display in workflow-complete messages
 PROMPT_DISPLAY_MAX = 1000
 
+# Max chars of each output-variable value to display in workflow-complete messages
+OUTPUT_VARIABLE_VALUE_MAX = 300
+
+# Max output variables to display in workflow-complete messages
+OUTPUT_VARIABLES_MAX_DISPLAYED = 20
+
 # Characters that must be escaped in MarkdownV2
 _MARKDOWN_V2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
 
@@ -792,6 +798,53 @@ def _format_user_question(
     return text, keyboard, []
 
 
+def _format_output_variables_section(action_data: dict[str, str]) -> str:
+    raw_variables = action_data.get("output_variables")
+    if not raw_variables:
+        return ""
+
+    try:
+        loaded = json.loads(raw_variables)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(loaded, dict):
+        return ""
+
+    variables = {
+        str(key): str(value) for key, value in loaded.items() if str(key) != "STOP"
+    }
+    if not variables:
+        return ""
+
+    keys = sorted(variables)
+    displayed_keys = keys[:OUTPUT_VARIABLES_MAX_DISPLAYED]
+    remaining_count = len(keys) - len(displayed_keys)
+
+    lines = ["📤 *Output Variables:*"]
+    for key in displayed_keys:
+        value = variables[key]
+        is_multiline = "\n" in value or "\r" in value
+        display_value = (
+            value
+            if len(value) <= OUTPUT_VARIABLE_VALUE_MAX
+            else value[:OUTPUT_VARIABLE_VALUE_MAX] + "…"
+        )
+        escaped_key = escape_markdown_v2(key)
+        if display_value == "":
+            lines.append(f"• *{escaped_key}:* _{escape_markdown_v2('(empty)')}_")
+        elif is_multiline:
+            lines.append(
+                f"• *{escaped_key}:*\n```\n{_escape_code_entity(display_value)}\n```"
+            )
+        else:
+            lines.append(f"• *{escaped_key}:* `{_escape_code_entity(display_value)}`")
+
+    if remaining_count > 0:
+        lines.append(f"• _…and {remaining_count} more_")
+
+    return "\n".join(lines)
+
+
 def _format_workflow_complete(
     n: Notification,
     *,
@@ -837,6 +890,10 @@ def _format_workflow_complete(
     if pr_url:
         escaped_url = escape_markdown_v2(pr_url)
         text += f"\n\n🔗 *PR:* {escaped_url}"
+
+    output_variables_section = _format_output_variables_section(n.action_data)
+    if output_variables_section:
+        text += f"\n\n{output_variables_section}"
 
     prompt = n.action_data.get("prompt")
     if isinstance(prompt, str) and prompt:

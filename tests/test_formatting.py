@@ -729,6 +729,114 @@ class TestFormatWorkflowComplete:
 
         Path(png_file).unlink()
 
+    def test_renders_output_variables_sorted_and_escaped(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "output_variables": json.dumps(
+                    {
+                        "status": "ok",
+                        "report_path": "dist/report.md",
+                        "STOP": "1",
+                    }
+                )
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert "📤 *Output Variables:*" in text
+        assert "• *report\\_path:* `dist/report.md`" in text
+        assert "• *status:* `ok`" in text
+        assert "STOP" not in text
+        assert text.index("report\\_path") < text.index("*status:*")
+
+    def test_renders_multiline_output_variable_as_code_block(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "output_variables": json.dumps({"notes": "line 1\nline `2`\\end"})
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert "• *notes:*\n```\nline 1\nline \\`2\\`\\\\end\n```" in text
+
+    def test_output_variables_appear_after_pr_and_before_prompt(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "pr_url": "https://github.com/example/repo/pull/123",
+                "output_variables": json.dumps({"status": "ok"}),
+                "prompt": "#gh:sase Fix the bug",
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert text.index("🔗 *PR:*") < text.index("📤 *Output Variables:*")
+        assert text.index("📤 *Output Variables:*") < text.index("📝 *Prompt:*")
+
+    def test_omits_output_variables_for_missing_or_malformed_json(self):
+        missing = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+        )
+        malformed = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={"output_variables": "{not json"},
+        )
+
+        missing_text, _, _ = format_notification(missing)
+        malformed_text, _, _ = format_notification(malformed)
+
+        assert "📤 *Output Variables:*" not in missing_text
+        assert "📤 *Output Variables:*" not in malformed_text
+
+    def test_omits_output_variables_when_only_stop_is_present(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={"output_variables": json.dumps({"STOP": "1"})},
+        )
+        text, _, _ = format_notification(n)
+
+        assert "📤 *Output Variables:*" not in text
+
+    def test_output_variable_empty_and_long_values(self):
+        long_value = "x" * (formatting.OUTPUT_VARIABLE_VALUE_MAX + 5)
+        truncated = "x" * formatting.OUTPUT_VARIABLE_VALUE_MAX + "…"
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "output_variables": json.dumps({"empty": "", "long": long_value})
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert "• *empty:* _\\(empty\\)_" in text
+        assert f"• *long:* `{truncated}`" in text
+
+    def test_output_variables_cap_displayed_count(self):
+        variables = {
+            f"k{i:02d}": "v"
+            for i in range(formatting.OUTPUT_VARIABLES_MAX_DISPLAYED + 3)
+        }
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={"output_variables": json.dumps(variables)},
+        )
+        text, _, _ = format_notification(n)
+
+        assert "• *k00:* `v`" in text
+        assert "• *k19:* `v`" in text
+        assert "• *k20:* `v`" not in text
+        assert "• _…and 3 more_" in text
+
     def test_omits_bead_display_line_when_absent(self):
         n = _make_notification(
             sender="user-agent",
