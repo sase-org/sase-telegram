@@ -180,13 +180,12 @@ class TestProcessCallbackPlan:
         assert result.response_data == {"action": "epic"}
         assert result.answer_text == "Epic created"
 
-    def test_legend(self, tmp_path: Path) -> None:
+    def test_legend_is_unsupported(self, tmp_path: Path) -> None:
         response_dir = str(tmp_path)
         pending = _make_pending_plan("abcd1234", response_dir)
         result = process_callback("plan:abcd1234:legend", pending)
-        assert result is not None
-        assert result.response_data == {"action": "legend"}
-        assert result.answer_text == "Legend created"
+        assert result is None
+        assert not (tmp_path / "plan_response.json").exists()
 
     def test_unknown_pending(self) -> None:
         result = process_callback("plan:unknown1:approve", {})

@@ -1122,7 +1122,6 @@ def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
         "approve": "Plan approved",
         "commit": "Plan committed",
         "epic": "Epic created",
-        "legend": "Legend created",
     }
     label = labels.get(choice, "Plan updated")
     text = escape_markdown_v2(label)
@@ -1392,9 +1391,14 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     if response is None:
         # Unknown or already-handled callback
         try:
-            decode(data_str)
+            cb = decode(data_str)
         except ValueError:
             telegram_client.answer_callback_query(callback_query.id, "Invalid callback")
+            return
+        if cb.action_type == "plan" and cb.choice == "legend":
+            telegram_client.answer_callback_query(
+                callback_query.id, "Legend is no longer supported"
+            )
             return
         telegram_client.answer_callback_query(
             callback_query.id, "This action has already been handled"
@@ -1436,7 +1440,6 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         "approve",
         "commit",
         "epic",
-        "legend",
     ):
         if action:
             _send_plan_confirmation(action, response.response_data["action"])

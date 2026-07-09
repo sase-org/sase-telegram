@@ -777,17 +777,48 @@ class TestInboundIntegration:
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_processes_plan_legend_callback_sends_fork_confirmation(
+    def test_plan_legend_callback_is_unsupported(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        """Full flow: plan legend callback -> response file and fork button."""
-        self._process_plan_callback(
-            mock_tg,
-            tmp_path,
-            choice="legend",
-            expected_response={"action": "legend"},
-            expected_confirmation="Legend created",
+        """Stale plan legend callbacks do not create plan responses."""
+        from sase_telegram import pending_actions
+
+        response_dir = tmp_path / "responses"
+        response_dir.mkdir()
+        (response_dir / "plan_request.json").write_text("{}")
+        pending_actions.add(
+            "abcd1234",
+            {
+                "notification_id": "abcd1234-0000-0000-0000-000000000000",
+                "action": "PlanApproval",
+                "action_data": {"response_dir": str(response_dir)},
+                "message_id": 42,
+                "chat_id": "12345",
+            },
         )
+
+        callback_query = SimpleNamespace(
+            id="cb_legend",
+            data="plan:abcd1234:legend",
+            message=SimpleNamespace(message_id=42),
+        )
+        update = SimpleNamespace(
+            update_id=100,
+            callback_query=callback_query,
+            message=None,
+        )
+        mock_tg.get_updates.return_value = [update]
+        mock_tg.answer_callback_query.return_value = True
+
+        assert inbound_main(["--once"]) == 0
+
+        assert not (response_dir / "plan_response.json").exists()
+        mock_tg.answer_callback_query.assert_called_once_with(
+            "cb_legend", "Legend is no longer supported"
+        )
+        mock_tg.edit_message_reply_markup.assert_not_called()
+        mock_tg.send_message.assert_not_called()
+        assert pending_actions.get("abcd1234") is not None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_plan_feedback_callback_does_not_kill_agent(

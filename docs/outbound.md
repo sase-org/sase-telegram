@@ -53,7 +53,7 @@ Each notification is formatted as a Telegram message with:
 
 | Type | Body Content | Buttons |
 |---|---|---|
-| Plan Approval | Plan text + optional model/agent label | Tale, ✅ Approve, Epic, Legend, Reject, Feedback |
+| Plan Approval | Plan text + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |

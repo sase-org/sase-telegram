@@ -268,13 +268,17 @@ class TestFormatPlanApproval:
             keyboard.inline_keyboard[0][0].callback_data.split(":")[1] + ":run"
         )
         assert "Epic" in keyboard.inline_keyboard[0][2].text
-        assert len(keyboard.inline_keyboard[1]) == 3  # Legend + Reject + Feedback
-        assert "Legend" in keyboard.inline_keyboard[1][0].text
-        assert keyboard.inline_keyboard[1][0].callback_data == "plan:" + (
-            keyboard.inline_keyboard[0][0].callback_data.split(":")[1] + ":legend"
-        )
-        assert "Reject" in keyboard.inline_keyboard[1][1].text
-        assert "Feedback" in keyboard.inline_keyboard[1][2].text
+        assert len(keyboard.inline_keyboard[1]) == 2  # Reject + Feedback
+        assert "Reject" in keyboard.inline_keyboard[1][0].text
+        assert "Feedback" in keyboard.inline_keyboard[1][1].text
+        button_texts = [
+            button.text for row in keyboard.inline_keyboard for button in row
+        ]
+        callback_values = [
+            button.callback_data for row in keyboard.inline_keyboard for button in row
+        ]
+        assert all("Legend" not in text for text in button_texts)
+        assert all(not value.endswith(":legend") for value in callback_values)
         assert attachments == [plan_file]
 
         Path(plan_file).unlink()
