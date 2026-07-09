@@ -100,6 +100,38 @@ def display_vcs_refs_in_text(text: str) -> str:
         return text
 
 
+def build_fork_copy_text(
+    agent_name: str | None,
+    *,
+    prompt: str | None = None,
+    vcs_tag: str | None = None,
+    cl_name: str | None = None,
+) -> str | None:
+    """Build Telegram copy text for forking an agent."""
+    if not isinstance(agent_name, str) or not agent_name.strip():
+        return None
+
+    agent_name = agent_name.strip()
+    fork_text = f"#fork:{agent_name} "
+    resolved_vcs_tag = vcs_tag if isinstance(vcs_tag, str) and vcs_tag.strip() else ""
+
+    if isinstance(prompt, str) and prompt:
+        from sase.xprompt import extract_vcs_workflow_tag
+
+        resolved_vcs_tag = extract_vcs_workflow_tag(prompt) or resolved_vcs_tag
+
+    if resolved_vcs_tag:
+        from sase.xprompt import replace_ref_in_vcs_tag
+
+        if isinstance(cl_name, str) and cl_name:
+            resolved_vcs_tag = replace_ref_in_vcs_tag(resolved_vcs_tag, cl_name)
+        displayed_vcs_tag = display_vcs_refs_in_text(resolved_vcs_tag).strip()
+        if displayed_vcs_tag:
+            fork_text = f"{displayed_vcs_tag} {fork_text}"
+
+    return fork_text
+
+
 def display_safe_stem(stem: str) -> str:
     """Return the Telegram-visible filename stem for safe project prefixes."""
     try:
@@ -908,18 +940,13 @@ def _format_workflow_complete(
     attachments = [str(p) for f in n.files if (p := Path(f).expanduser()).exists()]
 
     keyboard: InlineKeyboardMarkup | None = None
-    if isinstance(agent_name, str) and agent_name:
-        from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
-
-        fork_text = f"#fork:{agent_name} "
-        raw_prompt = n.action_data.get("prompt", "")
-        if raw_prompt:
-            vcs_tag = extract_vcs_workflow_tag(raw_prompt)
-            if vcs_tag:
-                cl_name = n.action_data.get("cl_name")
-                if cl_name:
-                    vcs_tag = replace_ref_in_vcs_tag(vcs_tag, cl_name)
-                fork_text = f"{display_vcs_refs_in_text(vcs_tag)}{fork_text}"
+    raw_prompt = n.action_data.get("prompt")
+    fork_text = build_fork_copy_text(
+        agent_name,
+        prompt=raw_prompt if isinstance(raw_prompt, str) else None,
+        cl_name=n.action_data.get("cl_name"),
+    )
+    if fork_text:
         keyboard = InlineKeyboardMarkup(
             [
                 [

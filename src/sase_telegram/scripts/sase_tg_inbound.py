@@ -22,6 +22,7 @@ from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.launch_approval_actions import LaunchApprovalActionError
 from sase_telegram.formatting import (
+    build_fork_copy_text,
     display_cl_name,
     display_cl_names_in_text,
     display_project_name,
@@ -1105,22 +1106,7 @@ def _handle_question_callback(callback_query: Any, pending: dict[str, Any]) -> N
 
 
 def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
-    """Send a confirmation message with a Plan copy button after plan actions."""
-    plan_file = action.get("plan_file", "")
-    if plan_file:
-        project_dir = action.get("action_data", {}).get("project_dir")
-        if project_dir:
-            try:
-                rel = str(
-                    Path(plan_file).resolve().relative_to(Path(project_dir).resolve())
-                )
-            except ValueError:
-                rel = Path(plan_file).name
-        else:
-            rel = Path(plan_file).name
-    else:
-        rel = ""
-
+    """Send a confirmation message with a fork copy button after plan actions."""
     labels = {
         "approve": "Plan approved",
         "commit": "Plan committed",
@@ -1130,13 +1116,33 @@ def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
     label = labels.get(choice, "Plan updated")
     text = escape_markdown_v2(label)
 
-    if rel:
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        action_data = {}
+
+    def text_value(*keys: str) -> str | None:
+        for key in keys:
+            value = action_data.get(key)
+            if isinstance(value, str) and value:
+                return value
+            value = action.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    fork_text = build_fork_copy_text(
+        text_value("agent_name"),
+        prompt=text_value("prompt"),
+        vcs_tag=text_value("agent_vcs_tag", "vcs_tag"),
+        cl_name=text_value("agent_cl_name", "cl_name"),
+    )
+    if fork_text:
         keyboard = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "📋 Plan",
-                        copy_text=CopyTextButton(text=rel),
+                        "🍴 Fork",
+                        copy_text=CopyTextButton(text=fork_text),
                     )
                 ]
             ]
@@ -1411,7 +1417,7 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             action["chat_id"], action["message_id"], reply_markup=None
         )
 
-    # Send confirmation with Plan copy button for completed plan actions.
+    # Send confirmation with Fork copy button for completed plan actions.
     if response.action_type == "plan" and response.response_data.get("action") in (
         "approve",
         "commit",

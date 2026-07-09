@@ -11,6 +11,7 @@ from sase_telegram.formatting import (
     EXPANDABLE_THRESHOLD,
     MAX_MESSAGE_LENGTH,
     NOTES_TRUNCATION_THRESHOLD,
+    build_fork_copy_text,
     _code_blocks_to_inline,
     _convert_inline,
     _escape_code_entity,
@@ -65,6 +66,36 @@ class TestDisplayHumanizers:
                 "#gh:gh_sase-org__sase Continue sase_task"
             )
             == "#gh:sase Continue sase-task"
+        )
+
+
+class TestBuildForkCopyText:
+    def test_returns_none_without_agent_name(self) -> None:
+        assert build_fork_copy_text(None) is None
+        assert build_fork_copy_text("  ") is None
+
+    def test_builds_plain_fork_text(self) -> None:
+        assert build_fork_copy_text("plan.agent") == "#fork:plan.agent "
+
+    def test_uses_explicit_vcs_tag_and_cl_name(self) -> None:
+        assert (
+            build_fork_copy_text(
+                "plan.agent",
+                vcs_tag="#gh:sase",
+                cl_name="sase_foobar_1",
+            )
+            == "#gh:sase_foobar_1 #fork:plan.agent "
+        )
+
+    def test_prompt_tag_takes_precedence_over_explicit_tag(self) -> None:
+        assert (
+            build_fork_copy_text(
+                "plan.agent",
+                prompt="#gh:from_prompt Fix the bug",
+                vcs_tag="#gh:from_context ",
+                cl_name="actual_cl",
+            )
+            == "#gh:actual_cl #fork:plan.agent "
         )
 
 

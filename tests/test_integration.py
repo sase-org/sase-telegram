@@ -442,6 +442,8 @@ class TestInboundIntegration:
         expected_confirmation: str | None,
         expected_answer: str | None = None,
         agent_name: str | None = "plan.agent",
+        action_data_extra: dict[str, str] | None = None,
+        expected_copy_text: str | None = "#fork:plan.agent ",
         expected_kill: str | None = None,
     ) -> None:
         response_dir = tmp_path / "responses"
@@ -459,6 +461,8 @@ class TestInboundIntegration:
         }
         if agent_name is not None:
             action_data["agent_name"] = agent_name
+        if action_data_extra:
+            action_data.update(action_data_extra)
 
         pending_actions.add(
             "abcd1234",
@@ -509,9 +513,12 @@ class TestInboundIntegration:
             assert chat_id == "12345"
             assert text == expected_confirmation
             keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
-            copy_button = keyboard.inline_keyboard[0][0]
-            assert copy_button.text == "📋 Plan"
-            assert copy_button.copy_text.text == "sdd/tales/plan.md"
+            if expected_copy_text is None:
+                assert keyboard is None
+            else:
+                copy_button = keyboard.inline_keyboard[0][0]
+                assert copy_button.text == "🍴 Fork"
+                assert copy_button.copy_text.text == expected_copy_text
 
         if expected_kill is None:
             mock_kill.assert_not_called()
@@ -680,13 +687,46 @@ class TestInboundIntegration:
     def test_processes_plan_approve_callback(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        """Full flow: plan approve callback -> response file and copy button."""
+        """Full flow: plan approve callback -> response file and fork button."""
         self._process_plan_callback(
             mock_tg,
             tmp_path,
             choice="approve",
             expected_response={"action": "approve"},
             expected_confirmation="Plan approved",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_approve_callback_with_vcs_fork_text(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Plan confirmation fork text carries the current ChangeSpec VCS ref."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="approve",
+            expected_response={"action": "approve"},
+            expected_confirmation="Plan approved",
+            action_data_extra={
+                "agent_cl_name": "sase_foobar_1",
+                "agent_vcs_tag": "#gh:sase ",
+            },
+            expected_copy_text="#gh:sase_foobar_1 #fork:plan.agent ",
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_processes_plan_approve_callback_without_agent_name_has_no_button(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """Legacy pending actions without an agent name get text only."""
+        self._process_plan_callback(
+            mock_tg,
+            tmp_path,
+            choice="approve",
+            expected_response={"action": "approve"},
+            expected_confirmation="Plan approved",
+            agent_name=None,
+            expected_copy_text=None,
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -724,10 +764,10 @@ class TestInboundIntegration:
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_processes_plan_epic_callback_sends_copy_confirmation(
+    def test_processes_plan_epic_callback_sends_fork_confirmation(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        """Full flow: plan epic callback -> response file and copy button."""
+        """Full flow: plan epic callback -> response file and fork button."""
         self._process_plan_callback(
             mock_tg,
             tmp_path,
@@ -737,10 +777,10 @@ class TestInboundIntegration:
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_processes_plan_legend_callback_sends_copy_confirmation(
+    def test_processes_plan_legend_callback_sends_fork_confirmation(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        """Full flow: plan legend callback -> response file and copy button."""
+        """Full flow: plan legend callback -> response file and fork button."""
         self._process_plan_callback(
             mock_tg,
             tmp_path,
