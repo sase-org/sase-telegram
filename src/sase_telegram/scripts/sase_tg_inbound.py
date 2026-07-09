@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 import hashlib
+import html
 import json
 import logging
 import os
@@ -67,6 +69,15 @@ _UPDATE_COMPLETION_PENDING_DIR = (
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
+_LIST_HTML_CHUNK_LIMIT = 3900
+_LIST_STATUS_BUCKET_ORDER = (
+    "Stopped",
+    "Failed",
+    "Starting",
+    "Running",
+    "Waiting",
+    "Done",
+)
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
 _PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.json"
@@ -1327,6 +1338,9 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         if cb.action_type == "bead":
             _handle_bead_callback(callback_query, cb.notif_id_prefix)
             return
+        if cb.action_type == "list":
+            _handle_list_callback(callback_query, cb.notif_id_prefix, cb.choice)
+            return
     except ValueError:
         pass
 
@@ -1846,6 +1860,78 @@ def _launch_provider_model_label(directives: Any | None) -> str:
         return "Agent"
 
 
+def _agent_vcs_prefix(prompt: str | None, agent_name: str) -> str:
+    if not prompt:
+        return ""
+    from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
+
+    vcs_tag = extract_vcs_workflow_tag(prompt)
+    if not vcs_tag:
+        return ""
+    if _prompt_has_pr_xprompt(prompt):
+        vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
+    return display_vcs_refs_in_text(vcs_tag)
+
+
+def _build_agent_action_keyboard(
+    agent_name: str,
+    *,
+    prompt_for_vcs: str | None,
+    retry_source_prompt: str | None,
+    include_kill: bool = True,
+) -> InlineKeyboardMarkup:
+    """Build the standard per-agent Fork/Wait/Kill/Retry controls."""
+    vcs_prefix = _agent_vcs_prefix(prompt_for_vcs, agent_name)
+    fork_text = f"{vcs_prefix}#fork:{agent_name} "
+    wait_text = f"{vcs_prefix}%w:{agent_name} "
+
+    retry_prompt = _build_retry_prompt_for_agent(agent_name, retry_source_prompt)
+    if retry_prompt:
+        retry_prompt = display_vcs_refs_in_text(retry_prompt)
+    if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
+        retry_button = InlineKeyboardButton(
+            "🔄 Retry",
+            copy_text=CopyTextButton(text=retry_prompt),
+        )
+    elif retry_prompt:
+        pending_actions.add(
+            f"retry-{agent_name}",
+            {"action": "retry", "prompt": retry_prompt},
+        )
+        retry_button = InlineKeyboardButton(
+            "🔄 Retry",
+            callback_data=encode("retry", agent_name, "go"),
+        )
+    else:
+        retry_button = None
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                "🍴 Fork",
+                copy_text=CopyTextButton(text=fork_text),
+            ),
+            InlineKeyboardButton(
+                "⏳ Wait",
+                copy_text=CopyTextButton(text=wait_text),
+            ),
+        ]
+    ]
+    agent_buttons: list[InlineKeyboardButton] = []
+    if include_kill:
+        agent_buttons.append(
+            InlineKeyboardButton(
+                "🗡️ Kill",
+                callback_data=encode("kill", agent_name, "go"),
+            )
+        )
+    if retry_button is not None:
+        agent_buttons.append(retry_button)
+    if agent_buttons:
+        rows.append(agent_buttons)
+    return InlineKeyboardMarkup(rows)
+
+
 def _send_launch_notification(
     *,
     slot_prompt: str,
@@ -1890,59 +1976,10 @@ def _send_launch_notification(
     escaped_display = escape_markdown_v2(display)
     keyboard: InlineKeyboardMarkup | None = None
     if agent_name:
-        from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
-
-        vcs_prefix = ""
-        vcs_tag = extract_vcs_workflow_tag(slot_prompt)
-        if vcs_tag:
-            if _prompt_has_pr_xprompt(slot_prompt):
-                vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
-            vcs_prefix = display_vcs_refs_in_text(vcs_tag)
-        # #fork:<name> implies %w:<name>, so the fork button omits the
-        # redundant explicit wait. The Wait button below stays a pure wait.
-        fork_text = f"{vcs_prefix}#fork:{agent_name} "
-        wait_text = f"{vcs_prefix}%w:{agent_name} "
-        retry_prompt = _build_retry_prompt_for_agent(agent_name, original_prompt)
-        if retry_prompt:
-            retry_prompt = display_vcs_refs_in_text(retry_prompt)
-        if retry_prompt and len(retry_prompt) <= _COPY_TEXT_MAX:
-            retry_button = InlineKeyboardButton(
-                "🔄 Retry",
-                copy_text=CopyTextButton(text=retry_prompt),
-            )
-        elif retry_prompt:
-            pending_actions.add(
-                f"retry-{agent_name}",
-                {"action": "retry", "prompt": retry_prompt},
-            )
-            retry_button = InlineKeyboardButton(
-                "🔄 Retry",
-                callback_data=encode("retry", agent_name, "go"),
-            )
-        else:
-            retry_button = None
-        agent_buttons = [
-            InlineKeyboardButton(
-                "🗡️ Kill",
-                callback_data=encode("kill", agent_name, "go"),
-            )
-        ]
-        if retry_button is not None:
-            agent_buttons.append(retry_button)
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "🍴 Fork",
-                        copy_text=CopyTextButton(text=fork_text),
-                    ),
-                    InlineKeyboardButton(
-                        "⏳ Wait",
-                        copy_text=CopyTextButton(text=wait_text),
-                    ),
-                ],
-                agent_buttons,
-            ]
+        keyboard = _build_agent_action_keyboard(
+            agent_name,
+            prompt_for_vcs=slot_prompt,
+            retry_source_prompt=original_prompt,
         )
     msg = telegram_client.send_message(
         chat_id,
@@ -2038,7 +2075,7 @@ def _handle_command(text: str, message: Any | None = None) -> None:
     if command == "kill":
         _handle_kill_command(args)
     elif command == "list":
-        _handle_list_command()
+        _handle_list_command(args)
     elif command == "fork":
         _handle_fork_command()
     elif command == "changes":
@@ -2203,42 +2240,222 @@ def _format_agent_description(
     return line
 
 
-def _format_agent_list_block(agent: Any) -> str:
-    """Format one agent block for the informational /list response."""
-    import html
+def _html(text: object) -> str:
+    return html.escape(str(text), quote=False)
 
-    name = agent.name if isinstance(agent.name, str) and agent.name else "(unnamed)"
-    model_value = agent.model if isinstance(agent.model, str) and agent.model else "?"
-    duration_value = (
-        agent.duration if isinstance(agent.duration, str) and agent.duration else "?"
+
+def _entry_name(entry: Any) -> str:
+    name = getattr(entry, "name", None)
+    return name if isinstance(name, str) and name else "(unnamed)"
+
+
+def _entry_display_name(entry: Any) -> str:
+    return display_cl_name(_entry_name(entry))
+
+
+def _entry_model_label(entry: Any) -> str:
+    model = getattr(entry, "model", None)
+    model_label = model if isinstance(model, str) and model else "?"
+    effort = getattr(entry, "reasoning_effort", None)
+    if isinstance(effort, str) and effort:
+        return f"{model_label} @ {effort}"
+    return model_label
+
+
+def _format_compact_duration(seconds: float | int) -> str:
+    total = max(int(seconds), 0)
+    days, remainder = divmod(total, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, secs = divmod(remainder, 60)
+    if days:
+        return f"{days}d{hours}h"
+    if hours:
+        return f"{hours}h{minutes}m"
+    if minutes:
+        return f"{minutes}m" if secs == 0 else f"{minutes}m{secs}s"
+    return f"{secs}s"
+
+
+def _format_wait_token(entry: Any) -> str:
+    wait = getattr(entry, "wait", None)
+    wait_for = tuple(getattr(wait, "wait_for", ()) or ())
+    remaining = getattr(wait, "remaining_seconds", None)
+    wait_until = getattr(wait, "wait_until", None)
+    wait_duration = getattr(wait, "wait_duration_seconds", None)
+
+    if wait_for:
+        deps = ", ".join(str(dep) for dep in wait_for[:2])
+        if len(wait_for) > 2:
+            deps += f" +{len(wait_for) - 2}"
+        if isinstance(remaining, int) and remaining > 0:
+            return f"⏳ on {deps} · ~{_format_compact_duration(remaining)} left"
+        return f"⏳ on {deps}"
+    if isinstance(remaining, int) and remaining > 0:
+        return f"⏳ ~{_format_compact_duration(remaining)} left"
+    if isinstance(wait_until, str) and wait_until:
+        return f"⏳ until {_format_wait_until(wait_until)}"
+    if isinstance(wait_duration, (int, float)) and wait_duration > 0:
+        return f"⏳ {_format_compact_duration(wait_duration)}"
+    return "⏳ waiting"
+
+
+def _format_wait_until(wait_until: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(wait_until.replace("Z", "+00:00"))
+    except ValueError:
+        return wait_until
+    return parsed.strftime("%H:%M")
+
+
+def _format_finished_time(entry: Any) -> str:
+    finished_at = getattr(entry, "finished_at", None)
+    if isinstance(finished_at, datetime):
+        return finished_at.strftime("%H:%M")
+    duration = getattr(entry, "duration", None)
+    return duration if isinstance(duration, str) and duration else "done"
+
+
+def _format_status_token(entry: Any) -> str:
+    status = str(getattr(entry, "status", "") or "")
+    if status == "QUESTION":
+        return "❓ needs answer"
+    if status == "PLAN":
+        return "📋 plan ready"
+    if status == "WAITING":
+        return _format_wait_token(entry)
+    if status == "STARTING":
+        return "◐ starting"
+    if status == "RETRYING":
+        retry = getattr(entry, "retry", None)
+        attempt = getattr(retry, "retry_attempt", None)
+        return f"↻{attempt}" if isinstance(attempt, int) else "↻ retrying"
+    if status.startswith("FAILED"):
+        return f"✗ {_format_finished_time(entry)}"
+    if status in {"DONE", "PLAN DONE", "TALE DONE", "STOPPED", "FEEDBACK"}:
+        return f"✓ {_format_finished_time(entry)}"
+    duration = getattr(entry, "duration", None)
+    return f"▶ {duration if isinstance(duration, str) and duration else '?'}"
+
+
+def _entry_micro_badges(entry: Any) -> list[str]:
+    badges: list[str] = []
+    if getattr(entry, "has_file_changes", False):
+        badges.append("✏️")
+    auto_badge = getattr(entry, "auto_badge", None)
+    if isinstance(auto_badge, str) and auto_badge:
+        badges.append(auto_badge)
+    if getattr(entry, "bead_id", None):
+        badges.append("◆")
+    tag = getattr(entry, "tag", None)
+    if isinstance(tag, str) and tag:
+        badges.append(tag if tag.startswith("#") else f"#{tag}")
+    retry = getattr(entry, "retry", None)
+    retry_attempt = getattr(retry, "retry_attempt", None)
+    if isinstance(retry_attempt, int):
+        badges.append(f"↻{retry_attempt}")
+    children = getattr(entry, "children", None)
+    child_badge = getattr(children, "badge", None)
+    if isinstance(child_badge, str) and child_badge:
+        badges.append(child_badge)
+    return badges
+
+
+def _format_agent_list_block(entry: Any) -> str:
+    """Format one rich agent block for the /list overview."""
+    provider_badge = getattr(entry, "provider_badge", None) or "•"
+    name = _html(_entry_display_name(entry))
+    model = _html(_entry_model_label(entry))
+    status_token = _html(_format_status_token(entry))
+    micro_badges = _entry_micro_badges(entry)
+    suffix = (
+        f" {' '.join(_html(badge) for badge in micro_badges)}" if micro_badges else ""
     )
-    label = html.escape(display_cl_name(name))
-    model = html.escape(model_value)
-    duration = html.escape(duration_value)
 
-    details: list[str] = []
-    project = getattr(agent, "project", None)
+    lines = [
+        f"{provider_badge} <b>{name}</b> · {model} · {status_token}{suffix}",
+    ]
+    context = _entry_context_parts(entry)
+    if context:
+        lines.append(" · ".join(_html(part) for part in context))
+    activity = getattr(entry, "activity", None)
+    if isinstance(activity, str) and activity:
+        lines.append(f"<i>{_html(activity)}</i>")
+    prompt = _entry_prompt_snippet(entry, limit=160)
+    if prompt:
+        lines.append(f"<blockquote>{_html(prompt)}</blockquote>")
+    return "\n".join(lines)
+
+
+def _entry_context_parts(entry: Any) -> list[str]:
+    parts: list[str] = []
+    project = getattr(entry, "project", None)
     if isinstance(project, str) and project:
-        details.append(html.escape(display_project_name(project)))
-    workspace_num = getattr(agent, "workspace_num", None)
+        parts.append(display_project_name(project))
+    workspace_num = getattr(entry, "workspace_num", None)
     if isinstance(workspace_num, int):
-        details.append(f"ws#{workspace_num}")
-    pid = getattr(agent, "pid", None)
+        parts.append(f"ws#{workspace_num}")
+    pid = getattr(entry, "pid", None)
     if isinstance(pid, int):
-        details.append(f"PID {pid}")
-    if getattr(agent, "approve", False) is True:
-        details.append("autonomous")
+        parts.append(f"PID {pid}")
+    vcs_provider = getattr(entry, "vcs_provider_display", None)
+    if isinstance(vcs_provider, str) and vcs_provider:
+        parts.append(vcs_provider)
+    parent_agent_name = getattr(entry, "parent_agent_name", None)
+    if isinstance(parent_agent_name, str) and parent_agent_name:
+        parts.append(f"fork of {display_cl_name(parent_agent_name)}")
+    agent_family = getattr(entry, "agent_family", None)
+    agent_family_role = getattr(entry, "agent_family_role", None)
+    if isinstance(agent_family, str) and agent_family:
+        label = f"family {display_cl_name(agent_family)}"
+        if isinstance(agent_family_role, str) and agent_family_role:
+            label += f"·{agent_family_role}"
+        parts.append(label)
+    retry = getattr(entry, "retry", None)
+    retry_attempt = getattr(retry, "retry_attempt", None)
+    if isinstance(retry_attempt, int):
+        parts.append(f"retry {retry_attempt}")
+    return parts
 
-    block = f"<b>{label}</b>  {model}, {duration}"
-    if details:
-        block += f"\n{' · '.join(details)}"
-    prompt = getattr(agent, "prompt", None)
-    if isinstance(prompt, str) and prompt:
-        snippet = display_cl_names_in_text(prompt.replace("\n", " ").strip())
-        if len(snippet) > 120:
-            snippet = snippet[:120] + "…"
-        block += f"\n<i>{html.escape(snippet)}</i>"
-    return block
+
+def _entry_prompt_snippet(entry: Any, *, limit: int) -> str | None:
+    prompt = getattr(entry, "prompt", None)
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    snippet = display_cl_names_in_text(prompt.replace("\n", " ").strip())
+    if len(snippet) > limit:
+        return snippet[: max(limit - 1, 1)] + "…"
+    return snippet
+
+
+def _pack_html_blocks(blocks: list[str]) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        separator = "\n\n" if current else ""
+        candidate = f"{current}{separator}{block}" if current else block
+        if current and len(candidate) > _LIST_HTML_CHUNK_LIMIT:
+            chunks.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _send_html_chunks(
+    chat_id: str,
+    chunks: list[str],
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    for index, chunk in enumerate(chunks):
+        telegram_client.send_message(
+            chat_id,
+            chunk,
+            parse_mode="HTML",
+            reply_markup=reply_markup if index == len(chunks) - 1 else None,
+        )
 
 
 def _show_kill_selection(chat_id: str) -> None:
@@ -2303,27 +2520,429 @@ def _handle_kill_command(args: str) -> None:
     _send_kill_result(name, result, kill_info, prompt_fallback=prompt_fallback)
 
 
-def _handle_list_command() -> None:
-    """Handle /list — show all currently running agents."""
-    from sase.agent.running import list_running_agents
-    from sase.integrations.agent_status_groups import (
-        group_agent_statuses,
-        status_bucket_header,
+@dataclass(frozen=True)
+class _ListCommandArgs:
+    include_recent: bool = False
+    query: str | None = None
+
+
+def _parse_list_args(args: str) -> _ListCommandArgs:
+    tokens = [token for token in args.split() if token]
+    include_recent = False
+    remaining: list[str] = []
+    for token in tokens:
+        if token.lower() == "all":
+            include_recent = True
+        else:
+            remaining.append(token)
+    return _ListCommandArgs(
+        include_recent=include_recent,
+        query=" ".join(remaining) if remaining else None,
     )
 
-    chat_id = credentials.get_chat_id()
-    agents = list_running_agents()
 
-    if not agents:
-        telegram_client.send_message(chat_id, "No running agents.")
+def _active_list_entries(entries: list[Any]) -> list[Any]:
+    return [
+        entry for entry in entries if not bool(getattr(entry, "is_terminal", False))
+    ]
+
+
+def _load_list_entries(*, project: str | None = None) -> list[Any]:
+    from sase.integrations.agent_list_entries import agent_list_entries
+
+    return list(agent_list_entries(include_recent=True, project=project))
+
+
+def _find_entry_by_name(entries: list[Any], name: str) -> Any | None:
+    for entry in entries:
+        if getattr(entry, "name", None) == name:
+            return entry
+    return None
+
+
+def _handle_list_command(args: str = "") -> None:
+    """Handle /list, /list all, /list <name>, and /list <project>."""
+    parsed = _parse_list_args(args)
+    chat_id = credentials.get_chat_id()
+    all_entries = _load_list_entries()
+
+    if parsed.query:
+        detail_entry = _find_entry_by_name(all_entries, parsed.query)
+        if detail_entry is not None:
+            _send_list_detail(chat_id, detail_entry)
+            return
+        project_entries = [
+            entry
+            for entry in all_entries
+            if getattr(entry, "project", None) == parsed.query
+        ]
+        chunks, keyboard = _render_list_overview(
+            project_entries,
+            include_recent=parsed.include_recent,
+            project=parsed.query,
+            include_keyboard=False,
+        )
+        _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
         return
 
-    blocks: list[str] = [f"<b>{len(agents)} Running Agent(s)</b>"]
-    for group in group_agent_statuses(agents):
-        blocks.append(f"<b>{status_bucket_header(group.bucket, len(group.agents))}</b>")
-        blocks.extend(_format_agent_list_block(agent) for agent in group.agents)
+    chunks, keyboard = _render_list_overview(
+        all_entries,
+        include_recent=parsed.include_recent,
+        include_keyboard=True,
+    )
+    _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
 
-    telegram_client.send_message(chat_id, "\n\n".join(blocks), parse_mode="HTML")
+
+def _handle_list_callback(callback_query: Any, mode: str, choice: str) -> None:
+    """Handle the global /list overview keyboard."""
+    chat_id = _callback_chat_id(callback_query, None)
+    if choice == "kill":
+        _answer_callback(callback_query, "Opening kill list")
+        if chat_id is not None:
+            _show_kill_selection(chat_id)
+        return
+    if choice == "fork":
+        _answer_callback(callback_query, "Opening fork list")
+        _handle_fork_command()
+        return
+    if choice not in {"refresh", "all", "active"}:
+        _answer_callback(callback_query, "Invalid list action")
+        return
+
+    include_recent = mode == "all"
+    if choice == "all":
+        include_recent = True
+    elif choice == "active":
+        include_recent = False
+
+    chunks, keyboard = _render_list_overview(
+        _load_list_entries(),
+        include_recent=include_recent,
+        include_keyboard=True,
+    )
+    message_id = _callback_origin_message_id(callback_query, None)
+    if chat_id is not None and message_id is not None and len(chunks) == 1:
+        telegram_client.edit_message_text(
+            chat_id,
+            message_id,
+            chunks[0],
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    elif chat_id is not None:
+        _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
+    _answer_callback(callback_query, "Refreshed")
+
+
+def _render_list_overview(
+    all_entries: list[Any],
+    *,
+    include_recent: bool,
+    project: str | None = None,
+    include_keyboard: bool,
+) -> tuple[list[str], InlineKeyboardMarkup | None]:
+    from sase.integrations.agent_status_groups import status_bucket_header
+
+    visible_entries = (
+        all_entries if include_recent else _active_list_entries(all_entries)
+    )
+    active_count = len(_active_list_entries(all_entries))
+    blocks = [_format_list_header(all_entries, active_count, include_recent, project)]
+
+    if visible_entries:
+        for bucket, group_entries in _group_list_entries(visible_entries):
+            blocks.append(
+                f"<b>{_html(status_bucket_header(bucket, len(group_entries)))}</b>"
+            )
+            blocks.extend(_format_agent_list_block(entry) for entry in group_entries)
+    else:
+        empty = f"No {'agents' if include_recent else 'running agents'}" + (
+            f" for {_html(display_project_name(project))}." if project else "."
+        )
+        blocks.append(empty)
+
+    footer = _format_list_footer(all_entries, include_recent=include_recent)
+    if footer:
+        blocks.append(footer)
+
+    keyboard = (
+        _build_list_overview_keyboard(include_recent=include_recent)
+        if include_keyboard
+        else None
+    )
+    return _pack_html_blocks(blocks), keyboard
+
+
+def _group_list_entries(entries: list[Any]) -> list[tuple[str, list[Any]]]:
+    grouped: dict[str, list[Any]] = {}
+    for entry in entries:
+        bucket = str(getattr(entry, "status_bucket", "") or "Running")
+        grouped.setdefault(bucket, []).append(entry)
+
+    ordered: list[tuple[str, list[Any]]] = [
+        (bucket, grouped[bucket])
+        for bucket in _LIST_STATUS_BUCKET_ORDER
+        if grouped.get(bucket)
+    ]
+    ordered.extend(
+        (bucket, bucket_entries)
+        for bucket, bucket_entries in grouped.items()
+        if bucket not in _LIST_STATUS_BUCKET_ORDER
+    )
+    return ordered
+
+
+def _format_list_header(
+    entries: list[Any],
+    active_count: int,
+    include_recent: bool,
+    project: str | None,
+) -> str:
+    title_parts = ["🤖 <b>Agents</b>"]
+    if project:
+        title_parts.append(_html(display_project_name(project)))
+    if include_recent:
+        title_parts.append(f"{len(entries)} total")
+        title_parts.append(f"{active_count} active")
+    else:
+        title_parts.append(f"{active_count} active")
+
+    status_line = _format_header_status_counts(_active_list_entries(entries))
+    if status_line:
+        return " · ".join(title_parts) + "\n" + status_line
+    return " · ".join(title_parts)
+
+
+def _format_header_status_counts(active_entries: list[Any]) -> str | None:
+    if not active_entries:
+        return None
+    counts: dict[str, int] = {}
+    glyphs: dict[str, str] = {}
+    for entry in active_entries:
+        bucket = str(getattr(entry, "status_bucket", "") or "")
+        if not bucket:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+        glyph = getattr(entry, "status_glyph", "")
+        glyphs[bucket] = glyph if isinstance(glyph, str) else ""
+    ordered = [
+        bucket
+        for bucket in ("Stopped", "Failed", "Starting", "Running", "Waiting", "Done")
+        if counts.get(bucket)
+    ]
+    if not ordered:
+        return None
+    return " · ".join(
+        f"{glyphs.get(bucket) or ''} {counts[bucket]} {bucket.lower()}".strip()
+        for bucket in ordered
+    )
+
+
+def _format_list_footer(entries: list[Any], *, include_recent: bool) -> str | None:
+    if include_recent:
+        return None
+    done = failed = 0
+    for entry in entries:
+        finished_at = getattr(entry, "finished_at", None)
+        if not isinstance(finished_at, datetime):
+            continue
+        now = datetime.now(finished_at.tzinfo)
+        if now - finished_at > timedelta(hours=1):
+            continue
+        bucket = getattr(entry, "status_bucket", None)
+        if bucket == "Done":
+            done += 1
+        elif bucket == "Failed":
+            failed += 1
+    parts: list[str] = []
+    if done:
+        parts.append(f"✓ {done} done")
+    if failed:
+        parts.append(f"✗ {failed} failed")
+    if not parts:
+        return None
+    return "— " + " · ".join(parts) + " in the last hour · /list all"
+
+
+def _build_list_overview_keyboard(*, include_recent: bool) -> InlineKeyboardMarkup:
+    next_mode = "active" if include_recent else "all"
+    toggle_label = "Hide finished" if include_recent else "✓ Show finished"
+    current_mode = "all" if include_recent else "active"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🔄 Refresh",
+                    callback_data=encode("list", current_mode, "refresh"),
+                ),
+                InlineKeyboardButton(
+                    toggle_label,
+                    callback_data=encode("list", current_mode, next_mode),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗡️ Kill…",
+                    callback_data=encode("list", current_mode, "kill"),
+                ),
+                InlineKeyboardButton(
+                    "🍴 Fork…",
+                    callback_data=encode("list", current_mode, "fork"),
+                ),
+            ],
+        ]
+    )
+
+
+def _send_list_detail(chat_id: str, entry: Any) -> None:
+    text = _format_list_detail(entry)
+    agent_name = getattr(entry, "name", None)
+    keyboard = None
+    if isinstance(agent_name, str) and agent_name:
+        prompt = _get_agent_retry_prompt(agent_name) or getattr(entry, "prompt", None)
+        keyboard = _build_agent_action_keyboard(
+            agent_name,
+            prompt_for_vcs=prompt,
+            retry_source_prompt=prompt,
+            include_kill=not bool(getattr(entry, "is_terminal", False)),
+        )
+    telegram_client.send_message(
+        chat_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+def _format_list_detail(entry: Any) -> str:
+    provider_badge = getattr(entry, "provider_badge", None) or "•"
+    title = f"{provider_badge} <b>{_html(_entry_display_name(entry))}</b> — details"
+    status = _html(_format_status_token(entry))
+    rows = _detail_rows(entry)
+    grid = _format_detail_grid(rows)
+    prompt = _get_detail_prompt(entry)
+
+    parts = [title, status]
+    if grid:
+        parts.append(f"<pre>{_html(grid)}</pre>")
+    if prompt:
+        parts.append(f"<blockquote expandable>{_html(prompt)}</blockquote>")
+    return "\n\n".join(parts)
+
+
+def _detail_rows(entry: Any) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    _append_row(rows, "Model", _entry_model_label(entry))
+    project = getattr(entry, "project", None)
+    if isinstance(project, str) and project:
+        _append_row(rows, "Project", display_project_name(project))
+    changespec = getattr(entry, "changespec_name", None)
+    if isinstance(changespec, str) and changespec:
+        _append_row(rows, "ChangeSpec", display_cl_name(changespec))
+    workspace_num = getattr(entry, "workspace_num", None)
+    if isinstance(workspace_num, int):
+        _append_row(rows, "Workspace", f"#{workspace_num}")
+    pid = getattr(entry, "pid", None)
+    if isinstance(pid, int):
+        _append_row(rows, "PID", str(pid))
+    _append_optional_row(rows, "VCS", getattr(entry, "vcs_provider_display", None))
+    _append_optional_row(rows, "Workflow", getattr(entry, "workflow_name", None))
+    auto_badge = getattr(entry, "auto_badge", None)
+    if isinstance(auto_badge, str) and auto_badge:
+        action = getattr(entry, "auto_approve_plan_action", None)
+        _append_row(rows, "Auto", f"{auto_badge} {action}" if action else auto_badge)
+    _append_optional_row(rows, "Bead", getattr(entry, "bead_id", None))
+    tag = getattr(entry, "tag", None)
+    if isinstance(tag, str) and tag:
+        _append_row(rows, "Tag", tag if tag.startswith("#") else f"#{tag}")
+    started_at = getattr(entry, "started_at", None)
+    if isinstance(started_at, datetime):
+        _append_row(rows, "Started", started_at.strftime("%Y-%m-%d %H:%M:%S"))
+    finished_at = getattr(entry, "finished_at", None)
+    if isinstance(finished_at, datetime):
+        _append_row(rows, "Finished", finished_at.strftime("%Y-%m-%d %H:%M:%S"))
+    wait_detail = _detail_wait_value(entry)
+    if wait_detail:
+        _append_row(rows, "Wait", wait_detail)
+    retry_detail = _detail_retry_value(entry)
+    if retry_detail:
+        _append_row(rows, "Retries", retry_detail)
+    _append_optional_row(rows, "Activity", getattr(entry, "activity", None))
+    outputs = getattr(entry, "output_variables", None)
+    if isinstance(outputs, dict) and outputs:
+        _append_row(
+            rows,
+            "Outputs",
+            " · ".join(f"{key}={value}" for key, value in sorted(outputs.items())),
+        )
+    artifact_count = getattr(entry, "artifact_count", 0)
+    commit_count = getattr(entry, "commit_count", 0)
+    artifact_parts: list[str] = []
+    if isinstance(artifact_count, int) and artifact_count:
+        artifact_parts.append(f"{artifact_count} files")
+    if isinstance(commit_count, int) and commit_count:
+        artifact_parts.append(f"{commit_count} commits")
+    if artifact_parts:
+        _append_row(rows, "Artifacts", " · ".join(artifact_parts))
+    _append_optional_row(rows, "ERROR", getattr(entry, "error", None))
+    return rows
+
+
+def _append_row(rows: list[tuple[str, str]], key: str, value: object) -> None:
+    text = str(value).strip()
+    if text:
+        rows.append((key, text))
+
+
+def _append_optional_row(
+    rows: list[tuple[str, str]], key: str, value: object | None
+) -> None:
+    if isinstance(value, str) and value:
+        rows.append((key, value))
+
+
+def _format_detail_grid(rows: list[tuple[str, str]]) -> str:
+    if not rows:
+        return ""
+    width = max(len(key) for key, _ in rows)
+    return "\n".join(f"{key:<{width}}  {value}" for key, value in rows)
+
+
+def _detail_wait_value(entry: Any) -> str | None:
+    wait = getattr(entry, "wait", None)
+    if wait is None or not bool(getattr(wait, "has_wait", False)):
+        return None
+    return _format_wait_token(entry).removeprefix("⏳ ").strip()
+
+
+def _detail_retry_value(entry: Any) -> str | None:
+    retry = getattr(entry, "retry", None)
+    if retry is None or not bool(getattr(retry, "has_retry", False)):
+        return None
+    parts: list[str] = []
+    attempt = getattr(retry, "retry_attempt", None)
+    if isinstance(attempt, int):
+        parts.append(f"attempt {attempt}")
+    category = getattr(retry, "retry_error_category", None)
+    if isinstance(category, str) and category:
+        parts.append(category)
+    parent = getattr(retry, "retry_of_timestamp", None)
+    if isinstance(parent, str) and parent:
+        parts.append(f"of {parent}")
+    child = getattr(retry, "retried_as_timestamp", None)
+    if isinstance(child, str) and child:
+        parts.append(f"retried as {child}")
+    return " · ".join(parts) if parts else None
+
+
+def _get_detail_prompt(entry: Any) -> str | None:
+    name = getattr(entry, "name", None)
+    prompt = _get_agent_retry_prompt(name) if isinstance(name, str) and name else None
+    if not prompt:
+        prompt = getattr(entry, "prompt", None)
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    return display_cl_names_in_text(prompt.strip())
 
 
 def _handle_fork_command() -> None:
@@ -3008,7 +3627,7 @@ def _handle_text_message(message: Any) -> None:
 
 _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
-    ("list", "Show all running agents"),
+    ("list", "Show agents; supports all, name, or project"),
     ("fork", "Copy fork text for an agent"),
     ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),

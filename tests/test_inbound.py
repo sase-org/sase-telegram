@@ -3456,6 +3456,95 @@ def _running_agent(
     )
 
 
+def _list_entry(
+    name: str,
+    *,
+    project: str = "sase",
+    pid: int = 1234,
+    model: str | None = "opus",
+    provider_badge: str | None = "🎭",
+    workspace_num: int | None = 1,
+    duration: str = "5m",
+    prompt: str | None = None,
+    status: str = "RUNNING",
+    status_bucket: str = "Running",
+    status_glyph: str = "▶",
+    reasoning_effort: str | None = None,
+    vcs_provider_display: str | None = None,
+    approve: bool = False,
+    activity: str | None = None,
+    finished_at: object | None = None,
+    wait: SimpleNamespace | None = None,
+    retry: SimpleNamespace | None = None,
+    children_badge: str | None = None,
+    is_terminal: bool | None = None,
+) -> SimpleNamespace:
+    wait_info = wait or SimpleNamespace(
+        wait_for=(),
+        wait_duration_seconds=None,
+        wait_until=None,
+        remaining_seconds=None,
+        has_wait=False,
+    )
+    retry_info = retry or SimpleNamespace(
+        retry_attempt=None,
+        retry_of_timestamp=None,
+        retried_as_timestamp=None,
+        retry_error_category=None,
+        has_retry=False,
+    )
+    return SimpleNamespace(
+        name=name,
+        project=project,
+        pid=pid,
+        model=model,
+        provider_badge=provider_badge,
+        workspace_num=workspace_num,
+        duration=duration,
+        duration_seconds=300,
+        started_at=None,
+        finished_at=finished_at,
+        prompt=prompt,
+        status=status,
+        status_bucket=status_bucket,
+        status_glyph=status_glyph,
+        approve=approve,
+        artifacts_dir="/tmp/artifacts",
+        timestamp="20260709120000",
+        reasoning_effort=reasoning_effort,
+        vcs_provider_display=vcs_provider_display,
+        tag=None,
+        bead_id=None,
+        changespec_name=None,
+        cl_name=None,
+        workflow_name=None,
+        agent_family=None,
+        agent_family_role=None,
+        parent_agent_name=None,
+        plan=False,
+        plan_approved=False,
+        plan_action=None,
+        auto_approve_plan_action=None,
+        pending_question=status == "QUESTION",
+        question_answered=status == "ANSWERED",
+        wait=wait_info,
+        retry=retry_info,
+        children=SimpleNamespace(badge=children_badge),
+        activity=activity,
+        output_variables={},
+        artifact_count=0,
+        commit_count=0,
+        error=None,
+        traceback=None,
+        has_file_changes=False,
+        auto_badge="⚡" if approve else None,
+        is_terminal=(
+            status_bucket in {"Done", "Failed"} if is_terminal is None else is_terminal
+        ),
+        needs_user_action=status in {"PLAN", "QUESTION"},
+    )
+
+
 class TestHandleListCommand:
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -3467,10 +3556,18 @@ class TestHandleListCommand:
         from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
-        with patch("sase.agent.running.list_running_agents", return_value=[]):
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=[],
+        ):
             _handle_list_command()
 
-        mock_tg.send_message.assert_called_once_with("12345", "No running agents.")
+        mock_tg.send_message.assert_called_once()
+        assert mock_tg.send_message.call_args.args[:2] == (
+            "12345",
+            "🤖 <b>Agents</b> · 0 active\n\nNo running agents.",
+        )
+        assert mock_tg.send_message.call_args.kwargs["parse_mode"] == "HTML"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -3483,15 +3580,21 @@ class TestHandleListCommand:
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
-            _running_agent(
+            _list_entry(
                 "<alpha>",
                 project="sase&core",
                 model="opus<4>",
                 prompt="do <thing>\nnow",
+                reasoning_effort="high",
+                vcs_provider_display="GitHub",
+                activity="writing <tests>",
                 approve=True,
             )
         ]
-        with patch("sase.agent.running.list_running_agents", return_value=agents):
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=agents,
+        ):
             _handle_list_command()
 
         mock_tg.send_message.assert_called_once()
@@ -3499,11 +3602,13 @@ class TestHandleListCommand:
         kwargs = mock_tg.send_message.call_args.kwargs
         text = args[1]
         assert kwargs["parse_mode"] == "HTML"
-        assert text.startswith("<b>1 Running Agent(s)</b>")
+        assert text.startswith("🤖 <b>Agents</b> · 1 active")
         assert "<b>▶ Running (1)</b>" in text
-        assert "<b>&lt;alpha&gt;</b>  opus&lt;4&gt;, 5m" in text
-        assert "sase&amp;core · ws#1 · PID 1234 · autonomous" in text
-        assert "<i>do &lt;thing&gt; now</i>" in text
+        assert "🎭 <b>&lt;alpha&gt;</b> · opus&lt;4&gt; @ high · ▶ 5m ⚡" in text
+        assert "sase&amp;core · ws#1 · PID 1234 · GitHub" in text
+        assert "<i>writing &lt;tests&gt;</i>" in text
+        assert "<blockquote>do &lt;thing&gt; now</blockquote>" in text
+        assert kwargs["reply_markup"] is not None
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -3515,9 +3620,12 @@ class TestHandleListCommand:
         from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
-        agents = [_running_agent("alpha", project="sase-core")]
+        agents = [_list_entry("alpha", project="sase-core")]
         with (
-            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=agents,
+            ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.display_project_name",
                 return_value="SASE & Core",
@@ -3539,9 +3647,12 @@ class TestHandleListCommand:
         from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
-        agents = [_running_agent("alpha", prompt="#gh:gh_sase-org__sase Fix")]
+        agents = [_list_entry("alpha", prompt="#gh:gh_sase-org__sase Fix")]
         with (
-            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=agents,
+            ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.display_cl_names_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
@@ -3550,7 +3661,7 @@ class TestHandleListCommand:
             _handle_list_command()
 
         text = mock_tg.send_message.call_args.args[1]
-        assert "<i>#gh:sase Fix</i>" in text
+        assert "<blockquote>#gh:sase Fix</blockquote>" in text
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -3563,13 +3674,23 @@ class TestHandleListCommand:
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
-            _running_agent("run-1", status="RUNNING"),
-            _running_agent("done-1", status="DONE"),
-            _running_agent("run-2", status="RUNNING"),
-            _running_agent("question-1", status="QUESTION"),
+            _list_entry("run-1", status="RUNNING", status_bucket="Running"),
+            _list_entry(
+                "done-1", status="DONE", status_bucket="Done", status_glyph="✓"
+            ),
+            _list_entry("run-2", status="RUNNING", status_bucket="Running"),
+            _list_entry(
+                "question-1",
+                status="QUESTION",
+                status_bucket="Stopped",
+                status_glyph="▲",
+            ),
         ]
-        with patch("sase.agent.running.list_running_agents", return_value=agents):
-            _handle_list_command()
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=agents,
+        ):
+            _handle_list_command("all")
 
         text = mock_tg.send_message.call_args.args[1]
         needs_idx = text.index("<b>▲ Stopped (1)</b>")
@@ -3577,6 +3698,109 @@ class TestHandleListCommand:
         done_idx = text.index("<b>✓ Done (1)</b>")
         assert needs_idx < running_idx < done_idx
         assert text.index("run-1") < text.index("run-2")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_name_arg_renders_detail_with_buttons(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [
+            _list_entry(
+                "alpha",
+                reasoning_effort="high",
+                prompt="Full prompt",
+                vcs_provider_display="GitHub",
+                activity="writing tests",
+            )
+        ]
+        with (
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=agents,
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._get_agent_retry_prompt",
+                return_value="Full prompt",
+            ),
+        ):
+            _handle_list_command("alpha")
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "🎭 <b>alpha</b> — details" in text
+        assert "<pre>" in text
+        assert "Model      opus @ high" in text
+        assert "VCS        GitHub" in text
+        assert "Activity   writing tests" in text
+        assert "<blockquote expandable>Full prompt</blockquote>" in text
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][1].text == "⏳ Wait"
+        assert buttons[1][0].callback_data == "kill:alpha:go"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_project_arg_filters_overview(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [
+            _list_entry("alpha", project="sase"),
+            _list_entry("bravo", project="zorg"),
+        ]
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=agents,
+        ):
+            _handle_list_command("zorg")
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "zorg" in text
+        assert "bravo" in text
+        assert "alpha" not in text
+        assert mock_tg.send_message.call_args.kwargs["reply_markup"] is None
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_refresh_callback_edits_list_message(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        mock_creds.get_chat_id.return_value = "12345"
+        callback = SimpleNamespace(
+            id="cb1",
+            data="list:active:refresh",
+            message=SimpleNamespace(
+                message_id=99,
+                chat=SimpleNamespace(id="12345"),
+            ),
+        )
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=[_list_entry("alpha")],
+        ):
+            _handle_callback(callback, {})
+
+        mock_tg.edit_message_text.assert_called_once()
+        args = mock_tg.edit_message_text.call_args.args
+        kwargs = mock_tg.edit_message_text.call_args.kwargs
+        assert args[:2] == ("12345", 99)
+        assert "alpha" in args[2]
+        assert kwargs["parse_mode"] == "HTML"
+        assert kwargs["reply_markup"] is not None
+        mock_tg.answer_callback_query.assert_called_once_with("cb1", "Refreshed")
 
 
 class TestHandleKillSelection:

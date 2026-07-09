@@ -63,7 +63,10 @@ Text messages are dispatched in priority order:
 
 1. **Two-step completion** — If `awaiting_feedback.json` has an active flow, the text completes it (see above)
 2. **Slash commands** — Messages starting with `/` are agent management commands (registered with `set_my_commands` so they appear in the chat input UI):
-   - `/list` — Lists running agents with provider/model and a prompt snippet
+   - `/list` — Lists running agents with provider/model, status, context, activity, prompt snippet, and overview buttons
+   - `/list all` — Includes recently finished and failed agents
+   - `/list <name>` — Shows a detail view for one agent with Fork/Wait/Kill/Retry buttons
+   - `/list <project>` — Filters the overview to one project (agent names win when a name and project match)
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
