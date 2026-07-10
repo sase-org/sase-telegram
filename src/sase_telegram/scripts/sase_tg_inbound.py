@@ -80,6 +80,11 @@ _LIST_STATUS_BUCKET_ORDER = (
 )
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
+_ACTIVE_BEAD_LIST_ARGS = (
+    "list",
+    "--status=open",
+    "--status=in_progress",
+)
 _PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.json"
 _MEDIA_GROUPS_PATH = Path.home() / ".sase" / "telegram" / "media_groups.json"
 _MEDIA_GROUP_QUIET_SECONDS = 2.0
@@ -726,7 +731,9 @@ def _resolve_bead_cwd(message: Any | None = None) -> str | None:
 
 
 def _run_bead_command(
-    args: list[str], message: Any | None = None, cwd: str | None = None
+    args: list[str] | tuple[str, ...],
+    message: Any | None = None,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``sase bead`` in the resolved project context when available."""
     cmd = ["sase", "bead", *args]
@@ -745,6 +752,13 @@ def _run_bead_command(
         check=False,
         cwd=cwd,
     )
+
+
+def _run_active_bead_list(
+    message: Any | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """List only open and in-progress beads without the CLI closed fallback."""
+    return _run_bead_command(_ACTIVE_BEAD_LIST_ARGS, message=message, cwd=cwd)
 
 
 def _list_changespec_xprompt_tags(project: str | None = None) -> Any:
@@ -3191,10 +3205,7 @@ def _project_bead_entries(
     entries: list[_ProjectBeadEntry] = []
     errors: list[str] = []
     for project in projects:
-        result = _run_bead_command(
-            ["list"],
-            cwd=project.workspace,
-        )
+        result = _run_active_bead_list(cwd=project.workspace)
         if result.returncode != 0:
             err = result.stderr.strip() or "sase bead list failed"
             errors.append(f"{display_project_name(project.project)}: {err}")
@@ -3285,7 +3296,7 @@ def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
     """Render an inline keyboard with one button per active bead."""
     try:
         if _bead_project_override():
-            result = _run_bead_command(["list"], message=message)
+            result = _run_active_bead_list(message=message)
             if result.returncode != 0:
                 err = result.stderr.strip() or "sase bead list failed"
                 _send_bead_subprocess_error(chat_id, err)
@@ -3306,7 +3317,7 @@ def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
             )
             return
 
-        result = _run_bead_command(["list"], message=message)
+        result = _run_active_bead_list(message=message)
     except FileNotFoundError:
         telegram_client.send_message(chat_id, "`sase` CLI not found on bot host")
         return

@@ -121,10 +121,12 @@ count. Large result sets are split across multiple Telegram messages without dro
 
 ## Beads
 
-`/bead` runs `sase bead list` across known workspaces from `~/.sase/projects/*/<project>.sase` (legacy `.gp` files are
-also read as a fallback), parses active beads
-(`open` and `in_progress`), and shows up to 80 picker buttons. `/bead <id>` runs `sase bead show <id>`, converts the
-plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
+`/bead` runs `sase bead list --status=open --status=in_progress` across known workspaces from
+`~/.sase/projects/*/<project>.sase` (legacy `.gp` files are also read as a fallback), parses the active results, and
+shows up to 80 picker buttons. The explicit filters disable the CLI's interactive closed-bead fallback: a project with
+only closed beads contributes no buttons, and Telegram reports `No active beads.` when no project has active work.
+`/bead <id>` runs `sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram
+MarkdownV2.
 
 If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project workspace. Without the override,
 picker callbacks carry the source project when possible, and manual detail lookup searches known projects after trying

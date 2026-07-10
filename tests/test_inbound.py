@@ -4025,7 +4025,13 @@ class TestBeadCommand:
             _handle_bead_command("")
 
         run_mock.assert_called_once()
-        assert run_mock.call_args[0][0] == ["sase", "bead", "list"]
+        assert run_mock.call_args[0][0] == [
+            "sase",
+            "bead",
+            "list",
+            "--status=open",
+            "--status=in_progress",
+        ]
         tc_mock.send_message.assert_called_once()
         args, kwargs = tc_mock.send_message.call_args
         assert args[0] == "12345"
@@ -4041,6 +4047,47 @@ class TestBeadCommand:
         assert decode(rows[0][0].callback_data) == ("bead", "sase-13", "show")
         assert decode(rows[1][0].callback_data) == ("bead", "sase-13.5", "show")
 
+    def test_missing_arg_project_override_uses_active_status_filters(
+        self, monkeypatch: object, tmp_path: Path
+    ) -> None:
+        from pytest import MonkeyPatch
+
+        assert isinstance(monkeypatch, MonkeyPatch)
+        monkeypatch.setenv("SASE_TELEGRAM_BEAD_PROJECT", "override")
+
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        workspace = tmp_path / "override"
+        workspace.mkdir()
+        completed = SimpleNamespace(
+            returncode=0, stdout="No issues found.\n", stderr=""
+        )
+        with (
+            patch.object(inbound, "_resolve_bead_cwd", return_value=str(workspace)),
+            patch.object(
+                inbound,
+                "_iter_known_project_workspaces",
+                side_effect=AssertionError(
+                    "override should bypass project aggregation"
+                ),
+            ),
+            patch.object(inbound, "telegram_client") as tc_mock,
+            patch.object(inbound, "credentials") as cred_mock,
+            patch.object(inbound.subprocess, "run", return_value=completed) as run_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            inbound._handle_bead_command("")
+
+        assert run_mock.call_args[0][0] == [
+            "sase",
+            "bead",
+            "list",
+            "--status=open",
+            "--status=in_progress",
+        ]
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
+        tc_mock.send_message.assert_called_once_with("12345", "No active beads.")
+
     def test_missing_arg_lists_all_known_project_beads(
         self, monkeypatch: object, tmp_path: Path
     ) -> None:
@@ -4051,12 +4098,15 @@ class TestBeadCommand:
 
         from sase_telegram.scripts import sase_tg_inbound as inbound
 
+        closed_workspace = tmp_path / "done"
         sase_workspace = tmp_path / "sase"
         zorg_workspace = tmp_path / "zorg"
+        closed_workspace.mkdir()
         sase_workspace.mkdir()
         zorg_workspace.mkdir()
 
         projects = [
+            inbound._KnownProjectWorkspace("done", str(closed_workspace)),
             inbound._KnownProjectWorkspace("sase", str(sase_workspace)),
             inbound._KnownProjectWorkspace("zorg", str(zorg_workspace)),
         ]
@@ -4069,21 +4119,31 @@ class TestBeadCommand:
             check: bool,
             cwd: str | None = None,
         ) -> SimpleNamespace:
-            assert cmd == ["sase", "bead", "list"]
+            assert cmd == [
+                "sase",
+                "bead",
+                "list",
+                "--status=open",
+                "--status=in_progress",
+            ]
             assert capture_output is True
             assert text is True
             assert check is False
-            if cwd == str(sase_workspace):
+            if cwd == str(closed_workspace):
+                # Explicit active filters suppress the CLI's closed fallback.
                 return SimpleNamespace(
                     returncode=0, stdout="No issues found.\n", stderr=""
+                )
+            if cwd == str(sase_workspace):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="○ sase-1 · Build all-project bead picker\n",
+                    stderr="",
                 )
             if cwd == str(zorg_workspace):
                 return SimpleNamespace(
                     returncode=0,
-                    stdout=(
-                        "○ zorg-1 · Build all-project bead picker\n"
-                        "◐ zorg-2 · Follow-up routing\n"
-                    ),
+                    stdout="◐ zorg-2 · Follow-up routing\n",
                     stderr="",
                 )
             raise AssertionError(f"unexpected cwd: {cwd}")
@@ -4102,7 +4162,7 @@ class TestBeadCommand:
             cred_mock.get_chat_id.return_value = "12345"
             inbound._handle_bead_command("")
 
-        assert run_mock.call_count == 2
+        assert run_mock.call_count == 3
         tc_mock.send_message.assert_called_once()
         _args, kwargs = tc_mock.send_message.call_args
         keyboard = kwargs.get("reply_markup")
@@ -4112,8 +4172,8 @@ class TestBeadCommand:
 
         from sase_telegram.callback_data import decode
 
-        assert rows[0][0].text == "○ zorg-1: Build all-project bead picker"
-        assert decode(rows[0][0].callback_data) == ("bead", "zorg/zorg-1", "show")
+        assert rows[0][0].text == "○ sase-1: Build all-project bead picker"
+        assert decode(rows[0][0].callback_data) == ("bead", "sase/sase-1", "show")
         assert rows[1][0].text == "◐ zorg-2: Follow-up routing"
         assert decode(rows[1][0].callback_data) == ("bead", "zorg/zorg-2", "show")
 
@@ -4203,7 +4263,13 @@ class TestBeadCommand:
 
             _handle_bead_command("")
 
-        assert run_mock.call_args[0][0] == ["sase", "bead", "list"]
+        assert run_mock.call_args[0][0] == [
+            "sase",
+            "bead",
+            "list",
+            "--status=open",
+            "--status=in_progress",
+        ]
         assert run_mock.call_args.kwargs["cwd"] == str(workspace)
 
     def test_missing_arg_empty_list(self) -> None:
