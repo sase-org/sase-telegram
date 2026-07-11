@@ -1,1 +1,2 @@
-precommit_command: "just fmt"
+commit_hooks:
+  before: "just fmt"
