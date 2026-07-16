@@ -357,7 +357,10 @@ def process_callback(
 
     elif cb.action_type == "launch":
         response_dir = action_data["response_dir"]
-        response_path = Path(response_dir) / "launch_response.json"
+        response_path = Path(
+            action_data.get("response_path")
+            or Path(response_dir) / "launch_response.json"
+        )
         if cb.choice == "approve":
             return ResponseAction(
                 action_type="launch",
@@ -421,12 +424,15 @@ def process_callback_twostep(
         )
 
     if cb.action_type == "launch" and cb.choice == "feedback":
+        info = {
+            "action_type": "launch",
+            "response_dir": action_data["response_dir"],
+        }
+        if response_path := action_data.get("response_path"):
+            info["response_path"] = response_path
         return (
             cb.notif_id_prefix,
-            {
-                "action_type": "launch",
-                "response_dir": action_data["response_dir"],
-            },
+            info,
         )
 
     if cb.action_type == "question" and cb.choice == "custom":
@@ -481,10 +487,15 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
         )
 
     if info["action_type"] == "launch":
+        response_path = info.get("response_path")
         return ResponseAction(
             action_type="launch",
             notif_id_prefix=prefix,
-            response_path=Path(info["response_dir"]) / "launch_response.json",
+            response_path=(
+                Path(response_path)
+                if response_path
+                else Path(info["response_dir"]) / "launch_response.json"
+            ),
             response_data={
                 "action": "feedback",
                 "feedback": text,
@@ -608,9 +619,18 @@ def find_externally_handled(
 
         elif action == "LaunchApproval":
             response_dir = Path(action_data.get("response_dir", ""))
-            if (response_dir / "launch_response.json").exists() or (
-                response_dir != Path("")
-                and not (response_dir / "launch_request.json").exists()
+            response_path = Path(
+                action_data.get("response_path")
+                or response_dir / "launch_response.json"
+            )
+            request_path = Path(
+                action_data.get("request_path") or response_dir / "launch_request.json"
+            )
+            cancellation_path = response_dir / "cancellation.json"
+            if (
+                response_path.exists()
+                or cancellation_path.exists()
+                or (response_dir != Path("") and not request_path.exists())
             ):
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 

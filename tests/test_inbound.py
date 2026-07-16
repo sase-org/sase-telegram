@@ -235,6 +235,24 @@ class TestProcessCallbackLaunch:
         result = process_callback("launch:lnch0001:feedback", pending)
         assert result is None
 
+    def test_neutral_bundle_uses_projected_response_path(self, tmp_path: Path) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        neutral_response = tmp_path / "response.json"
+        pending["lnch0001"]["action_data"].update(
+            {
+                "request_path": str(tmp_path / "request.json"),
+                "response_path": str(neutral_response),
+            }
+        )
+
+        result = process_callback("launch:lnch0001:approve", pending)
+        feedback = process_callback_twostep("launch:lnch0001:feedback", pending)
+
+        assert result is not None
+        assert result.response_path == neutral_response
+        assert feedback is not None
+        assert feedback[1]["response_path"] == str(neutral_response)
+
 
 class TestProcessCallbackQuestion:
     def test_option_selection_is_not_single_shot(self, tmp_path: Path) -> None:
@@ -427,6 +445,36 @@ class TestResolveLaunchResponse:
             resolve_launch_response(response, pending["lnch0001"])
 
         assert exc_info.value.code == "conflict_already_handled"
+
+    def test_neutral_action_data_is_forwarded_to_shared_executor(
+        self, tmp_path: Path
+    ) -> None:
+        pending = _make_pending_launch("lnch0001", str(tmp_path))
+        action_data = pending["lnch0001"]["action_data"]
+        action_data.update(
+            {
+                "request_kind": "launch",
+                "request_path": str(tmp_path / "request.json"),
+                "response_path": str(tmp_path / "response.json"),
+            }
+        )
+        response = process_callback("launch:lnch0001:reject", pending)
+        assert response is not None
+
+        with patch(
+            "sase.launch_approval_actions.execute_launch_approval_response",
+            return_value=SimpleNamespace(message="Launch rejected"),
+        ) as execute:
+            message = resolve_launch_response(response, pending["lnch0001"])
+
+        assert message == "Launch rejected"
+        context = execute.call_args.args[0]
+        assert context.host_action_data["request_path"] == str(
+            tmp_path / "request.json"
+        )
+        assert context.host_action_data["response_path"] == str(
+            tmp_path / "response.json"
+        )
 
 
 class TestHandleTextMessageAgentLaunch:
@@ -4559,6 +4607,28 @@ class TestFindExternallyHandled:
         pending = _make_pending_launch("lnch0003", str(tmp_path))
         result = find_externally_handled(pending)
         assert result == []
+
+    def test_neutral_launch_response_and_cancellation_are_detected(
+        self, tmp_path: Path
+    ) -> None:
+        request_path = tmp_path / "request.json"
+        response_path = tmp_path / "response.json"
+        request_path.write_text("{}")
+        pending = _make_pending_launch("lnch0004", str(tmp_path))
+        pending["lnch0004"]["action_data"].update(
+            {
+                "request_path": str(request_path),
+                "response_path": str(response_path),
+            }
+        )
+
+        assert find_externally_handled(pending) == []
+        response_path.write_text("{}")
+        assert find_externally_handled(pending)[0][0] == "lnch0004"
+
+        response_path.unlink()
+        (tmp_path / "cancellation.json").write_text("{}")
+        assert find_externally_handled(pending)[0][0] == "lnch0004"
 
     def test_question_response_detected(self, tmp_path: Path) -> None:
         (tmp_path / "question_response.json").write_text("{}")
