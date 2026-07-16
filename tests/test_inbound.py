@@ -1481,7 +1481,9 @@ class TestUpdateCommand:
         with (
             patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
             patch.object(inbound.time, "time", return_value=1001.0),
-            patch.object(inbound.telegram_client, "set_my_commands") as set_commands,
+            patch.object(
+                inbound.telegram_client, "set_my_commands", return_value=True
+            ) as set_commands,
         ):
             inbound._register_commands_if_needed()
 
@@ -1500,11 +1502,53 @@ class TestUpdateCommand:
         with (
             patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
             patch.object(inbound.time, "time", return_value=1001.0),
-            patch.object(inbound.telegram_client, "set_my_commands") as set_commands,
+            patch.object(
+                inbound.telegram_client, "set_my_commands", return_value=True
+            ) as set_commands,
         ):
             inbound._register_commands_if_needed()
 
         set_commands.assert_called_once_with(inbound._SLASH_COMMANDS)
+
+    @pytest.mark.parametrize("failure", ["false", "exception"])
+    @pytest.mark.parametrize("existing_cache", [False, True])
+    def test_failed_command_registration_does_not_write_cache(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        failure: str,
+        existing_cache: bool,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        cache_path = tmp_path / "commands_registered_ts"
+        original_cache = json.dumps(
+            {"version": 1, "timestamp": 1000.0, "fingerprint": "stale"},
+            sort_keys=True,
+        )
+        if existing_cache:
+            cache_path.write_text(original_cache)
+
+        set_commands = MagicMock(return_value=False)
+        if failure == "exception":
+            set_commands.side_effect = RuntimeError("telegram down")
+        with (
+            patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
+            patch.object(inbound.time, "time", return_value=1001.0),
+            patch.object(
+                inbound.telegram_client,
+                "set_my_commands",
+                set_commands,
+            ),
+        ):
+            inbound._register_commands_if_needed()
+
+        set_commands.assert_called_once_with(inbound._SLASH_COMMANDS)
+        if existing_cache:
+            assert cache_path.read_text() == original_cache
+        else:
+            assert not cache_path.exists()
+        assert "will retry later" in caplog.text
 
 
 class TestChangesCommand:
@@ -4701,7 +4745,9 @@ class TestCustomCommandDispatch:
         builtin.assert_called_once_with("")
         custom.assert_not_called()
 
-    def test_registration_merges_sorted_custom_commands(self, tmp_path: Path) -> None:
+    def test_registration_puts_sorted_custom_commands_before_builtins(
+        self, tmp_path: Path
+    ) -> None:
         from sase_telegram.scripts import sase_tg_inbound as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
@@ -4709,20 +4755,57 @@ class TestCustomCommandDispatch:
             "zeta": _custom_command(name="zeta", description="Last"),
             "alpha": _custom_command(name="alpha", description="First"),
         }
-        expected = inbound._SLASH_COMMANDS + [
+        expected = [
             ("alpha", "First"),
             ("zeta", "Last"),
-        ]
+        ] + inbound._SLASH_COMMANDS
         with (
             patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
             patch.object(inbound.time, "time", return_value=1001.0),
-            patch.object(inbound.telegram_client, "set_my_commands") as register,
+            patch.object(
+                inbound.telegram_client, "set_my_commands", return_value=True
+            ) as register,
         ):
             inbound._register_commands_if_needed(custom_commands)
 
         register.assert_called_once_with(expected)
         payload = json.loads(cache_path.read_text())
+        assert payload["timestamp"] == 1001.0
         assert payload["fingerprint"] == inbound._slash_commands_fingerprint(expected)
+
+    def test_configured_first_order_invalidates_recent_old_fingerprint(
+        self, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        cache_path = tmp_path / "commands_registered_ts"
+        custom_commands = {"tasks": _custom_command()}
+        custom_payload = [("tasks", "Tasks dashboard")]
+        old_order = inbound._SLASH_COMMANDS + custom_payload
+        new_order = custom_payload + inbound._SLASH_COMMANDS
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "timestamp": 1000.0,
+                    "fingerprint": inbound._slash_commands_fingerprint(old_order),
+                }
+            )
+        )
+
+        with (
+            patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
+            patch.object(inbound.time, "time", return_value=1001.0),
+            patch.object(
+                inbound.telegram_client, "set_my_commands", return_value=True
+            ) as register,
+        ):
+            inbound._register_commands_if_needed(custom_commands)
+
+        register.assert_called_once_with(new_order)
+        payload = json.loads(cache_path.read_text())
+        assert payload["timestamp"] == 1001.0
+        assert payload["fingerprint"] == inbound._slash_commands_fingerprint(new_order)
 
 
 class TestCustomCommandDelivery:

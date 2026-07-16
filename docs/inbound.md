@@ -162,10 +162,12 @@ telegram:
 ```
 
 Command names must contain 1–32 lowercase letters, digits, or underscores. `description` is required and appears in
-Telegram's `/` menu. `run` is parsed with `shlex.split`; its executable may be a bare name on `PATH` or an absolute or
-`~` path. No shell is used. `output` defaults to `message`; `timeout` defaults to `60s` and accepts `s`, `m`, or `h`.
-Built-in command names, including the accepted `beads` alias, are reserved and cannot be shadowed. Invalid entries are
-logged and skipped without preventing other commands or inbound updates from running.
+Telegram's `/` menu. Configured commands are registered first in deterministic name order, followed by built-ins, so
+personalized commands remain near the top of the menu. Telegram clients may present longer command lists in a
+scrollable sheet. `run` is parsed with `shlex.split`; its executable may be a bare name on `PATH` or an absolute or `~`
+path. No shell is used. `output` defaults to `message`; `timeout` defaults to `60s` and accepts `s`, `m`, or `h`. Built-in
+command names, including the accepted `beads` alias, are reserved and cannot be shadowed. Invalid entries are logged and
+skipped without preventing other commands or inbound updates from running.
 
 Anything typed after the slash command is appended to the configured argument vector as one trailing argument, without
 shell splitting, and is also available as `SASE_TELEGRAM_COMMAND_ARGS`. The command name is exported as

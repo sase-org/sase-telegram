@@ -146,8 +146,10 @@ telegram:
 ```
 
 `description` and `run` are required. `output` is `message` by default and may be set to `pdf`; `timeout` defaults to
-`60s` and accepts seconds, minutes, or hours such as `30s`, `2m`, or `1h`. Built-in names and the `beads` alias are
-reserved. See [the inbound documentation](docs/inbound.md#custom-slash-commands) for the script-output contract.
+`60s` and accepts seconds, minutes, or hours such as `30s`, `2m`, or `1h`. Configured commands are registered first in
+deterministic name order, followed by built-ins, so they stay near the top of Telegram's command menu. Telegram clients
+may show longer command lists in a scrollable sheet. Built-in names and the `beads` alias are reserved. See [the inbound
+documentation](docs/inbound.md#custom-slash-commands) for the script-output contract.
 
 ## How It Works
 

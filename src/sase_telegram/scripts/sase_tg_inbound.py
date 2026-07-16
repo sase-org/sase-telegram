@@ -3803,12 +3803,13 @@ def _slash_commands_fingerprint(commands: list[tuple[str, str]] | None = None) -
 def _registered_slash_commands(
     custom_commands: dict[str, CustomCommand] | None = None,
 ) -> list[tuple[str, str]]:
-    commands = list(_SLASH_COMMANDS)
+    commands: list[tuple[str, str]] = []
     if custom_commands:
         commands.extend(
             (name, command.description)
             for name, command in sorted(custom_commands.items())
         )
+    commands.extend(_SLASH_COMMANDS)
     return commands
 
 
@@ -3849,7 +3850,12 @@ def _register_commands_if_needed(
         return
 
     try:
-        telegram_client.set_my_commands(commands)
+        if not telegram_client.set_my_commands(commands):
+            log.warning(
+                "Failed to register slash commands: Telegram returned False "
+                "(will retry later)"
+            )
+            return
         _COMMANDS_REGISTERED_PATH.parent.mkdir(parents=True, exist_ok=True)
         _COMMANDS_REGISTERED_PATH.write_text(
             json.dumps(
