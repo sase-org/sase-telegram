@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
+    "PyYAML>=6.0",
     "sase>=0.1.0",
     "python-telegram-bot>=21.0",
 ]

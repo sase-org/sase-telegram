@@ -4649,3 +4649,220 @@ class TestFindSharedHandledTransports:
             }
         }
         assert find_shared_handled_transports(store, now=0.0) == []
+
+
+def _custom_command(
+    *,
+    name: str = "tasks",
+    output: str = "message",
+    description: str = "Tasks dashboard",
+    timeout_seconds: int = 90,
+):
+    from sase_telegram.custom_commands import CustomCommand
+
+    return CustomCommand(
+        name=name,
+        description=description,
+        argv=("tg_cmd_tasks",),
+        output=output,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+class TestCustomCommandDispatch:
+    def test_dispatches_configured_command_with_raw_remainder(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        command = _custom_command()
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
+        ) as handler:
+            _handle_command(
+                "/tasks first  second; $(literal) ",
+                custom_commands={"tasks": command},
+            )
+
+        handler.assert_called_once_with(command, "first  second; $(literal) ")
+
+    def test_builtin_command_wins_over_custom_mapping(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        command = _custom_command(name="list")
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_list_command"
+            ) as builtin,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
+            ) as custom,
+        ):
+            _handle_command("/list", custom_commands={"list": command})
+
+        builtin.assert_called_once_with("")
+        custom.assert_not_called()
+
+    def test_registration_merges_sorted_custom_commands(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        cache_path = tmp_path / "commands_registered_ts"
+        custom_commands = {
+            "zeta": _custom_command(name="zeta", description="Last"),
+            "alpha": _custom_command(name="alpha", description="First"),
+        }
+        expected = inbound._SLASH_COMMANDS + [
+            ("alpha", "First"),
+            ("zeta", "Last"),
+        ]
+        with (
+            patch.object(inbound, "_COMMANDS_REGISTERED_PATH", cache_path),
+            patch.object(inbound.time, "time", return_value=1001.0),
+            patch.object(inbound.telegram_client, "set_my_commands") as register,
+        ):
+            inbound._register_commands_if_needed(custom_commands)
+
+        register.assert_called_once_with(expected)
+        payload = json.loads(cache_path.read_text())
+        assert payload["fingerprint"] == inbound._slash_commands_fingerprint(expected)
+
+
+class TestCustomCommandDelivery:
+    def test_message_output_is_formatted_and_sent(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult("# Tasks\n\n- one\n", "", 0),
+            ) as run,
+            patch.object(inbound.telegram_client, "send_message") as send,
+        ):
+            inbound._handle_custom_command(_custom_command(), "next only")
+
+        run.assert_called_once_with(_custom_command(), "next only")
+        send.assert_called_once()
+        assert "Tasks" in send.call_args.args[1]
+        assert send.call_args.kwargs["parse_mode"] == "MarkdownV2"
+
+    def test_nonzero_exit_sends_bounded_expandable_stderr(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        stderr = "old\n" + "x" * 1200 + "<latest>"
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult("", stderr, 7),
+            ),
+            patch.object(inbound.telegram_client, "send_message") as send,
+        ):
+            inbound._handle_custom_command(_custom_command(), "")
+
+        text = send.call_args.args[1]
+        assert "/tasks" in text
+        assert "exit 7" in text
+        assert "<blockquote expandable>" in text
+        assert "&lt;latest&gt;" in text
+        assert "old" not in text
+        assert send.call_args.kwargs["parse_mode"] == "HTML"
+
+    def test_timeout_reports_configured_duration(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult("", "", None, timed_out=True),
+            ),
+            patch.object(inbound.telegram_client, "send_message") as send,
+        ):
+            inbound._handle_custom_command(_custom_command(), "")
+
+        assert "timed out after 90s" in send.call_args.args[1]
+
+    def test_empty_stdout_reports_empty_result(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult(" \n", "", 0),
+            ),
+            patch.object(inbound.telegram_client, "send_message") as send,
+        ):
+            inbound._handle_custom_command(_custom_command(), "")
+
+        assert "produced no output" in send.call_args.args[1]
+
+    def test_pdf_conversion_failure_falls_back_to_markdown(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        stdout = "---\ncaption: Tasks dashboard\nfilename: tasks.pdf\n---\n\n# Tasks\n"
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult(stdout, "", 0),
+            ),
+            patch.object(inbound.pdf_convert, "md_to_pdf", return_value=None),
+            patch.object(inbound.telegram_client, "send_message") as send,
+            patch.object(inbound.telegram_client, "send_document") as document,
+        ):
+            inbound._handle_custom_command(_custom_command(output="pdf"), "")
+
+        assert send.call_count == 2
+        assert "Running" in send.call_args_list[0].args[1]
+        assert "PDF conversion failed" in send.call_args_list[1].args[1]
+        assert "Tasks" in send.call_args_list[1].args[1]
+        document.assert_not_called()
+
+    def test_pdf_output_uses_safe_filename_and_truncated_caption(self) -> None:
+        from sase_telegram.custom_commands import CommandResult
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        stdout = (
+            "---\n"
+            f"caption: {'x' * 1400}\n"
+            "filename: ../../daily report.txt\n"
+            "---\n\n"
+            "# Tasks\n"
+        )
+
+        def render(markdown_path: str) -> str:
+            pdf_path = Path(markdown_path).with_suffix(".pdf")
+            pdf_path.write_bytes(b"%PDF-fake")
+            return str(pdf_path)
+
+        with (
+            patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
+            patch.object(
+                inbound,
+                "run_custom_command",
+                return_value=CommandResult(stdout, "", 0),
+            ),
+            patch.object(inbound.pdf_convert, "md_to_pdf", side_effect=render),
+            patch.object(inbound.telegram_client, "send_message") as send,
+            patch.object(inbound.telegram_client, "send_document") as document,
+        ):
+            inbound._handle_custom_command(_custom_command(output="pdf"), "")
+
+        send.assert_called_once()  # immediate acknowledgement
+        document.assert_called_once()
+        assert document.call_args.kwargs["filename"] == "daily report.pdf"
+        assert document.call_args.kwargs["parse_mode"] == "MarkdownV2"
+        caption = document.call_args.kwargs["caption"]
+        assert len(caption) <= 1024
+        assert caption.endswith("…")
+        assert not Path(document.call_args.args[1]).exists()

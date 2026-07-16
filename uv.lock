@@ -1127,10 +1127,11 @@ wheels = [
 
 [[package]]
 name = "sase-telegram"
-version = "0.1.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "python-telegram-bot" },
+    { name = "pyyaml" },
     { name = "sase" },
 ]
 
@@ -1150,6 +1151,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-mock", marker = "extra == 'dev'" },
     { name = "python-telegram-bot", specifier = ">=21.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sase", specifier = ">=0.1.0" },
 ]

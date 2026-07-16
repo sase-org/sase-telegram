@@ -85,6 +85,10 @@ def _patch_paths():
             "sase_telegram.scripts.sase_tg_inbound._UPDATE_COMPLETION_PENDING_DIR",
             UPDATE_COMPLETION_TEST_DIR,
         ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.load_custom_commands",
+            return_value={},
+        ),
         # Isolate the shared host pending-action store and point its legacy
         # source at the plugin's test pending file (mirrors production wiring).
         patch(
@@ -539,6 +543,47 @@ class TestInboundIntegration:
         assert "tg_inbound:" in captured.out
         assert "updates=0" in captured.out
         assert "reason=no_updates" in captured.out
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_custom_commands_load_once_and_dispatch(self, mock_tg: MagicMock) -> None:
+        from sase_telegram.custom_commands import CustomCommand
+
+        command = CustomCommand(
+            name="tasks",
+            description="Tasks dashboard",
+            argv=("tg_cmd_tasks",),
+            output="message",
+            timeout_seconds=60,
+        )
+        message = SimpleNamespace(
+            photo=None,
+            document=None,
+            text="/tasks ready only",
+            entities=None,
+            message_id=42,
+            reply_to_message=None,
+        )
+        mock_tg.get_updates.return_value = [
+            SimpleNamespace(
+                update_id=100,
+                callback_query=None,
+                message=message,
+            )
+        ]
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.load_custom_commands",
+                return_value={"tasks": command},
+            ) as load,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
+            ) as handle,
+        ):
+            assert inbound_main(["--once"]) == 0
+
+        load.assert_called_once_with()
+        handle.assert_called_once_with(command, "ready only")
 
     def _register_handled_shared_plan(self, response_dir: Path, plan_file: Path) -> str:
         """Seed a plan action that is registered + already_handled in the store."""

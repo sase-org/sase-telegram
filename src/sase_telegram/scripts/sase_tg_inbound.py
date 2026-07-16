@@ -13,13 +13,27 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
-from sase_telegram import credentials, pending_actions, question_flow, telegram_client
+from sase_telegram import (
+    credentials,
+    pdf_convert,
+    pending_actions,
+    question_flow,
+    telegram_client,
+)
 from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_output
 from sase_telegram.callback_data import decode, encode
+from sase_telegram.custom_commands import (
+    CommandResult,
+    CustomCommand,
+    load_custom_commands,
+    parse_command_output,
+    run_custom_command,
+)
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.launch_approval_actions import LaunchApprovalActionError
@@ -101,6 +115,8 @@ _VCS_PROJECT_RE = re.compile(_VCS_PROJECT_PATTERN, re.IGNORECASE)
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 _LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
 _STALE_AWAITING_FEEDBACK_TEXT = "This action has already been handled"
+_CUSTOM_COMMAND_CAPTION_LIMIT = 1024
+_CUSTOM_COMMAND_STDERR_LIMIT = 1000
 
 
 @dataclass(frozen=True)
@@ -2083,7 +2099,123 @@ def _handle_document_image(message: Any) -> None:
     _launch_agent(prompt)
 
 
-def _handle_command(text: str, message: Any | None = None) -> None:
+def _custom_command_caption(caption: str) -> str:
+    """Convert a caption to MarkdownV2 within Telegram's document limit."""
+    converted = markdown_to_telegram_v2(caption)
+    if len(converted) <= _CUSTOM_COMMAND_CAPTION_LIMIT:
+        return converted
+
+    raw_prefix = caption[: _CUSTOM_COMMAND_CAPTION_LIMIT - 1]
+    while raw_prefix:
+        converted = markdown_to_telegram_v2(raw_prefix.rstrip())
+        overflow = len(converted) + 1 - _CUSTOM_COMMAND_CAPTION_LIMIT
+        if overflow <= 0:
+            return converted + "…"
+        raw_prefix = raw_prefix[: -max(1, overflow)]
+    return "…"
+
+
+def _custom_command_pdf_filename(command: CustomCommand, requested: str | None) -> str:
+    default = f"{command.name}_{datetime.now().date().isoformat()}.pdf"
+    if requested is None:
+        return default
+
+    candidate = Path(requested.replace("\x00", "")).name.strip(" .")
+    stem = Path(candidate).stem if candidate else ""
+    stem = re.sub(r"[^\w .-]+", "_", stem).strip(" .")
+    if not stem:
+        return default
+    return f"{stem[:120]}.pdf"
+
+
+def _send_custom_command_error(command: CustomCommand, result: CommandResult) -> None:
+    chat_id = credentials.get_chat_id()
+    stderr = result.stderr.strip()
+    if len(stderr) > _CUSTOM_COMMAND_STDERR_LIMIT:
+        stderr = "…" + stderr[-(_CUSTOM_COMMAND_STDERR_LIMIT - 1) :]
+
+    exit_code = result.returncode if result.returncode is not None else "unknown"
+    text = (
+        f"⚠️ <code>/{html.escape(command.name)}</code> failed "
+        f"(exit {html.escape(str(exit_code))})"
+    )
+    if stderr:
+        text += f"\n<blockquote expandable>{html.escape(stderr)}</blockquote>"
+    telegram_client.send_message(chat_id, text, parse_mode="HTML")
+
+
+def _send_custom_markdown(chat_id: str, markdown: str) -> None:
+    telegram_client.send_message(
+        chat_id,
+        markdown_to_telegram_v2(markdown),
+        parse_mode="MarkdownV2",
+    )
+
+
+def _handle_custom_command(command: CustomCommand, args_text: str) -> None:
+    """Run one custom command and deliver its Markdown stdout."""
+    chat_id = credentials.get_chat_id()
+    if command.output == "pdf":
+        _send_custom_markdown(chat_id, f"⏳ Running `/{command.name}`…")
+
+    result = run_custom_command(command, args_text)
+    if result.timed_out:
+        _send_custom_markdown(
+            chat_id,
+            f"⏱ `/{command.name}` timed out after {command.timeout_seconds}s",
+        )
+        return
+    if result.returncode != 0:
+        _send_custom_command_error(command, result)
+        return
+
+    output = parse_command_output(result.stdout)
+    if not output.body.strip():
+        _send_custom_markdown(
+            chat_id,
+            f"🫙 `/{command.name}` produced no output.",
+        )
+        return
+
+    if command.output == "message":
+        _send_custom_markdown(chat_id, output.body)
+        return
+
+    filename = _custom_command_pdf_filename(command, output.filename)
+    caption = _custom_command_caption(output.caption or f"📄 {command.description}")
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f"sase-tg-{command.name}-pdf-"
+        ) as tmpdir:
+            markdown_path = Path(tmpdir) / f"{Path(filename).stem}.md"
+            markdown_path.write_text(output.body, encoding="utf-8")
+            rendered_path = pdf_convert.md_to_pdf(str(markdown_path))
+            if rendered_path is None or not Path(rendered_path).is_file():
+                raise RuntimeError("PDF renderer did not produce a file")
+            telegram_client.send_document(
+                chat_id,
+                rendered_path,
+                caption=caption,
+                parse_mode="MarkdownV2",
+                filename=filename,
+            )
+    except Exception:
+        log.warning(
+            "Failed to convert custom Telegram command /%s output to PDF",
+            command.name,
+            exc_info=True,
+        )
+        _send_custom_markdown(
+            chat_id,
+            "⚠️ PDF conversion failed; sending Markdown instead.\n\n" + output.body,
+        )
+
+
+def _handle_command(
+    text: str,
+    message: Any | None = None,
+    custom_commands: dict[str, CustomCommand] | None = None,
+) -> None:
     """Dispatch a slash command (e.g. '/kill agent') to the appropriate handler."""
     parts = text.split(None, 1)
     command = parts[0][1:].split("@")[0].lower()  # strip prefix and @bot suffix
@@ -2103,6 +2235,8 @@ def _handle_command(text: str, message: Any | None = None) -> None:
         _handle_bead_command(args, message=message)
     elif command == "update":
         _handle_update_command()
+    elif custom_commands and command in custom_commands:
+        _handle_custom_command(custom_commands[command], args)
     # Unknown commands (e.g. /start) are silently ignored
 
 
@@ -3581,7 +3715,10 @@ def _send_stale_awaiting_feedback_reply(message: Any) -> None:
         log.warning("Failed to send stale feedback reply", exc_info=True)
 
 
-def _handle_text_message(message: Any) -> None:
+def _handle_text_message(
+    message: Any,
+    custom_commands: dict[str, CustomCommand] | None = None,
+) -> None:
     """Handle a text message: command dispatch, feedback, or new agent launch."""
     text = reconstruct_code_markers(message.text, message.entities)
     reply_to = getattr(message, "reply_to_message", None)
@@ -3595,7 +3732,10 @@ def _handle_text_message(message: Any) -> None:
     # feedback flow is still recorded.
     if text.startswith("/"):
         _clear_stale_awaiting_feedback(reply_key)
-        _handle_command(text, message)
+        if custom_commands is None:
+            _handle_command(text, message)
+        else:
+            _handle_command(text, message, custom_commands)
         return
 
     stale_prefix = _clear_stale_awaiting_feedback(reply_key)
@@ -3660,7 +3800,22 @@ def _slash_commands_fingerprint(commands: list[tuple[str, str]] | None = None) -
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _commands_registration_is_current(now: float) -> bool:
+def _registered_slash_commands(
+    custom_commands: dict[str, CustomCommand] | None = None,
+) -> list[tuple[str, str]]:
+    commands = list(_SLASH_COMMANDS)
+    if custom_commands:
+        commands.extend(
+            (name, command.description)
+            for name, command in sorted(custom_commands.items())
+        )
+    return commands
+
+
+def _commands_registration_is_current(
+    now: float,
+    commands: list[tuple[str, str]] | None = None,
+) -> bool:
     try:
         payload = json.loads(_COMMANDS_REGISTERED_PATH.read_text())
     except (json.JSONDecodeError, OSError):
@@ -3668,7 +3823,7 @@ def _commands_registration_is_current(now: float) -> bool:
 
     if not isinstance(payload, dict) or payload.get("version") != 1:
         return False
-    if payload.get("fingerprint") != _slash_commands_fingerprint():
+    if payload.get("fingerprint") != _slash_commands_fingerprint(commands):
         return False
     try:
         last_ts = float(payload["timestamp"])
@@ -3677,7 +3832,9 @@ def _commands_registration_is_current(now: float) -> bool:
     return now - last_ts < _COMMANDS_REGISTER_INTERVAL
 
 
-def _register_commands_if_needed() -> None:
+def _register_commands_if_needed(
+    custom_commands: dict[str, CustomCommand] | None = None,
+) -> None:
     """Register slash commands with Telegram, at most once per hour.
 
     Uses a file-based timestamp and command fingerprint to avoid calling
@@ -3685,18 +3842,21 @@ def _register_commands_if_needed() -> None:
     command list changes before the normal hourly interval expires.
     """
     now = time.time()
-    if _COMMANDS_REGISTERED_PATH.exists() and _commands_registration_is_current(now):
+    commands = _registered_slash_commands(custom_commands)
+    if _COMMANDS_REGISTERED_PATH.exists() and _commands_registration_is_current(
+        now, commands
+    ):
         return
 
     try:
-        telegram_client.set_my_commands(_SLASH_COMMANDS)
+        telegram_client.set_my_commands(commands)
         _COMMANDS_REGISTERED_PATH.parent.mkdir(parents=True, exist_ok=True)
         _COMMANDS_REGISTERED_PATH.write_text(
             json.dumps(
                 {
                     "version": 1,
                     "timestamp": now,
-                    "fingerprint": _slash_commands_fingerprint(),
+                    "fingerprint": _slash_commands_fingerprint(commands),
                 },
                 sort_keys=True,
             )
@@ -3758,8 +3918,11 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     _parse_args(argv)
 
+    # Load once so registration and every update in this poll share one view.
+    custom_commands = load_custom_commands()
+
     # Register slash commands (cached, non-blocking on failure)
-    _register_commands_if_needed()
+    _register_commands_if_needed(custom_commands)
 
     # Clean up stale pending actions
     stale_pending = pending_actions.cleanup_stale()
@@ -3820,7 +3983,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif msg.text:
                     text_count += 1
                     log.info("Processing text message (update_id=%d)", update.update_id)
-                    _handle_text_message(msg)
+                    _handle_text_message(msg, custom_commands)
                 else:
                     unsupported_count += 1
                     log.info(

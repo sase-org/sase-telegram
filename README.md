@@ -83,7 +83,7 @@ Installing sase-telegram adds the following commands:
 - **Multi-model directives** — use `%{%m:opus | %m:sonnet}` to launch the same prompt across multiple models
 - **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
-- **Slash commands** — `/list [all|<name>|<project>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update` for agent management, ChangeSpec, xprompt, bead, and SASE update workflows from Telegram (registered with `set_my_commands` so they show up in the chat input UI)
+- **Slash commands** — built-in agent-management commands plus user-defined commands from `telegram.commands`, all registered with `set_my_commands` so they show up in the chat input UI
 - **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
   matching Telegram send method, with GIF/video document fallback
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
@@ -130,6 +130,25 @@ The chat target and bot username are required separately:
 | `SASE_TELEGRAM_RATE_LIMIT`               | `8/15`  | Rate limit as `max_messages/window_seconds` |
 | `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED`  | unset   | When present with any value, inbound callbacks, feedback, and slash commands still work, but plain text/photo/image-document messages do not launch agents. |
 
+### Custom Slash Commands
+
+Declare additional commands in SASE configuration. The executable is parsed into an argument vector and run directly;
+the inbound chop never invokes a shell.
+
+```yaml
+telegram:
+  commands:
+    tasks:
+      description: "📋 Obsidian tasks dashboard as a PDF"
+      run: tg_cmd_tasks
+      output: pdf
+      timeout: 90s
+```
+
+`description` and `run` are required. `output` is `message` by default and may be set to `pdf`; `timeout` defaults to
+`60s` and accepts seconds, minutes, or hours such as `30s`, `2m`, or `1h`. Built-in names and the `beads` alias are
+reserved. See [the inbound documentation](docs/inbound.md#custom-slash-commands) for the script-output contract.
+
 ## How It Works
 
 ### Outbound
@@ -151,7 +170,8 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Slash commands** (`/list [all|<name>|<project>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Configured slash commands** — execute the matching `telegram.commands` entry and deliver its Markdown stdout as a message or PDF
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
@@ -228,6 +248,7 @@ just clean      # Remove build artifacts
 src/sase_telegram/
 ├── __init__.py              # Package init
 ├── callback_data.py         # Encode/decode inline keyboard callback data (64-byte limit)
+├── custom_commands.py       # Config loading, subprocess execution, and stdout metadata
 ├── credentials.py           # Bot token sources, chat ID, and username
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling

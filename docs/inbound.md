@@ -74,10 +74,11 @@ Text messages are dispatched in priority order:
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
    - `/update` — Starts the detached SASE update worker and replies with its log path
-3. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
-4. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
+3. **Configured slash commands** — A command in `telegram.commands` runs its executable and returns Markdown as a message or PDF
+4. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
+5. **Agent launch** — Everything else launches a new sase agent with the message as the prompt
 
-If `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present in the environment, step 4 is skipped. Two-step completions and
+If `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` is present in the environment, step 5 is skipped. Two-step completions and
 slash commands still run normally, but free-form text that would launch an agent is logged and ignored without sending a
 Telegram acknowledgement. The check is presence-based, so an empty value still disables launches.
 
@@ -144,3 +145,51 @@ back to the failure exit code, and includes the same worker log path. Pending co
 
 Command registration is cached in `~/.sase/telegram/commands_registered_ts`; the cache includes a command-list
 fingerprint so deploys with command changes re-register immediately instead of waiting for the hourly refresh.
+
+## Custom Slash Commands
+
+Custom commands are read once at the start of each inbound poll from SASE's merged configuration, with project-local
+configuration disabled so behavior does not depend on the chop's working directory. For example:
+
+```yaml
+telegram:
+  commands:
+    tasks:
+      description: "📋 Obsidian tasks dashboard as a PDF"
+      run: tg_cmd_tasks --note dash.md
+      output: pdf
+      timeout: 90s
+```
+
+Command names must contain 1–32 lowercase letters, digits, or underscores. `description` is required and appears in
+Telegram's `/` menu. `run` is parsed with `shlex.split`; its executable may be a bare name on `PATH` or an absolute or
+`~` path. No shell is used. `output` defaults to `message`; `timeout` defaults to `60s` and accepts `s`, `m`, or `h`.
+Built-in command names, including the accepted `beads` alias, are reserved and cannot be shadowed. Invalid entries are
+logged and skipped without preventing other commands or inbound updates from running.
+
+Anything typed after the slash command is appended to the configured argument vector as one trailing argument, without
+shell splitting, and is also available as `SASE_TELEGRAM_COMMAND_ARGS`. The command name is exported as
+`SASE_TELEGRAM_COMMAND`. Each invocation runs in a new temporary working directory with stdout and stderr captured.
+
+Successful stdout is Markdown. It may begin with YAML frontmatter:
+
+```markdown
+---
+caption: "📋 *Tasks Dashboard* — 7 WIP · 6 NEXT · 23 READY"
+filename: tasks_dashboard_2026-07-16.pdf
+---
+
+# 📋 Tasks Dashboard
+
+...
+```
+
+For `message` output, the Markdown body is converted to Telegram MarkdownV2 and sent using the normal auto-splitting
+and parse-mode fallback. Frontmatter is ignored. For `pdf` output, the bot immediately acknowledges the command,
+renders the body with the shared SASE PDF renderer, and sends it as a document. `caption` defaults to the command
+description, is converted to MarkdownV2, and is safely limited to 1024 characters. `filename` defaults to
+`<command>_<YYYY-MM-DD>.pdf`. If rendering fails, the bot sends the Markdown body as a message instead.
+
+A timed-out command reports its configured limit. A non-zero exit reports the exit code and a bounded stderr tail in
+an expandable blockquote. Successful empty stdout gets an explicit empty-output response, so every recognized command
+produces visible feedback.
