@@ -37,6 +37,7 @@ from sase_telegram.custom_commands import (
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.launch_approval_actions import LaunchApprovalActionError
+from sase.plan_approval_actions import PlanApprovalActionError
 from sase.user_question_actions import UserQuestionActionError
 from sase_telegram.formatting import (
     build_fork_copy_text,
@@ -69,6 +70,7 @@ from sase_telegram.inbound import (
     process_text_message,
     reconstruct_code_markers,
     resolve_launch_response,
+    resolve_plan_response,
     resolve_user_question_response,
     save_awaiting_feedback,
     save_offset,
@@ -791,7 +793,9 @@ def _write_response(response: ResponseAction) -> None:
     response.response_path.write_text(json.dumps(response.response_data, indent=2))
 
 
-def _launch_error_answer_text(exc: LaunchApprovalActionError) -> str:
+def _launch_error_answer_text(
+    exc: LaunchApprovalActionError | PlanApprovalActionError,
+) -> str:
     if exc.code in {"conflict_already_handled", "not_found"}:
         return _STALE_AWAITING_FEEDBACK_TEXT
     if exc.code in {"invalid_request", "stale", "expired"}:
@@ -804,6 +808,18 @@ def _launch_error_answer_text(exc: LaunchApprovalActionError) -> str:
 def _resolve_response(
     response: ResponseAction, action: dict[str, Any] | None
 ) -> str | None:
+    if response.action_type == "plan":
+        action_data = action.get("action_data") if isinstance(action, dict) else None
+        if (
+            isinstance(action_data, dict)
+            and action_data.get("request_id")
+            and action_data.get("request_kind")
+        ):
+            return resolve_plan_response(response, action)
+        # Preserve the pre-gate Telegram path for already in-flight legacy
+        # PlanApproval rows, including very old rows without plan_request.json.
+        _write_response(response)
+        return response.answer_text
     if response.action_type == "launch":
         return resolve_launch_response(response, action)
     if response.action_type == "question":
@@ -1491,7 +1507,7 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     action = pending.get(response.notif_id_prefix)
     try:
         answer_text = _resolve_response(response, action)
-    except LaunchApprovalActionError as exc:
+    except (LaunchApprovalActionError, PlanApprovalActionError) as exc:
         telegram_client.answer_callback_query(
             callback_query.id, _launch_error_answer_text(exc)
         )
@@ -3796,7 +3812,7 @@ def _handle_text_message(
         action = pending_actions.get(response.notif_id_prefix)
         try:
             _resolve_response(response, action)
-        except LaunchApprovalActionError as exc:
+        except (LaunchApprovalActionError, PlanApprovalActionError) as exc:
             chat_id = _message_chat_id(message) or _configured_chat_id()
             if chat_id is not None:
                 telegram_client.send_message(

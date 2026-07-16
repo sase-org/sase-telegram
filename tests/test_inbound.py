@@ -29,6 +29,7 @@ from sase_telegram.inbound import (
     process_text_message,
     reconstruct_code_markers,
     resolve_launch_response,
+    resolve_plan_response,
     save_awaiting_feedback,
     save_offset,
 )
@@ -377,6 +378,38 @@ class TestProcessTextMessage:
     def test_without_awaiting(self) -> None:
         result = process_text_message("Random text")
         assert result is None
+
+
+class TestResolvePlanResponse:
+    def test_epic_gate_choice_is_forwarded_to_shared_executor(
+        self, tmp_path: Path
+    ) -> None:
+        pending = _make_pending_plan("epic001", str(tmp_path))
+        action = pending["epic001"]
+        action["action"] = "EpicApproval"
+        action["files"] = [str(tmp_path / "plan.md")]
+        action["action_data"].update(
+            {
+                "request_id": "epic-request",
+                "request_kind": "epic_plan",
+                "request_path": str(tmp_path / "request.json"),
+                "response_path": str(tmp_path / "response.json"),
+            }
+        )
+        response = process_callback("plan:epic001:epic", pending)
+        assert response is not None
+
+        with patch(
+            "sase.plan_approval_actions.execute_plan_approval_response",
+            return_value=SimpleNamespace(message="Epic approved"),
+        ) as execute:
+            message = resolve_plan_response(response, action)
+
+        assert message == "Epic approved"
+        context, choice = execute.call_args.args
+        assert choice == "epic"
+        assert context.host_files == (str(tmp_path / "plan.md"),)
+        assert context.host_action_data["request_kind"] == "epic_plan"
 
 
 class TestResolveLaunchResponse:

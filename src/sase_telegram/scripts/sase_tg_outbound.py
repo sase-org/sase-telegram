@@ -28,7 +28,13 @@ log = logging.getLogger(__name__)
 _DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
 # Actions that should be tracked as pending (user needs to respond)
-_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "LaunchApproval", "UserQuestion"}
+_ACTIONABLE_ACTIONS = {
+    "PlanApproval",
+    "EpicApproval",
+    "HITL",
+    "LaunchApproval",
+    "UserQuestion",
+}
 _SUMMARY_ID_LIMIT = 5
 
 # Lazily resolved path to ~/.sase/chats/
@@ -434,8 +440,9 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                 "message_id": msg.message_id,
                 "chat_id": chat_id,
             }
-            if n.action == "PlanApproval" and n.files:
+            if n.action in {"PlanApproval", "EpicApproval"} and n.files:
                 entry["plan_file"] = n.files[0]
+                entry["files"] = list(n.files)
             if n.action == "LaunchApproval" and n.files:
                 entry["files"] = list(n.files)
                 entry["preview_file"] = n.files[0]

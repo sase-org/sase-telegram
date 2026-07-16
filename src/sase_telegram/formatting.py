@@ -867,7 +867,7 @@ def format_notification(
             for the pencil icon.  ``None`` means "use default logic".
     """
     match notification.action:
-        case "PlanApproval":
+        case "PlanApproval" | "EpicApproval":
             return _format_plan_approval(notification)
         case "LaunchApproval":
             return _format_launch_approval(notification)
@@ -922,9 +922,11 @@ def _format_plan_approval(
     raw_model = n.action_data.get("model")
     if raw_provider or raw_model:
         label = escape_markdown_v2(format_provider_model_label(raw_provider, raw_model))
-        plan_title = f"📋 *{label} Plan Review*"
+        review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
+        plan_title = f"📋 *{label} {review_kind} Review*"
     else:
-        plan_title = "📋 *Plan Review*"
+        review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
+        plan_title = f"📋 *{review_kind} Review*"
     header_text = f"{plan_title}{name_line}"
     runtime = n.action_data.get("runtime")
     if runtime:
@@ -963,32 +965,101 @@ def _format_plan_approval(
             plan_body if plan_content else "",
         )
 
-    row1 = [
-        InlineKeyboardButton(
-            "📖 Tale",
-            callback_data=callback_data.encode("plan", prefix, "approve"),
-        ),
-        InlineKeyboardButton(
-            "✅ Approve",
-            callback_data=callback_data.encode("plan", prefix, "run"),
-        ),
-        InlineKeyboardButton(
-            "📋 Epic",
-            callback_data=callback_data.encode("plan", prefix, "epic"),
-        ),
-    ]
-    row2 = [
-        InlineKeyboardButton(
-            "❌ Reject",
-            callback_data=callback_data.encode("plan", prefix, "reject"),
-        ),
-        InlineKeyboardButton(
-            "💬 Feedback",
-            callback_data=callback_data.encode("plan", prefix, "feedback"),
-        ),
-    ]
-    keyboard = InlineKeyboardMarkup([row1, row2])
+    neutral_choices = _neutral_plan_choices(n)
+    neutral_request = (
+        bool(n.action_data.get("request_id")) or n.action == "EpicApproval"
+    )
+    if neutral_choices is None and neutral_request:
+        keyboard = None
+    elif neutral_choices is None:
+        row1 = [
+            InlineKeyboardButton(
+                "📖 Tale",
+                callback_data=callback_data.encode("plan", prefix, "approve"),
+            ),
+            InlineKeyboardButton(
+                "✅ Approve",
+                callback_data=callback_data.encode("plan", prefix, "run"),
+            ),
+            InlineKeyboardButton(
+                "📋 Epic",
+                callback_data=callback_data.encode("plan", prefix, "epic"),
+            ),
+        ]
+        row2 = [
+            InlineKeyboardButton(
+                "❌ Reject",
+                callback_data=callback_data.encode("plan", prefix, "reject"),
+            ),
+            InlineKeyboardButton(
+                "💬 Feedback",
+                callback_data=callback_data.encode("plan", prefix, "feedback"),
+            ),
+        ]
+        keyboard = InlineKeyboardMarkup([row1, row2])
+    else:
+        approval_order = ("tale", "approve", "epic")
+        action_order = ("reject", "feedback")
+        rows = [
+            [
+                _plan_choice_button(prefix, choice_id, neutral_choices[choice_id])
+                for choice_id in order
+                if choice_id in neutral_choices
+            ]
+            for order in (approval_order, action_order)
+        ]
+        keyboard = InlineKeyboardMarkup([row for row in rows if row])
     return text, keyboard, attachments
+
+
+def _neutral_plan_choices(n: Notification) -> dict[str, str] | None:
+    """Read the envelope-advertised Telegram-safe plan choice subset."""
+    request_path = n.action_data.get("request_path")
+    if not request_path:
+        return None
+    try:
+        request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(request, dict) or request.get("kind") not in {
+        "plan",
+        "epic_plan",
+    }:
+        return None
+    raw_choices = request.get("choices")
+    if not isinstance(raw_choices, list):
+        return None
+    remote_ids = {"approve", "tale", "epic", "reject", "feedback"}
+    choices: dict[str, str] = {}
+    for raw in raw_choices:
+        if not isinstance(raw, dict):
+            continue
+        choice_id = raw.get("id")
+        label = raw.get("label")
+        if (
+            isinstance(choice_id, str)
+            and choice_id in remote_ids
+            and isinstance(label, str)
+            and label
+        ):
+            choices[choice_id] = label
+    return choices
+
+
+def _plan_choice_button(
+    prefix: str, choice_id: str, label: str
+) -> InlineKeyboardButton:
+    icons = {
+        "approve": "✅",
+        "tale": "📖",
+        "epic": "📋",
+        "reject": "❌",
+        "feedback": "💬",
+    }
+    return InlineKeyboardButton(
+        f"{icons.get(choice_id, '•')} {label}",
+        callback_data=callback_data.encode("plan", prefix, choice_id),
+    )
 
 
 def _format_launch_approval(

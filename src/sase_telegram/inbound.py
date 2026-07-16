@@ -119,6 +119,7 @@ class ResponseAction:
     response_path: Path  # Where to write response JSON
     response_data: dict[str, Any]  # JSON content
     answer_text: str | None  # Text for answer_callback_query popup
+    choice_id: str | None = None  # Envelope choice, separate from legacy JSON
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +299,10 @@ def process_callback(
 
     if cb.action_type == "plan":
         response_dir = action_data["response_dir"]
-        response_path = Path(response_dir) / "plan_response.json"
+        response_path = Path(
+            action_data.get("response_path")
+            or Path(response_dir) / "plan_response.json"
+        )
         if cb.choice == "approve":
             return ResponseAction(
                 action_type="plan",
@@ -306,6 +310,7 @@ def process_callback(
                 response_path=response_path,
                 response_data={"action": "approve"},
                 answer_text="Plan approved",
+                choice_id="approve",
             )
         elif cb.choice == "reject":
             return ResponseAction(
@@ -314,6 +319,7 @@ def process_callback(
                 response_path=response_path,
                 response_data={"action": "reject"},
                 answer_text="Plan rejected",
+                choice_id="reject",
             )
         elif cb.choice == "epic":
             return ResponseAction(
@@ -322,6 +328,7 @@ def process_callback(
                 response_path=response_path,
                 response_data={"action": "epic"},
                 answer_text="Epic created",
+                choice_id="epic",
             )
         elif cb.choice == "run":
             return ResponseAction(
@@ -334,6 +341,16 @@ def process_callback(
                     "run_coder": True,
                 },
                 answer_text="Running coder (no commit)",
+                choice_id="run",
+            )
+        elif cb.choice in {"tale", "commit"}:
+            return ResponseAction(
+                action_type="plan",
+                notif_id_prefix=cb.notif_id_prefix,
+                response_path=response_path,
+                response_data={"action": "approve"},
+                answer_text=f"{cb.choice.title()} approved",
+                choice_id=cb.choice,
             )
 
     elif cb.action_type == "hitl":
@@ -408,12 +425,15 @@ def process_callback_twostep(
     action_data = action["action_data"]
 
     if cb.action_type == "plan" and cb.choice == "feedback":
+        info = {
+            "action_type": "plan",
+            "response_dir": action_data["response_dir"],
+        }
+        if response_path := action_data.get("response_path"):
+            info["response_path"] = response_path
         return (
             cb.notif_id_prefix,
-            {
-                "action_type": "plan",
-                "response_dir": action_data["response_dir"],
-            },
+            info,
         )
 
     if cb.action_type == "hitl" and cb.choice == "feedback":
@@ -464,15 +484,21 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
     info: dict[str, Any] = awaiting["action_info"]
 
     if info["action_type"] == "plan":
+        response_path = info.get("response_path")
         return ResponseAction(
             action_type="plan",
             notif_id_prefix=prefix,
-            response_path=Path(info["response_dir"]) / "plan_response.json",
+            response_path=(
+                Path(response_path)
+                if response_path
+                else Path(info["response_dir"]) / "plan_response.json"
+            ),
             response_data={
                 "action": "reject",
                 "feedback": text,
             },
             answer_text=None,
+            choice_id="feedback",
         )
 
     if info["action_type"] == "hitl":
@@ -552,6 +578,71 @@ def resolve_launch_response(
     return result.message
 
 
+def resolve_plan_response(
+    response: ResponseAction,
+    action: dict[str, Any] | None,
+) -> str:
+    """Resolve a plan response through the shared neutral/legacy host action."""
+    from sase.plan_approval_actions import (
+        PlanApprovalActionContext,
+        PlanApprovalActionError,
+        execute_plan_approval_response,
+    )
+
+    if action is None:
+        raise PlanApprovalActionError(
+            "not_found",
+            response.notif_id_prefix,
+            "pending plan action is missing",
+        )
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        raise PlanApprovalActionError(
+            "invalid_request",
+            "action_data",
+            "plan action data is missing",
+        )
+    choice = response.choice_id
+    if not isinstance(choice, str):
+        choice = str(response.response_data.get("action") or "reject")
+    # The compatibility Telegram "Tale" button used callback choice
+    # ``approve``. New neutral requests advertise a literal ``tale`` choice.
+    if (
+        choice == "approve"
+        and not action_data.get("request_id")
+        and response.answer_text == "Plan approved"
+    ):
+        choice = "tale"
+    feedback = response.response_data.get("feedback")
+    raw_files = action.get("files", [])
+    if not isinstance(raw_files, list):
+        raw_files = []
+    if not raw_files and isinstance(action.get("plan_file"), str):
+        raw_files = [action["plan_file"]]
+    result = execute_plan_approval_response(
+        PlanApprovalActionContext(
+            id=str(action.get("notification_id") or response.notif_id_prefix),
+            host_files=tuple(str(path) for path in raw_files),
+            host_action_data={
+                str(key): str(value) for key, value in action_data.items()
+            },
+        ),
+        choice,
+        feedback=str(feedback) if feedback is not None else None,
+        commit_plan=(
+            response.response_data.get("commit_plan")
+            if isinstance(response.response_data.get("commit_plan"), bool)
+            else None
+        ),
+        run_coder=(
+            response.response_data.get("run_coder")
+            if isinstance(response.response_data.get("run_coder"), bool)
+            else None
+        ),
+    )
+    return result.message
+
+
 def resolve_user_question_response(
     response: ResponseAction,
     action: dict[str, Any] | None,
@@ -623,7 +714,13 @@ def make_image_filename(file_id: str) -> str:
     return f"{ts}_{file_id[:12]}.jpg"
 
 
-_ACTIONABLE_ACTIONS = {"PlanApproval", "HITL", "LaunchApproval", "UserQuestion"}
+_ACTIONABLE_ACTIONS = {
+    "PlanApproval",
+    "EpicApproval",
+    "HITL",
+    "LaunchApproval",
+    "UserQuestion",
+}
 
 
 def find_externally_handled(
@@ -641,15 +738,19 @@ def find_externally_handled(
             continue
         action_data = entry.get("action_data", {})
 
-        if action == "PlanApproval":
+        if action in {"PlanApproval", "EpicApproval"}:
             response_dir = Path(action_data.get("response_dir", ""))
+            response_path = Path(
+                action_data.get("response_path") or response_dir / "plan_response.json"
+            )
+            request_path = Path(
+                action_data.get("request_path") or response_dir / "plan_request.json"
+            )
             if (
-                (response_dir / "plan_response.json").exists()
+                response_path.exists()
+                or (response_dir / "cancellation.json").exists()
                 or (response_dir / "plan_approved.marker").exists()
-                or (
-                    response_dir != Path("")
-                    and not (response_dir / "plan_request.json").exists()
-                )
+                or (response_dir != Path("") and not request_path.exists())
             ):
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 

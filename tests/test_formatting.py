@@ -240,6 +240,65 @@ class TestMarkdownToTelegramV2:
 
 
 class TestFormatPlanApproval:
+    def test_epic_gate_advertises_only_envelope_remote_choices(
+        self, tmp_path: Path
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text("# Epic\n", encoding="utf-8")
+        request_file = tmp_path / "request.json"
+        request_file.write_text(
+            json.dumps(
+                {
+                    "kind": "epic_plan",
+                    "choices": [
+                        {"id": "epic", "label": "Epic"},
+                        {"id": "reject", "label": "Reject"},
+                        {"id": "feedback", "label": "Send Feedback"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+            action_data={"request_path": str(request_file)},
+        )
+
+        text, keyboard, attachments = format_notification(notification)
+
+        assert "Epic Review" in text
+        assert attachments == [str(plan_file)]
+        assert keyboard is not None
+        assert [
+            button.callback_data for row in keyboard.inline_keyboard for button in row
+        ] == [
+            "plan:abcd1234:epic",
+            "plan:abcd1234:reject",
+            "plan:abcd1234:feedback",
+        ]
+
+    def test_epic_gate_with_unreadable_envelope_never_falls_back_to_legacy_choices(
+        self, tmp_path: Path
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text("# Epic\n", encoding="utf-8")
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+            action_data={
+                "request_id": "epic-request",
+                "request_path": str(tmp_path / "missing-request.json"),
+            },
+        )
+
+        text, keyboard, _attachments = format_notification(notification)
+
+        assert "Epic Review" in text
+        assert keyboard is None
+
     def test_short_tale_renders_exact_properties_card(self, tmp_path: Path) -> None:
         plan_file = tmp_path / "tale.md"
         plan_file.write_text(
