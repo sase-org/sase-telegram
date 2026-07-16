@@ -62,7 +62,7 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan Approval      | Shows plan content with Tale / ✅ Approve / Epic / Reject / Feedback buttons                |
+| Plan Approval      | Shows an ordered frontmatter Properties card and plan body with Tale / ✅ Approve / Epic / Reject / Feedback buttons |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat/media attachments and a Fork copy button           |
@@ -87,7 +87,7 @@ Installing sase-telegram adds the following commands:
 - **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
   matching Telegram send method, with GIF/video document fallback
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
-- **Large content handling** — auto-truncates long plans and notes; uses expandable blockquotes for medium content
+- **Large content handling** — keeps short plan properties open, makes metadata-heavy property cards expandable, and truncates oversized property values/body previews with an attachment fallback
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
 - **Parse mode fallback** — falls back to plain text if MarkdownV2 rendering fails
 
@@ -136,7 +136,9 @@ The chat target and bot username are required separately:
 
 The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), loads unsent
 notifications using a high-water mark timestamp, and formats them as Telegram MarkdownV2 messages with inline
-keyboards. Long plans are wrapped in expandable blockquotes or truncated and paired with a document attachment. Chat
+keyboards. Plan approvals present every parseable top-level frontmatter field in an ordered **Properties** card before
+the Markdown body. Nested lists and mappings use indented multiline rows; long cards become expandable, and unusually
+large values/body previews are truncated with a clear pointer to the complete plan attachment. Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
 PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
 and videos retry as documents if Telegram rejects inline media delivery. Actionable notifications (plan approvals, HITL

@@ -38,7 +38,7 @@ sase_chop_tg_outbound --context X  # Pass context string for logging
 
 Each notification is formatted as a Telegram message with:
 - A header line (notification type, agent name, workspace number)
-- Content body (plan text, HITL notes, question options, etc.)
+- Content body (plan properties and Markdown, HITL notes, question options, etc.)
 - An inline keyboard with action buttons
 
 ### Content Handling
@@ -47,13 +47,24 @@ Each notification is formatted as a Telegram message with:
 |---|---|
 | < 500 chars | Inline in the message body |
 | 500–3500 chars | Wrapped in an expandable blockquote (Telegram Bot API 7.4+) |
-| > 3500 chars | Truncated in the message; the plan/attachment remains available as a document |
+| > 3500 chars | Truncated in the message; the complete attachment remains available as a document |
+
+Plan approvals split the attached file once with SASE's safe frontmatter parser. Every parseable top-level field is
+shown in a **Properties** card before the rich Markdown body: identity/lifecycle fields use a predictable semantic
+order, and unfamiliar fields follow alphabetically. Lists and mappings render as indented multiline values, while
+empty values and containers remain explicit. Short cards stay open; metadata-heavy cards use an expandable blockquote.
+
+The header, review note, Properties card, and body share Telegram's 4096-character budget. Property labels are retained
+when space is tight; only large displayed values and then the body preview are truncated, each with a pointer to the
+attached plan. Missing, unreadable, invalid-UTF-8, malformed, or non-mapping frontmatter falls back to the established
+body-only preview without blocking the approval keyboard. An existing plan file remains attached even if its preview
+cannot be parsed.
 
 ### Notification Types
 
 | Type | Body Content | Buttons |
 |---|---|---|
-| Plan Approval | Plan text + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
+| Plan Approval | Ordered Properties card + plan body + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |
@@ -67,8 +78,8 @@ The visible plan **✅ Approve** button maps to the internal `run` payload for c
 
 ### Attachments
 
-- **Plan attachments**: Plan files are attached whenever present; Markdown files are rendered to PDF through SASE's
-  shared Markdown renderer when possible
+- **Plan attachments**: Plan files are attached whenever present, including when preview parsing fails; Markdown files
+  are rendered to PDF through SASE's shared Markdown renderer when possible
 - **Diff sections**: Diffs from chat files and commit messages are embedded into the response PDF
 - **Research files**: Detected research files in diffs are mentioned in the notification
 - **Digest files**: Error digest files are sent as document attachments

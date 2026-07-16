@@ -240,6 +240,274 @@ class TestMarkdownToTelegramV2:
 
 
 class TestFormatPlanApproval:
+    def test_short_tale_renders_exact_properties_card(self, tmp_path: Path) -> None:
+        plan_file = tmp_path / "tale.md"
+        plan_file.write_text(
+            "---\n"
+            "tier: tale\n"
+            "title: Ship safely\n"
+            "goal: Keep users safe\n"
+            "---\n\n"
+            "# Implementation\n\n"
+            "Body only.\n",
+            encoding="utf-8",
+        )
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready for review: tale.md"],
+            files=[str(plan_file)],
+        )
+
+        text, keyboard, attachments = format_notification(n)
+
+        assert text == (
+            "📋 *Plan Review*\n\n"
+            "Plan ready for review: tale\\.md\n\n"
+            "🧾 *Properties*\n"
+            "*Title:* Ship safely\n"
+            "*Tier:* tale\n"
+            "*Goal:* Keep users safe\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*Implementation*\n\n"
+            "Body only\\."
+        )
+        assert text.count("Ship safely") == 1
+        assert text.count("Keep users safe") == 1
+        assert text.index("🧾 *Properties*") < text.index("*Implementation*")
+        assert attachments == [str(plan_file)]
+        assert keyboard is not None
+        assert [
+            [button.text for button in row] for row in keyboard.inline_keyboard
+        ] == [
+            ["📖 Tale", "✅ Approve", "📋 Epic"],
+            ["❌ Reject", "💬 Feedback"],
+        ]
+
+    def test_property_rich_epic_renders_nested_and_unknown_values(
+        self, tmp_path: Path
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text(
+            """---
+phases:
+  - name: Parse [frontmatter]
+    tasks:
+      - Escape *everything*.
+      - null
+depends_on:
+  - sase-1
+  - α.beta
+z_future: café & tea!
+empty_value:
+unicode_value: مرحبا_日本
+empty_list: []
+empty_map: {}
+enabled: true
+retries: 3
+ratio: 1.5
+status: wip
+created_at: 2026-07-16
+kind: implementation
+tier: epic
+title: Epic _metadata_
+goal: Ship safely!
+---
+
+# Epic body
+
+Details.
+""",
+            encoding="utf-8",
+        )
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[str(plan_file)],
+        )
+
+        text, _, _ = format_notification(n)
+
+        labels = [
+            "Title",
+            "Tier",
+            "Kind",
+            "Status",
+            "Created at",
+            "Goal",
+            "Depends on",
+            "Empty list",
+            "Empty map",
+            "Empty value",
+            "Enabled",
+            "Phases",
+            "Ratio",
+            "Retries",
+            "Unicode value",
+            "Z future",
+        ]
+        positions = [text.index(f"*{label}:*") for label in labels]
+        assert positions == sorted(positions)
+        assert "Epic \\_metadata\\_" in text
+        assert "Ship safely\\!" in text
+        assert "Parse \\[frontmatter\\]" in text
+        assert "Escape \\*everything\\*\\." in text
+        assert "• sase\\-1" in text
+        assert "• α\\.beta" in text
+        assert "*Empty value:* —" in text
+        assert "*Empty list:* \\[\\]" in text
+        assert "*Empty map:* \\{\\}" in text
+        assert "*Enabled:* true" in text
+        assert "*Ratio:* 1\\.5" in text
+        assert "*Retries:* 3" in text
+        assert "مرحبا\\_日本" in text
+        assert "café & tea\\!" in text
+        assert text.index("🧾 *Properties*") < text.index("*Epic body*")
+
+    def test_large_properties_and_body_share_one_budget(self, tmp_path: Path) -> None:
+        plan_file = tmp_path / "large-epic.md"
+        goal = "safe_goal " * 500
+        prompt = "prompt_value " * 500
+        phase_details = "phase_detail " * 500
+        body = "\n".join(
+            f"## Section {index}\n\nBody line {index}." for index in range(250)
+        )
+        plan_file.write_text(
+            "---\n"
+            "title: Large epic\n"
+            "tier: epic\n"
+            f"goal: {goal}\n"
+            f"prompt: {prompt}\n"
+            "phases:\n"
+            "  - name: Foundation\n"
+            f"    details: {phase_details}\n"
+            "z_future: still visible\n"
+            "---\n\n"
+            f"{body}\n",
+            encoding="utf-8",
+        )
+        n = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[str(plan_file)],
+        )
+
+        text, keyboard, attachments = format_notification(n)
+
+        assert len(text) <= MAX_MESSAGE_LENGTH
+        for label in ("Title", "Tier", "Goal", "Phases", "Prompt", "Z future"):
+            assert f"*{label}:*" in text
+        properties_block = text[text.index("🧾 *Properties*") : text.index("━" * 20)]
+        assert "**>" in properties_block
+        assert "see attached plan" in text
+        assert "body truncated, see attached plan" in text
+        assert attachments == [str(plan_file)]
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][1].callback_data == "plan:abcd1234:run"
+
+    def test_unusable_frontmatter_keeps_body_only_preview(self, tmp_path: Path) -> None:
+        contents = {
+            "plain.md": "# Plain body\n\nLegacy text.\n",
+            "malformed.md": "---\ntitle: [broken\n---\n\n# Malformed body\n",
+            "non-mapping.md": "---\n- one\n- two\n---\n\n# List body\n",
+            "unclosed.md": "---\ntitle: Unclosed\n# Hidden legacy body\n",
+        }
+
+        for filename, content in contents.items():
+            plan_file = tmp_path / filename
+            plan_file.write_text(content, encoding="utf-8")
+            n = _make_notification(
+                action="PlanApproval",
+                sender="plan",
+                notes=["Plan ready"],
+                files=[str(plan_file)],
+            )
+
+            text, keyboard, attachments = format_notification(n)
+
+            assert "Properties" not in text
+            assert "Plan Review" in text
+            assert keyboard is not None
+            assert attachments == [str(plan_file)]
+
+        assert (
+            "*Plain body*"
+            in format_notification(
+                _make_notification(
+                    action="PlanApproval",
+                    sender="plan",
+                    notes=["Plan ready"],
+                    files=[str(tmp_path / "plain.md")],
+                )
+            )[0]
+        )
+        assert (
+            "*Malformed body*"
+            in format_notification(
+                _make_notification(
+                    action="PlanApproval",
+                    sender="plan",
+                    notes=["Plan ready"],
+                    files=[str(tmp_path / "malformed.md")],
+                )
+            )[0]
+        )
+        assert (
+            "*List body*"
+            in format_notification(
+                _make_notification(
+                    action="PlanApproval",
+                    sender="plan",
+                    notes=["Plan ready"],
+                    files=[str(tmp_path / "non-mapping.md")],
+                )
+            )[0]
+        )
+
+    def test_invalid_utf8_and_unreadable_plans_still_attach(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        invalid_file = tmp_path / "invalid.md"
+        invalid_file.write_bytes(b"\xff\xfe\x00")
+        invalid = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[str(invalid_file)],
+        )
+
+        text, keyboard, attachments = format_notification(invalid)
+
+        assert "Plan Review" in text
+        assert "Properties" not in text
+        assert keyboard is not None
+        assert attachments == [str(invalid_file)]
+
+        unreadable_file = tmp_path / "unreadable.md"
+        unreadable_file.write_text("# Secret", encoding="utf-8")
+        original_read_text = Path.read_text
+
+        def fail_for_unreadable(path: Path, *args, **kwargs) -> str:
+            if path == unreadable_file:
+                raise PermissionError("not readable")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_for_unreadable)
+        unreadable = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            notes=["Plan ready"],
+            files=[str(unreadable_file)],
+        )
+
+        text, keyboard, attachments = format_notification(unreadable)
+
+        assert "Plan Review" in text
+        assert keyboard is not None
+        assert attachments == [str(unreadable_file)]
+
     def test_with_short_plan(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("# Short Plan\n\nSome content here.")
@@ -402,9 +670,10 @@ class TestFormatPlanApproval:
             notes=["Plan ready for review"],
             files=["/nonexistent/plan.md"],
         )
-        text, keyboard, _ = format_notification(n)
+        text, keyboard, attachments = format_notification(n)
         assert "Plan Review" in text
         assert keyboard is not None
+        assert attachments == []
 
     def test_humanizes_agent_name_in_header(self, monkeypatch):
         monkeypatch.setattr(
