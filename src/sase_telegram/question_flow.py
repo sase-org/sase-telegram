@@ -10,6 +10,8 @@ from typing import Any, Literal
 PROGRESS_FILENAME = "question_progress.json"
 RESPONSE_FILENAME = "question_response.json"
 REQUEST_FILENAME = "question_request.json"
+NEUTRAL_RESPONSE_FILENAME = "response.json"
+NEUTRAL_REQUEST_FILENAME = "request.json"
 GLOBAL_NOTE = "Answered via Telegram"
 CUSTOM_SELECTED_LABEL = "Other"
 
@@ -79,10 +81,18 @@ QuestionDecision = ToggleQuestion | AwaitCustom | AdvanceQuestion | CompleteQues
 
 
 def load_question_request(response_dir: str | Path) -> dict[str, Any]:
-    """Load ``question_request.json`` for a response directory."""
-    request_path = Path(response_dir) / REQUEST_FILENAME
+    """Load a neutral question payload first, then the legacy request."""
+    root = Path(response_dir)
+    neutral_path = root / NEUTRAL_REQUEST_FILENAME
+    request_path = neutral_path if neutral_path.is_file() else root / REQUEST_FILENAME
     data = json.loads(request_path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    if request_path == neutral_path:
+        if data.get("kind") != "question" or not isinstance(data.get("payload"), dict):
+            return {}
+        return data["payload"]
+    return data
 
 
 def progress_path(response_dir: str | Path) -> Path:
@@ -92,7 +102,13 @@ def progress_path(response_dir: str | Path) -> Path:
 
 def response_path(response_dir: str | Path) -> Path:
     """Return the final question response path for a response directory."""
-    return Path(response_dir) / RESPONSE_FILENAME
+    root = Path(response_dir)
+    filename = (
+        NEUTRAL_RESPONSE_FILENAME
+        if (root / NEUTRAL_REQUEST_FILENAME).is_file()
+        else RESPONSE_FILENAME
+    )
+    return root / filename
 
 
 def _questions(request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -341,6 +357,8 @@ def apply_question_choice(
         if not multi_select:
             raise ValueError("submit is only valid for multi-select questions")
         selected = list(progress.pending_selection or [])
+        if not selected:
+            raise ValueError("at least one option must be selected")
         answer = _answer(question, selected=selected, custom_feedback=None)
         return _advance_or_complete(
             request,

@@ -144,3 +144,13 @@ def test_load_question_request(tmp_path: Path) -> None:
     (tmp_path / "question_request.json").write_text(json.dumps(request))
 
     assert question_flow.load_question_request(tmp_path) == request
+
+
+def test_neutral_question_paths_project_payload_and_response(tmp_path: Path) -> None:
+    request = _request()
+    (tmp_path / "request.json").write_text(
+        json.dumps({"kind": "question", "payload": request})
+    )
+
+    assert question_flow.load_question_request(tmp_path) == request
+    assert question_flow.response_path(tmp_path) == tmp_path / "response.json"

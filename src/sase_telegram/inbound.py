@@ -255,8 +255,9 @@ def clear_awaiting_feedback_by_prefix(prefix: str) -> str | None:
 
 def _get_question_info(response_dir: str, idx: int) -> tuple[str, str]:
     """Return (question_text, option_label) from question_request.json."""
-    request_file = Path(response_dir) / "question_request.json"
-    request_data = json.loads(request_file.read_text())
+    from sase_telegram.question_flow import load_question_request
+
+    request_data = load_question_request(response_dir)
     questions = request_data.get("questions", [])
     question_text = questions[0].get("question", "") if questions else ""
     options = questions[0].get("options", []) if questions else []
@@ -269,9 +270,10 @@ def _get_question_info(response_dir: str, idx: int) -> tuple[str, str]:
 
 def _get_question_text(response_dir: str) -> str:
     """Return the first question's text from question_request.json."""
-    request_file = Path(response_dir) / "question_request.json"
+    from sase_telegram.question_flow import load_question_request
+
     try:
-        request_data = json.loads(request_file.read_text())
+        request_data = load_question_request(response_dir)
         questions = request_data.get("questions", [])
         return questions[0].get("question", "") if questions else ""
     except (OSError, json.JSONDecodeError):
@@ -550,6 +552,45 @@ def resolve_launch_response(
     return result.message
 
 
+def resolve_user_question_response(
+    response: ResponseAction,
+    action: dict[str, Any] | None,
+) -> str:
+    """Resolve a complete UserQuestion form through the shared host executor."""
+    from sase.user_question_actions import (
+        UserQuestionActionContext,
+        UserQuestionActionError,
+        execute_user_question_response,
+    )
+
+    if action is None:
+        raise UserQuestionActionError(
+            "not_found",
+            response.notif_id_prefix,
+            "pending question action is missing",
+        )
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        raise UserQuestionActionError(
+            "invalid_request",
+            "action_data",
+            "question action data is missing",
+        )
+    result = execute_user_question_response(
+        UserQuestionActionContext(
+            notification_id=str(
+                action.get("notification_id") or response.notif_id_prefix
+            ),
+            host_action_data={
+                str(key): str(value) for key, value in action_data.items()
+            },
+        ),
+        response.response_data,
+        source="telegram",
+    )
+    return result.message
+
+
 # ---------------------------------------------------------------------------
 # Confirmation text for two-step completions
 # ---------------------------------------------------------------------------
@@ -636,7 +677,20 @@ def find_externally_handled(
 
         elif action == "UserQuestion":
             response_dir = Path(action_data.get("response_dir", ""))
-            if (response_dir / "question_response.json").exists():
+            response_path = Path(
+                action_data.get("response_path")
+                or response_dir / "question_response.json"
+            )
+            request_path = Path(
+                action_data.get("request_path")
+                or response_dir / "question_request.json"
+            )
+            cancellation_path = response_dir / "cancellation.json"
+            if (
+                response_path.exists()
+                or cancellation_path.exists()
+                or (response_dir != Path("") and not request_path.exists())
+            ):
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 
     return handled

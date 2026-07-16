@@ -831,6 +831,76 @@ class TestHandleQuestionFlow:
             assert mock_tg.send_message.call_count == 2
             mock_pa.remove.assert_called_with("ques0001")
 
+    def test_neutral_question_callback_uses_shared_executor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sase.notification_gates import paths
+        from sase.notifications import pending_actions as sase_pending_actions
+        from sase.notifications import store
+        from sase.notifications.store import load_notifications
+        from sase.user_question_actions import create_user_question_gate
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        monkeypatch.setattr(paths, "INTERACTION_REQUESTS_DIR", tmp_path / "requests")
+        monkeypatch.setattr(store, "NOTIFICATIONS_DIR", str(tmp_path / "notifications"))
+        monkeypatch.setattr(
+            store,
+            "NOTIFICATIONS_FILE",
+            str(tmp_path / "notifications" / "notifications.jsonl"),
+        )
+        monkeypatch.setattr(
+            sase_pending_actions,
+            "PENDING_ACTIONS_PATH",
+            tmp_path / "shared-pending.json",
+        )
+        monkeypatch.setattr(
+            sase_pending_actions,
+            "LEGACY_TELEGRAM_PENDING_ACTIONS_PATH",
+            tmp_path / "legacy-pending.json",
+        )
+        store._LOAD_CACHE.clear()
+        gate = create_user_question_gate(
+            [
+                {
+                    "question": "Which path?",
+                    "options": [{"label": "Fast"}, {"label": "Safe"}],
+                }
+            ],
+            session_id="telegram-question",
+        )
+        notification = load_notifications()[0]
+        pending = {
+            "ques0001": {
+                "notification_id": notification.id,
+                "action": "UserQuestion",
+                "action_data": dict(notification.action_data),
+                "message_id": 42,
+                "chat_id": "12345",
+            }
+        }
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                return_value=None,
+            ),
+            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
+        ):
+            _handle_callback(self._callback("question:ques0001:1", 42), pending)
+
+        response = json.loads(gate.response_path.read_text(encoding="utf-8"))
+        assert response["choice_id"] == "submit"
+        assert response["source"] == "telegram"
+        assert response["result"]["answers"] == [
+            {
+                "question": "Which path?",
+                "selected": ["Safe"],
+                "custom_feedback": None,
+            }
+        ]
+        mock_pa.remove.assert_called_with("ques0001")
+
     def test_custom_text_advances_to_next_question(self, tmp_path: Path) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_callback,
@@ -4638,6 +4708,9 @@ class TestFindExternallyHandled:
         assert result[0][0] == "ques0001"
 
     def test_question_still_pending(self, tmp_path: Path) -> None:
+        (tmp_path / "question_request.json").write_text(
+            '{"questions":[{"question":"Still pending?","options":[]}]}'
+        )
         pending = _make_pending_question("ques0002", str(tmp_path))
         result = find_externally_handled(pending)
         assert result == []

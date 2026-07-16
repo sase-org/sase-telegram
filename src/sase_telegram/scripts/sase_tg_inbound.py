@@ -37,6 +37,7 @@ from sase_telegram.custom_commands import (
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sase.launch_approval_actions import LaunchApprovalActionError
+from sase.user_question_actions import UserQuestionActionError
 from sase_telegram.formatting import (
     build_fork_copy_text,
     display_cl_name,
@@ -68,6 +69,7 @@ from sase_telegram.inbound import (
     process_text_message,
     reconstruct_code_markers,
     resolve_launch_response,
+    resolve_user_question_response,
     save_awaiting_feedback,
     save_offset,
 )
@@ -804,6 +806,8 @@ def _resolve_response(
 ) -> str | None:
     if response.action_type == "launch":
         return resolve_launch_response(response, action)
+    if response.action_type == "question":
+        return resolve_user_question_response(response, action)
     _write_response(response)
     return response.answer_text
 
@@ -996,7 +1000,7 @@ def _handle_question_decision(
             )
         return
 
-    if origin_message_id is not None:
+    if origin_message_id is not None and decision.kind != "complete":
         _edit_question_answered(
             chat_id=chat_id,
             message_id=origin_message_id,
@@ -1035,7 +1039,48 @@ def _handle_question_decision(
         response_dir=response_dir,
         response_data=decision.response_data,
     )
-    _write_response(response)
+    try:
+        _resolve_response(response, action)
+    except UserQuestionActionError as exc:
+        if exc.code == "conflict_already_handled":
+            pending_actions.remove(prefix)
+            clear_awaiting_feedback_by_prefix(prefix)
+            question_flow.clear_progress(response_dir)
+            _answer_callback(callback_query, "This action has already been handled")
+            return
+        retry_progress = question_flow.QuestionProgress(
+            session_id=decision.progress.session_id,
+            total=decision.progress.total,
+            current_index=decision.answered_index,
+            answers=list(decision.progress.answers or [])[:-1],
+            pending_selection=[],
+            active_message_id=origin_message_id,
+            chat_id=chat_id,
+        )
+        retry_progress = _send_next_question(
+            prefix=prefix,
+            chat_id=chat_id,
+            request=request,
+            progress=retry_progress,
+        )
+        question_flow.save_progress(response_dir, retry_progress)
+        if action and retry_progress.active_message_id is not None:
+            _save_pending_action_message(
+                prefix,
+                action,
+                chat_id=chat_id,
+                message_id=retry_progress.active_message_id,
+            )
+        _answer_callback(callback_query, f"Question response failed: {exc}")
+        return
+    if origin_message_id is not None:
+        _edit_question_answered(
+            chat_id=chat_id,
+            message_id=origin_message_id,
+            request=request,
+            answered_index=decision.answered_index,
+            answer=decision.answer,
+        )
     telegram_client.send_message(
         chat_id,
         format_questions_complete(decision.response_data["answers"]),

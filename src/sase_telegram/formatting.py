@@ -14,7 +14,11 @@ from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 from sase.notifications.models import Notification
 
 from sase_telegram import callback_data
-from sase_telegram.question_flow import CUSTOM_SELECTED_LABEL, is_multi_select
+from sase_telegram.question_flow import (
+    CUSTOM_SELECTED_LABEL,
+    is_multi_select,
+    load_question_request,
+)
 
 # Telegram message limit
 MAX_MESSAGE_LENGTH = 4096
@@ -1246,9 +1250,8 @@ def _format_user_question(
     # Try to load question options from request file
     response_dir = n.action_data.get("response_dir", "")
     if response_dir:
-        request_file = Path(response_dir) / "question_request.json"
         try:
-            request_data = json.loads(request_file.read_text())
+            request_data = load_question_request(response_dir)
             questions = request_data.get("questions", [])
             if questions:
                 text, keyboard = render_question_message(
