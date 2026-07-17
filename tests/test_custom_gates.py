@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,8 +14,9 @@ import pytest
 from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
 from sase.plan_gate import create_plan_approval_gate
-from sase_telegram import inbound, pending_actions
+from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
+from sase_telegram.scripts.sase_tg_outbound import _run_outbound
 from sase_telegram.scripts.sase_tg_inbound import (
     _handle_callback,
     _handle_text_message,
@@ -23,6 +26,20 @@ VALID_TALE_PLAN = """---
 tier: tale
 title: Telegram plan approval
 goal: Verify Telegram add-on selection
+---
+# Plan
+
+Implement the requested change.
+"""
+
+VALID_EPIC_PLAN = """---
+tier: epic
+title: Telegram epic approval
+goal: Verify Telegram renders command-backed epic gates
+phases:
+  - id: implementation
+    title: Implement the requested change
+    depends_on: []
 ---
 # Plan
 
@@ -212,6 +229,16 @@ def _pending(notification: Notification) -> dict[str, object]:
         "message_id": 42,
         "chat_id": "chat-1",
     }
+
+
+def _epic_notification(gate_home: Path, request_id: str) -> Notification:
+    plan_file = gate_home / f"{request_id}.md"
+    plan_file.write_text(VALID_EPIC_PLAN, encoding="utf-8")
+    result = create_plan_approval_gate(plan_file, request_id)
+    notification = _notification(result, action="EpicApproval", sender="epic")
+    notification.files = [str(Path(result.bundle_path) / "plan.md")]
+    notification.dismissed = True
+    return notification
 
 
 def _callback(data: str, callback_id: str = "callback") -> SimpleNamespace:
@@ -418,6 +445,75 @@ def test_neutral_hitl_uses_shared_executor_not_legacy_writer(gate_home: Path) ->
     assert not (bundle / "hitl_response.json").exists()
 
 
+def test_epic_approval_formats_verified_gate_without_tale_default(
+    gate_home: Path,
+) -> None:
+    notification = _epic_notification(gate_home, "telegram-epic-formatting")
+    bundle = Path(notification.action_data["bundle_path"])
+
+    text, keyboard, attachments = format_notification(notification)
+
+    assert "Epic Review" in text
+    assert attachments == notification.files
+    assert notification.dismissed is True
+    assert keyboard is not None
+    assert [
+        button.callback_data for row in keyboard.inline_keyboard for button in row
+    ] == [
+        f"plan:{notification.id[:8]}:epic",
+        f"plan:{notification.id[:8]}:reject",
+        f"plan:{notification.id[:8]}:feedback",
+    ]
+    assert not (bundle / "telegram_gate_progress.json").exists()
+
+
+def test_epic_approval_outbound_sends_and_advances_high_water_mark(
+    gate_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notification = _epic_notification(gate_home, "telegram-epic-outbound")
+    last_sent_file = gate_home / "last-sent"
+    last_sent_file.write_text("0", encoding="utf-8")
+    monkeypatch.setattr(outbound, "LAST_SENT_FILE", last_sent_file)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+            return_value=[notification],
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+            return_value="chat-1",
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+            return_value=True,
+        ),
+        patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.send_message",
+            return_value=SimpleNamespace(message_id=42),
+        ) as send_message,
+        patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf", return_value=None),
+        patch("sase_telegram.scripts.sase_tg_outbound.send_document"),
+        patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
+    ):
+        result = _run_outbound(argparse.Namespace(dry_run=False))
+
+    assert result == 0
+    keyboard = send_message.call_args.kwargs["reply_markup"]
+    assert [
+        button.callback_data for row in keyboard.inline_keyboard for button in row
+    ] == [
+        f"plan:{notification.id[:8]}:epic",
+        f"plan:{notification.id[:8]}:reject",
+        f"plan:{notification.id[:8]}:feedback",
+    ]
+    assert float(last_sent_file.read_text(encoding="utf-8")) == pytest.approx(
+        datetime.fromisoformat(notification.timestamp).timestamp()
+    )
+
+
 def test_plan_approval_renders_and_submits_add_on_toggles(gate_home: Path) -> None:
     plan_file = gate_home / "plan.md"
     plan_file.write_text(VALID_TALE_PLAN, encoding="utf-8")
@@ -461,3 +557,42 @@ def test_plan_approval_renders_and_submits_add_on_toggles(gate_home: Path) -> No
     assert response["selected_extra_ids"] == []
     assert response["result"]["commit_plan"] is False
     assert response["result"]["run_coder"] is False
+
+
+def test_plan_approval_submits_default_selected_add_ons(gate_home: Path) -> None:
+    plan_file = gate_home / "default-plan.md"
+    plan_file.write_text(VALID_TALE_PLAN, encoding="utf-8")
+    result = create_plan_approval_gate(plan_file, "telegram-plan-defaults")
+    notification = _notification(result, action="PlanApproval", sender="plan")
+    bundle = Path(notification.action_data["bundle_path"])
+    notification.files = [str(bundle / "plan.md")]
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    action["files"] = list(notification.files)
+    action["plan_file"] = notification.files[0]
+    pending_actions.add(prefix, action)
+
+    _, keyboard, _ = format_notification(notification)
+    assert keyboard is not None
+    assert keyboard.inline_keyboard[2][0].text.startswith("☑️ 💾 Commit plan file")
+    assert keyboard.inline_keyboard[3][0].text.startswith("☑️ ▶️ Run coder follow-up")
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+    ):
+        _handle_callback(
+            _callback(f"plan:{prefix}:submit", "submit-defaults"),
+            {prefix: action},
+        )
+
+    response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
+    assert response["choice_id"] == "approve"
+    assert response["selected_extra_ids"] == ["commit_plan", "run_coder"]
+    assert response["result"]["commit_plan"] is True
+    assert response["result"]["run_coder"] is True

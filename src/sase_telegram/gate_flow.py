@@ -128,27 +128,40 @@ def load_progress(
     chat_id: str | None = None,
 ) -> GateProgress:
     """Load saved progress, recovering safely from stale or malformed state."""
+    normalized_default = (
+        default_choice_id
+        if default_choice_id is not None
+        and choice_for_id(view, default_choice_id) is not None
+        else None
+    )
     path = progress_path(view)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return initial_progress(
             view,
-            choice_id=default_choice_id,
+            choice_id=normalized_default,
             active_message_id=active_message_id,
             chat_id=chat_id,
         )
     if not isinstance(raw, dict):
         return initial_progress(
             view,
-            choice_id=default_choice_id,
+            choice_id=normalized_default,
             active_message_id=active_message_id,
             chat_id=chat_id,
         )
 
+    saved_message_id = _optional_int(raw.get("active_message_id")) or active_message_id
+    saved_chat_id = str(raw["chat_id"]) if raw.get("chat_id") is not None else chat_id
     choice_id = raw.get("choice_id")
     if not isinstance(choice_id, str) or choice_for_id(view, choice_id) is None:
-        choice_id = default_choice_id
+        return initial_progress(
+            view,
+            choice_id=normalized_default,
+            active_message_id=saved_message_id,
+            chat_id=saved_chat_id,
+        )
     selected = raw.get("selected_extra_ids")
     selected_ids = (
         tuple(str(item) for item in selected)
@@ -159,12 +172,9 @@ def load_progress(
     progress = GateProgress(
         choice_id=choice_id,
         selected_extra_ids=selected_ids,
-        active_message_id=_optional_int(raw.get("active_message_id"))
-        or active_message_id,
-        chat_id=(str(raw["chat_id"]) if raw.get("chat_id") is not None else chat_id),
+        active_message_id=saved_message_id,
+        chat_id=saved_chat_id,
     )
-    if choice_id is None:
-        return progress
     choice = choice_for_id(view, choice_id)
     assert choice is not None
     valid_ids = {extra.id for extra in choice.extras}

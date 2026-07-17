@@ -1110,7 +1110,11 @@ def _format_plan_approval(
         ]
         keyboard = InlineKeyboardMarkup([row1, row2])
     elif neutral_view is not None:
-        progress = load_progress(neutral_view, default_choice_id="approve")
+        default_choice_id = "approve" if neutral_view.kind == "plan" else None
+        progress = load_progress(
+            neutral_view,
+            default_choice_id=default_choice_id,
+        )
         keyboard = render_plan_gate_keyboard(prefix, neutral_view, progress)
     else:
         approval_order = ("tale", "approve", "epic")
