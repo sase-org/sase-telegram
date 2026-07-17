@@ -249,6 +249,63 @@ def test_custom_gate_formatting_uses_icons_compact_callbacks_and_fallback(
     assert fallback_keyboard is None
 
 
+@pytest.mark.parametrize(
+    ("case", "toggle_extra_indexes", "expected_extra_ids"),
+    [
+        pytest.param("none", (0,), [], id="none"),
+        pytest.param("some", (), ["audit"], id="some"),
+        pytest.param("all", (1,), ["audit", "verify"], id="all"),
+    ],
+)
+def test_custom_gate_add_on_selection_matrix_executes_through_callback_flow(
+    gate_home: Path,
+    case: str,
+    toggle_extra_indexes: tuple[int, ...],
+    expected_extra_ids: list[str],
+) -> None:
+    result = create_gate(_custom_spec(request_id=f"telegram-add-ons-{case}"))
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+    pending = {prefix: action}
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0", f"choose-{case}"), pending)
+        for extra_index in toggle_extra_indexes:
+            _handle_callback(
+                _callback(f"gate:{prefix}:x{extra_index}", f"toggle-{case}"),
+                pending,
+            )
+        _handle_callback(_callback(f"gate:{prefix}:submit", f"submit-{case}"), pending)
+
+    response = json.loads(
+        Path(notification.action_data["response_path"]).read_text(encoding="utf-8")
+    )
+    expected_results = {
+        "audit": {"status": "audited"},
+        "verify": {"status": "healthy"},
+    }
+    assert response["choice_id"] == "proceed"
+    assert response["selected_extra_ids"] == expected_extra_ids
+    assert response["source"] == "telegram"
+    assert response["extra_results"] == [
+        {
+            "id": extra_id,
+            "status": "succeeded",
+            "result": expected_results[extra_id],
+        }
+        for extra_id in expected_extra_ids
+    ]
+
+
 def test_custom_gate_toggle_submit_and_duplicate_callback(
     gate_home: Path,
 ) -> None:
