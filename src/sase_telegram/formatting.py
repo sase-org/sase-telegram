@@ -11,9 +11,17 @@ from typing import Any
 
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
+from sase.notification_gates.models import GateChoice
 from sase.notifications.models import Notification
 
 from sase_telegram import callback_data
+from sase_telegram.gate_flow import (
+    GateProgress,
+    GateView,
+    choice_for_id,
+    load_gate_view,
+    load_progress,
+)
 from sase_telegram.question_flow import (
     CUSTOM_SELECTED_LABEL,
     is_multi_select,
@@ -31,6 +39,15 @@ EXPANDABLE_THRESHOLD = 500
 
 # Max chars of prompt text to display in workflow-complete messages
 PROMPT_DISPLAY_MAX = 1000
+
+_GATE_DEFAULT_ICONS = {
+    "CustomGate": "🛡️",
+    "EpicApproval": "📋",
+    "HITL": "🔧",
+    "LaunchApproval": "🚀",
+    "PlanApproval": "📋",
+    "UserQuestion": "❓",
+}
 
 # Max chars of each output-variable value to display in workflow-complete messages
 OUTPUT_VARIABLE_VALUE_MAX = 300
@@ -875,6 +892,8 @@ def format_notification(
             return _format_hitl(notification)
         case "UserQuestion":
             return _format_user_question(notification)
+        case "CustomGate":
+            return _format_custom_gate(notification)
         case _:
             # Dispatch by sender for non-action notifications
             if notification.sender == "image":
@@ -900,6 +919,98 @@ def format_notification(
 def _notif_prefix(n: Notification) -> str:
     """First 8 chars of notification ID, used in callback data."""
     return n.id[:8]
+
+
+def _notification_gate_icon(n: Notification) -> str:
+    return n.icon or _GATE_DEFAULT_ICONS.get(n.action or "", "🔔")
+
+
+def _choice_button_text(choice: GateChoice) -> str:
+    icon = choice.icon or "•"
+    return f"{icon} {choice.label}"
+
+
+def render_custom_gate_keyboard(
+    prefix: str,
+    view: GateView,
+    progress: GateProgress | None = None,
+) -> InlineKeyboardMarkup:
+    """Render compact custom-gate callbacks backed by server-side state."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, choice in enumerate(view.choices):
+        selected = progress is not None and progress.choice_id == choice.id
+        label = _choice_button_text(choice)
+        if selected:
+            label = f"🔘 {label}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=callback_data.encode("gate", prefix, f"c{index}"),
+                )
+            ]
+        )
+
+    if progress is None or progress.choice_id is None:
+        return InlineKeyboardMarkup(rows)
+    selected_choice = choice_for_id(view, progress.choice_id)
+    if selected_choice is None:
+        return InlineKeyboardMarkup(rows)
+    selected_ids = set(progress.selected_extra_ids)
+    for index, extra in enumerate(selected_choice.extras):
+        checked = "☑️" if extra.id in selected_ids else "⬜"
+        icon = f" {extra.icon}" if extra.icon else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{checked}{icon} {extra.label}",
+                    callback_data=callback_data.encode("gate", prefix, f"x{index}"),
+                )
+            ]
+        )
+    final_row: list[InlineKeyboardButton] = []
+    if selected_choice.feedback == "optional":
+        final_row.append(
+            InlineKeyboardButton(
+                "💬 Add feedback",
+                callback_data=callback_data.encode("gate", prefix, "feedback"),
+            )
+        )
+    submit_label = (
+        "💬 Continue" if selected_choice.feedback == "required" else "✅ Submit"
+    )
+    final_row.append(
+        InlineKeyboardButton(
+            submit_label,
+            callback_data=callback_data.encode("gate", prefix, "submit"),
+        )
+    )
+    rows.append(final_row)
+    return InlineKeyboardMarkup(rows)
+
+
+def _format_custom_gate(
+    n: Notification,
+) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
+    icon = _notification_gate_icon(n)
+    sender = escape_markdown_v2(display_cl_name(n.sender))
+    header = f"{icon} *Custom Request*\n*From:* {sender}"
+    notes = _format_notes_text(n.notes)
+    text = _join_message_sections(header, notes)
+    try:
+        view = load_gate_view(n.action_data, expected_kind="custom")
+    except Exception:
+        unavailable = escape_markdown_v2(
+            "Controls unavailable: the gate request could not be read."
+        )
+        return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, list(n.files)
+    progress = load_progress(view)
+    keyboard = render_custom_gate_keyboard(
+        _notif_prefix(n),
+        view,
+        progress if progress.choice_id is not None else None,
+    )
+    return text, keyboard, list(n.files)
 
 
 def _format_plan_approval(
@@ -966,6 +1077,7 @@ def _format_plan_approval(
         )
 
     neutral_choices = _neutral_plan_choices(n)
+    neutral_view = _neutral_plan_gate_view(n)
     neutral_request = (
         bool(n.action_data.get("request_id")) or n.action == "EpicApproval"
     )
@@ -997,6 +1109,9 @@ def _format_plan_approval(
             ),
         ]
         keyboard = InlineKeyboardMarkup([row1, row2])
+    elif neutral_view is not None:
+        progress = load_progress(neutral_view, default_choice_id="approve")
+        keyboard = render_plan_gate_keyboard(prefix, neutral_view, progress)
     else:
         approval_order = ("tale", "approve", "epic")
         action_order = ("reject", "feedback")
@@ -1010,6 +1125,64 @@ def _format_plan_approval(
         ]
         keyboard = InlineKeyboardMarkup([row for row in rows if row])
     return text, keyboard, attachments
+
+
+def render_plan_gate_keyboard(
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+) -> InlineKeyboardMarkup:
+    """Render compatibility presets plus the new approval add-on toggles."""
+    by_id = {choice.id: choice for choice in view.choices}
+    rows: list[list[InlineKeyboardButton]] = []
+    for order in (("tale", "approve", "epic"), ("reject", "feedback")):
+        row = [
+            _plan_choice_button(
+                prefix,
+                choice_id,
+                by_id[choice_id].label,
+                icon=by_id[choice_id].icon,
+            )
+            for choice_id in order
+            if choice_id in by_id
+        ]
+        if row:
+            rows.append(row)
+
+    approve = by_id.get("approve")
+    if approve is None or not approve.extras:
+        return InlineKeyboardMarkup(rows)
+    selected_ids = set(progress.selected_extra_ids)
+    for index, extra in enumerate(approve.extras):
+        checked = "☑️" if extra.id in selected_ids else "⬜"
+        icon = f" {extra.icon}" if extra.icon else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{checked}{icon} {extra.label}",
+                    callback_data=callback_data.encode("plan", prefix, f"x{index}"),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "✅ Approve with selected add-ons",
+                callback_data=callback_data.encode("plan", prefix, "submit"),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _neutral_plan_gate_view(n: Notification) -> GateView | None:
+    if not n.action_data.get("bundle_path"):
+        return None
+    expected_kind = "epic_plan" if n.action == "EpicApproval" else "plan"
+    try:
+        return load_gate_view(n.action_data, expected_kind=expected_kind)
+    except Exception:
+        return None
 
 
 def _neutral_plan_choices(n: Notification) -> dict[str, str] | None:
@@ -1047,7 +1220,11 @@ def _neutral_plan_choices(n: Notification) -> dict[str, str] | None:
 
 
 def _plan_choice_button(
-    prefix: str, choice_id: str, label: str
+    prefix: str,
+    choice_id: str,
+    label: str,
+    *,
+    icon: str | None = None,
 ) -> InlineKeyboardButton:
     icons = {
         "approve": "✅",
@@ -1057,7 +1234,7 @@ def _plan_choice_button(
         "feedback": "💬",
     }
     return InlineKeyboardButton(
-        f"{icons.get(choice_id, '•')} {label}",
+        f"{icon or icons.get(choice_id, '•')} {label}",
         callback_data=callback_data.encode("plan", prefix, choice_id),
     )
 
@@ -1138,7 +1315,26 @@ def _format_launch_approval(
 def _format_hitl(n: Notification) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     prefix = _notif_prefix(n)
     notes_text = _format_notes_text(n.notes)
-    text = f"🔧 *HITL Request*\n\n{notes_text}"
+    text = f"{_notification_gate_icon(n)} *HITL Request*\n\n{notes_text}"
+
+    if n.action_data.get("request_kind") == "hitl" and n.action_data.get("bundle_path"):
+        try:
+            view = load_gate_view(n.action_data, expected_kind="hitl")
+        except Exception:
+            unavailable = escape_markdown_v2(
+                "Controls unavailable: the HITL request could not be read."
+            )
+            return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, []
+        rows = [
+            [
+                InlineKeyboardButton(
+                    _choice_button_text(choice),
+                    callback_data=callback_data.encode("hitl", prefix, f"c{index}"),
+                )
+            ]
+            for index, choice in enumerate(view.choices)
+        ]
+        return text, InlineKeyboardMarkup(rows), []
 
     keyboard = InlineKeyboardMarkup(
         [

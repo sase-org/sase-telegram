@@ -39,6 +39,7 @@ from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 from sase.launch_approval_actions import LaunchApprovalActionError
 from sase.plan_approval_actions import PlanApprovalActionError
 from sase.user_question_actions import UserQuestionActionError
+from sase.notification_gates.models import GateError
 from sase_telegram.formatting import (
     build_fork_copy_text,
     display_cl_name,
@@ -49,7 +50,21 @@ from sase_telegram.formatting import (
     format_answered_question,
     format_questions_complete,
     markdown_to_telegram_v2,
+    render_custom_gate_keyboard,
+    render_plan_gate_keyboard,
     render_question_message,
+)
+from sase_telegram.gate_flow import (
+    GateProgress,
+    GateView,
+    choice_for_id,
+    choice_for_token,
+    clear_progress as clear_gate_progress,
+    load_gate_view,
+    load_progress as load_gate_progress,
+    save_progress as save_gate_progress,
+    select_choice,
+    toggle_extra,
 )
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -70,6 +85,7 @@ from sase_telegram.inbound import (
     process_text_message,
     reconstruct_code_markers,
     resolve_launch_response,
+    resolve_gate_response,
     resolve_plan_response,
     resolve_user_question_response,
     save_awaiting_feedback,
@@ -824,6 +840,12 @@ def _resolve_response(
         return resolve_launch_response(response, action)
     if response.action_type == "question":
         return resolve_user_question_response(response, action)
+    if response.action_type == "custom":
+        return resolve_gate_response(response, action)
+    if response.action_type == "hitl":
+        action_data = action.get("action_data") if isinstance(action, dict) else None
+        if isinstance(action_data, dict) and action_data.get("request_kind") == "hitl":
+            return resolve_gate_response(response, action)
     _write_response(response)
     return response.answer_text
 
@@ -1359,6 +1381,359 @@ def _shared_action_resolution(prefix: str) -> str | None:
     return None
 
 
+def _gate_error_answer_text(exc: GateError) -> str:
+    if exc.code in {"already_answered", "gate_cancelled", "not_found"}:
+        return _STALE_AWAITING_FEEDBACK_TEXT
+    if exc.code in {"invalid_request", "missing_gate", "stale", "expired"}:
+        return "This request has expired"
+    return f"Gate response failed: {exc}"
+
+
+def _dismiss_gate_callback(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+) -> None:
+    message_id = _action_message_id(action)
+    chat_id = _callback_chat_id(callback_query, action)
+    if message_id is not None and chat_id is not None:
+        try:
+            telegram_client.edit_message_reply_markup(
+                chat_id, message_id, reply_markup=None
+            )
+        except Exception:
+            log.warning("Failed to dismiss gate keyboard", exc_info=True)
+    pending_actions.remove(prefix)
+    clear_awaiting_feedback_by_prefix(prefix)
+
+
+def _execute_gate_callback_response(
+    callback_query: Any,
+    action: dict[str, Any],
+    response: ResponseAction,
+    view: GateView,
+) -> None:
+    try:
+        message = _resolve_response(response, action)
+    except GateError as exc:
+        _answer_callback(callback_query, _gate_error_answer_text(exc))
+        if exc.code in {"already_answered", "gate_cancelled", "not_found"}:
+            _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
+            clear_gate_progress(view)
+        return
+    _answer_callback(callback_query, message or "Gate answered")
+    _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
+    clear_gate_progress(view)
+
+
+def _begin_gate_feedback(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+    *,
+    action_type: str,
+    input_data: object,
+    prompt: str,
+) -> None:
+    if progress.choice_id is None:
+        _answer_callback(callback_query, "Choose an action first")
+        return
+    save_gate_progress(view, progress)
+    key = (
+        str(progress.active_message_id)
+        if progress.active_message_id is not None
+        else prefix
+    )
+    save_awaiting_feedback(
+        key,
+        prefix,
+        {
+            "action_type": action_type,
+            "bundle_path": str(view.bundle_path),
+            "choice_id": progress.choice_id,
+            "selected_extra_ids": list(progress.selected_extra_ids),
+            "input_data": input_data,
+        },
+    )
+    _answer_callback(callback_query, prompt)
+    message_id = _action_message_id(action)
+    chat_id = _callback_chat_id(callback_query, action)
+    if message_id is not None and chat_id is not None:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=None
+        )
+
+
+def _handle_custom_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
+    cb = decode(callback_query.data)
+    action = pending.get(cb.notif_id_prefix)
+    if action is None or action.get("action") != "CustomGate":
+        _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
+        return
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        _answer_callback(callback_query, "This request has expired")
+        return
+    try:
+        view = load_gate_view(action_data, expected_kind="custom")
+    except GateError as exc:
+        _answer_callback(callback_query, _gate_error_answer_text(exc))
+        _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
+        return
+
+    message_id = _callback_origin_message_id(callback_query, action)
+    chat_id = _callback_chat_id(callback_query, action)
+    progress = load_gate_progress(
+        view,
+        active_message_id=message_id,
+        chat_id=chat_id,
+    )
+    if cb.choice.startswith("c"):
+        choice = choice_for_token(view, cb.choice)
+        if choice is None:
+            _answer_callback(callback_query, "Invalid gate choice")
+            return
+        progress = select_choice(view, progress, choice.id)
+        if choice.feedback == "required" and not choice.extras:
+            _begin_gate_feedback(
+                callback_query,
+                action,
+                cb.notif_id_prefix,
+                view,
+                progress,
+                action_type="custom",
+                input_data={},
+                prompt="Send the required feedback as a text message",
+            )
+            return
+        if choice.extras or choice.feedback == "optional":
+            save_gate_progress(view, progress)
+            if message_id is not None and chat_id is not None:
+                telegram_client.edit_message_reply_markup(
+                    chat_id,
+                    message_id,
+                    reply_markup=render_custom_gate_keyboard(
+                        cb.notif_id_prefix, view, progress
+                    ),
+                )
+            _answer_callback(callback_query, f"Selected {choice.label}")
+            return
+        response = ResponseAction(
+            action_type="custom",
+            notif_id_prefix=cb.notif_id_prefix,
+            response_path=view.bundle_path / "response.json",
+            response_data={},
+            answer_text=None,
+            choice_id=choice.id,
+            input_data={},
+        )
+        _execute_gate_callback_response(callback_query, action, response, view)
+        return
+
+    if cb.choice.startswith("x"):
+        try:
+            progress, enabled = toggle_extra(view, progress, cb.choice)
+        except ValueError as exc:
+            _answer_callback(callback_query, str(exc))
+            return
+        save_gate_progress(view, progress)
+        if message_id is not None and chat_id is not None:
+            telegram_client.edit_message_reply_markup(
+                chat_id,
+                message_id,
+                reply_markup=render_custom_gate_keyboard(
+                    cb.notif_id_prefix, view, progress
+                ),
+            )
+        _answer_callback(
+            callback_query, "Add-on selected" if enabled else "Add-on cleared"
+        )
+        return
+
+    choice = (
+        choice_for_id(view, progress.choice_id)
+        if progress.choice_id is not None
+        else None
+    )
+    if choice is None:
+        _answer_callback(callback_query, "Choose an action first")
+        return
+    if cb.choice == "feedback":
+        if choice.feedback != "optional":
+            _answer_callback(callback_query, "Feedback is not optional for this choice")
+            return
+        _begin_gate_feedback(
+            callback_query,
+            action,
+            cb.notif_id_prefix,
+            view,
+            progress,
+            action_type="custom",
+            input_data={},
+            prompt="Send your feedback as a text message",
+        )
+        return
+    if cb.choice != "submit":
+        _answer_callback(callback_query, "Invalid gate callback")
+        return
+    if choice.feedback == "required":
+        _begin_gate_feedback(
+            callback_query,
+            action,
+            cb.notif_id_prefix,
+            view,
+            progress,
+            action_type="custom",
+            input_data={},
+            prompt="Send the required feedback as a text message",
+        )
+        return
+    response = ResponseAction(
+        action_type="custom",
+        notif_id_prefix=cb.notif_id_prefix,
+        response_path=view.bundle_path / "response.json",
+        response_data={},
+        answer_text=None,
+        choice_id=choice.id,
+        selected_extra_ids=progress.selected_extra_ids,
+        input_data={},
+    )
+    _execute_gate_callback_response(callback_query, action, response, view)
+
+
+def _handle_plan_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
+    cb = decode(callback_query.data)
+    action = pending.get(cb.notif_id_prefix)
+    if action is None:
+        _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
+        return
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        _answer_callback(callback_query, "This request has expired")
+        return
+    try:
+        view = load_gate_view(action_data, expected_kind="plan")
+    except GateError as exc:
+        _answer_callback(callback_query, _gate_error_answer_text(exc))
+        return
+    message_id = _callback_origin_message_id(callback_query, action)
+    chat_id = _callback_chat_id(callback_query, action)
+    progress = load_gate_progress(
+        view,
+        default_choice_id="approve",
+        active_message_id=message_id,
+        chat_id=chat_id,
+    )
+    if cb.choice.startswith("x"):
+        try:
+            progress, enabled = toggle_extra(view, progress, cb.choice)
+        except ValueError as exc:
+            _answer_callback(callback_query, str(exc))
+            return
+        save_gate_progress(view, progress)
+        if message_id is not None and chat_id is not None:
+            telegram_client.edit_message_reply_markup(
+                chat_id,
+                message_id,
+                reply_markup=render_plan_gate_keyboard(
+                    cb.notif_id_prefix, view, progress
+                ),
+            )
+        _answer_callback(
+            callback_query, "Add-on selected" if enabled else "Add-on cleared"
+        )
+        return
+    if cb.choice != "submit":
+        _answer_callback(callback_query, "Invalid plan callback")
+        return
+    from sase.plan_gate import PLAN_COMMIT_EXTRA_ID, PLAN_RUN_CODER_EXTRA_ID
+
+    selected = set(progress.selected_extra_ids)
+    response = ResponseAction(
+        action_type="plan",
+        notif_id_prefix=cb.notif_id_prefix,
+        response_path=view.bundle_path / "response.json",
+        response_data={
+            "action": "approve",
+            "commit_plan": PLAN_COMMIT_EXTRA_ID in selected,
+            "run_coder": PLAN_RUN_CODER_EXTRA_ID in selected,
+        },
+        answer_text="Plan approved",
+        choice_id="approve",
+    )
+    try:
+        answer_text = _resolve_response(response, action)
+    except PlanApprovalActionError as exc:
+        _answer_callback(callback_query, _launch_error_answer_text(exc))
+        if exc.code == "conflict_already_handled":
+            _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
+            clear_gate_progress(view)
+        return
+    _answer_callback(callback_query, answer_text)
+    _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
+    clear_gate_progress(view)
+    _send_plan_confirmation(action, "approve")
+
+
+def _neutral_hitl_input(choice_id: str) -> dict[str, object]:
+    approved_ids = {"accept", "approve", "approved", "yes"}
+    return {"action": choice_id, "approved": choice_id in approved_ids}
+
+
+def _handle_neutral_hitl_callback(callback_query: Any, pending: dict[str, Any]) -> None:
+    cb = decode(callback_query.data)
+    action = pending.get(cb.notif_id_prefix)
+    if action is None:
+        _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
+        return
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        _answer_callback(callback_query, "This request has expired")
+        return
+    try:
+        view = load_gate_view(action_data, expected_kind="hitl")
+    except GateError as exc:
+        _answer_callback(callback_query, _gate_error_answer_text(exc))
+        return
+    choice = choice_for_token(view, cb.choice)
+    if choice is None:
+        _answer_callback(callback_query, "Invalid HITL choice")
+        return
+    message_id = _callback_origin_message_id(callback_query, action)
+    chat_id = _callback_chat_id(callback_query, action)
+    progress = select_choice(
+        view,
+        GateProgress(active_message_id=message_id, chat_id=chat_id),
+        choice.id,
+    )
+    input_data = _neutral_hitl_input(choice.id)
+    if choice.feedback == "required" or choice.id == "feedback":
+        _begin_gate_feedback(
+            callback_query,
+            action,
+            cb.notif_id_prefix,
+            view,
+            progress,
+            action_type="neutral_hitl",
+            input_data=input_data,
+            prompt="Send your feedback as a text message",
+        )
+        return
+    response = ResponseAction(
+        action_type="hitl",
+        notif_id_prefix=cb.notif_id_prefix,
+        response_path=view.bundle_path / "response.json",
+        response_data={},
+        answer_text=None,
+        choice_id=choice.id,
+        selected_extra_ids=progress.selected_extra_ids,
+        input_data=input_data,
+    )
+    _execute_gate_callback_response(callback_query, action, response, view)
+
+
 def _resolve_callback_already_handled(
     data_str: str, pending: dict[str, Any]
 ) -> tuple[str, dict[str, Any], str] | None:
@@ -1372,7 +1747,7 @@ def _resolve_callback_already_handled(
         cb = decode(data_str)
     except ValueError:
         return None
-    if cb.action_type not in {"plan", "hitl", "launch", "question"}:
+    if cb.action_type not in {"gate", "plan", "hitl", "launch", "question"}:
         return None
     action = pending.get(cb.notif_id_prefix)
     if action is None:
@@ -1447,9 +1822,27 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         return
 
     try:
-        if decode(data_str).action_type == "question":
+        decoded = decode(data_str)
+        if decoded.action_type == "question":
             _handle_question_callback(callback_query, pending)
             return
+        if decoded.action_type == "gate":
+            _handle_custom_gate_callback(callback_query, pending)
+            return
+        if decoded.action_type == "plan" and (
+            decoded.choice == "submit" or decoded.choice.startswith("x")
+        ):
+            _handle_plan_gate_callback(callback_query, pending)
+            return
+        if decoded.action_type == "hitl" and decoded.choice.startswith("c"):
+            action = pending.get(decoded.notif_id_prefix)
+            action_data = action.get("action_data") if action else None
+            if (
+                isinstance(action_data, dict)
+                and action_data.get("request_kind") == "hitl"
+            ):
+                _handle_neutral_hitl_callback(callback_query, pending)
+                return
     except ValueError:
         pass
 
@@ -3812,21 +4205,37 @@ def _handle_text_message(
         action = pending_actions.get(response.notif_id_prefix)
         try:
             _resolve_response(response, action)
-        except (LaunchApprovalActionError, PlanApprovalActionError) as exc:
+        except (GateError, LaunchApprovalActionError, PlanApprovalActionError) as exc:
             chat_id = _message_chat_id(message) or _configured_chat_id()
             if chat_id is not None:
+                error_text = (
+                    _gate_error_answer_text(exc)
+                    if isinstance(exc, GateError)
+                    else _launch_error_answer_text(exc)
+                )
                 telegram_client.send_message(
                     chat_id,
-                    _launch_error_answer_text(exc),
+                    error_text,
                     reply_to_message_id=message.message_id,
                 )
-            pending_actions.remove(response.notif_id_prefix)
-            _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
+            if not isinstance(exc, GateError) or exc.code in {
+                "already_answered",
+                "gate_cancelled",
+                "not_found",
+            }:
+                pending_actions.remove(response.notif_id_prefix)
+                _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
             return
         # Clear only the matched awaiting entry — leaves other concurrent
         # flows intact.
         _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
         pending_actions.remove(response.notif_id_prefix)
+        action_data = action.get("action_data") if isinstance(action, dict) else None
+        if isinstance(action_data, dict) and action_data.get("bundle_path"):
+            try:
+                clear_gate_progress(load_gate_view(action_data))
+            except GateError:
+                pass
         _send_confirmation(response, message.message_id)
         return
 

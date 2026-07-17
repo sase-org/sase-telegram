@@ -29,6 +29,7 @@ _DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
 # Actions that should be tracked as pending (user needs to respond)
 _ACTIONABLE_ACTIONS = {
+    "CustomGate",
     "PlanApproval",
     "EpicApproval",
     "HITL",

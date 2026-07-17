@@ -120,6 +120,9 @@ class ResponseAction:
     response_data: dict[str, Any]  # JSON content
     answer_text: str | None  # Text for answer_callback_query popup
     choice_id: str | None = None  # Envelope choice, separate from legacy JSON
+    selected_extra_ids: tuple[str, ...] = ()
+    feedback: str | None = None
+    input_data: object | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +537,77 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
     if info["action_type"] == "question":
         return None
 
+    if info["action_type"] in {"custom", "neutral_hitl"}:
+        raw_extra_ids = info.get("selected_extra_ids", [])
+        extra_ids = (
+            tuple(str(item) for item in raw_extra_ids)
+            if isinstance(raw_extra_ids, list)
+            and all(isinstance(item, str) for item in raw_extra_ids)
+            else ()
+        )
+        choice_id = info.get("choice_id")
+        if not isinstance(choice_id, str) or not choice_id:
+            return None
+        action_type = "custom" if info["action_type"] == "custom" else "hitl"
+        return ResponseAction(
+            action_type=action_type,
+            notif_id_prefix=prefix,
+            response_path=Path(info["bundle_path"]) / "response.json",
+            response_data={},
+            answer_text=None,
+            choice_id=choice_id,
+            selected_extra_ids=extra_ids,
+            feedback=text,
+            input_data=info.get("input_data", {}),
+        )
+
     return None
+
+
+def resolve_gate_response(
+    response: ResponseAction,
+    action: dict[str, Any] | None,
+) -> str:
+    """Resolve a neutral custom/HITL gate through the shared host executor."""
+    from sase.notification_gates.executor import execute_gate_choice
+    from sase.notification_gates.models import GateError
+    from sase.notification_gates.paths import resolve_action_bundle
+
+    if action is None:
+        raise GateError(
+            "not_found", response.notif_id_prefix, "pending gate action is missing"
+        )
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        raise GateError("invalid_request", "action_data", "gate action data is missing")
+    action_name = "CustomGate" if response.action_type == "custom" else "HITL"
+    bundle = resolve_action_bundle(action_name, action_data)
+    if bundle is None or bundle.legacy or not bundle.request.is_file():
+        raise GateError(
+            "invalid_request", "bundle_path", "neutral gate bundle is missing"
+        )
+    if not response.choice_id:
+        raise GateError("invalid_request", "choice_id", "gate choice is missing")
+    execution = execute_gate_choice(
+        bundle.root,
+        response.choice_id,
+        {} if response.input_data is None else response.input_data,
+        selected_extra_ids=response.selected_extra_ids,
+        feedback=response.feedback,
+        source="telegram",
+    )
+    if execution.already_completed:
+        raise GateError(
+            "already_answered", response.notif_id_prefix, "gate is already answered"
+        )
+    failures = [
+        result
+        for result in execution.response.get("extra_results", [])
+        if isinstance(result, dict) and result.get("status") == "failed"
+    ]
+    if failures:
+        return f"Gate answered; {len(failures)} add-on command(s) failed"
+    return f"Gate answered with {response.choice_id}"
 
 
 def resolve_launch_response(
@@ -697,6 +770,8 @@ def confirmation_text(response: ResponseAction) -> str:
         return "\u2705 Feedback received \u2014 launch rejected"
     if response.action_type == "question":
         return "\u2705 Answer received"
+    if response.action_type == "custom":
+        return "\u2705 Gate response received"
     return "\u2705 Response received"
 
 
@@ -715,12 +790,30 @@ def make_image_filename(file_id: str) -> str:
 
 
 _ACTIONABLE_ACTIONS = {
+    "CustomGate",
     "PlanApproval",
     "EpicApproval",
     "HITL",
     "LaunchApproval",
     "UserQuestion",
 }
+
+
+def _neutral_gate_handled(action_data: dict[str, Any]) -> bool:
+    response_value = action_data.get("response_path")
+    if isinstance(response_value, str) and response_value:
+        if Path(response_value).exists():
+            return True
+    bundle_value = action_data.get("bundle_path")
+    if isinstance(bundle_value, str) and bundle_value:
+        if (Path(bundle_value) / "cancellation.json").exists():
+            return True
+    request_value = action_data.get("request_path")
+    return (
+        isinstance(request_value, str)
+        and bool(request_value)
+        and not Path(request_value).exists()
+    )
 
 
 def find_externally_handled(
@@ -755,6 +848,10 @@ def find_externally_handled(
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 
         elif action == "HITL":
+            if action_data.get("request_kind") == "hitl":
+                if _neutral_gate_handled(action_data):
+                    handled.append((prefix, entry["message_id"], entry["chat_id"]))
+                continue
             artifacts_dir = Path(action_data.get("artifacts_dir", ""))
             if (artifacts_dir / "hitl_response.json").exists():
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
@@ -792,6 +889,10 @@ def find_externally_handled(
                 or cancellation_path.exists()
                 or (response_dir != Path("") and not request_path.exists())
             ):
+                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+
+        elif action == "CustomGate":
+            if _neutral_gate_handled(action_data):
                 handled.append((prefix, entry["message_id"], entry["chat_id"]))
 
     return handled
