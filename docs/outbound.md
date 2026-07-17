@@ -85,4 +85,6 @@ The visible plan **✅ Approve** button maps to the internal `run` payload for c
 - **Digest files**: Error digest files are sent as document attachments
 - **Media and PDFs**: Static images are sent inline as photos, GIFs as animations, videos as videos, and existing PDFs
   as documents without conversion. If Telegram rejects a GIF or video as inline media, outbound retries that file as a
-  document.
+  document. Workflow completions send one motion-media representation for files with the same normalized directory and
+  filename stem, preferring GIF, MP4, M4V, MOV, then WEBM. Other artifacts remain separate, and every discovered file
+  remains available in the underlying SASE notification and artifact inventory.

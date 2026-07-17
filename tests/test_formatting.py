@@ -1323,6 +1323,113 @@ class TestFormatWorkflowComplete:
         Path(gif_file).unlink()
         Path(mp4_file).unlink()
 
+    def test_coalesces_motion_media_variants_at_the_groups_original_position(
+        self, tmp_path: Path
+    ):
+        first_mp4 = tmp_path / "first.mp4"
+        marker = tmp_path / "notes.txt"
+        first_gif = tmp_path / "first.gif"
+        second_gif = tmp_path / "second.gif"
+        second_mp4 = tmp_path / "second.mp4"
+        for path in (first_mp4, marker, first_gif, second_gif, second_mp4):
+            path.touch()
+
+        n = _make_notification(
+            sender="user-agent",
+            files=[
+                str(p) for p in (first_mp4, marker, first_gif, second_gif, second_mp4)
+            ],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(first_gif), str(marker), str(second_gif)]
+
+    def test_retains_video_only_and_distinct_stem_media_in_order(self, tmp_path: Path):
+        video_only = tmp_path / "video-only.mov"
+        animation = tmp_path / "animation.gif"
+        different_video = tmp_path / "different.mp4"
+        for path in (video_only, animation, different_video):
+            path.touch()
+
+        n = _make_notification(
+            sender="user-agent",
+            files=[str(p) for p in (video_only, animation, different_video)],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(video_only), str(animation), str(different_video)]
+
+    def test_retains_same_stem_motion_media_in_different_directories(
+        self, tmp_path: Path
+    ):
+        first_dir = tmp_path / "first"
+        second_dir = tmp_path / "second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        animation = first_dir / "demo.gif"
+        video = second_dir / "demo.mp4"
+        animation.touch()
+        video.touch()
+
+        n = _make_notification(
+            sender="user-agent",
+            files=[str(animation), str(video)],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(animation), str(video)]
+
+    def test_retains_static_image_beside_preferred_same_stem_animation(
+        self, tmp_path: Path
+    ):
+        poster = tmp_path / "demo.png"
+        video = tmp_path / "demo.mp4"
+        animation = tmp_path / "demo.gif"
+        for path in (poster, video, animation):
+            path.touch()
+
+        n = _make_notification(
+            sender="user-agent",
+            files=[str(poster), str(video), str(animation)],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(poster), str(animation)]
+
+    def test_motion_media_priority_is_case_insensitive_and_deterministic(
+        self, tmp_path: Path
+    ):
+        clip_webm = tmp_path / "clip.WEBM"
+        clip_mov = tmp_path / "clip.MOV"
+        clip_m4v = tmp_path / "clip.M4V"
+        clip_mp4 = tmp_path / "clip.MP4"
+        demo_webm = tmp_path / "demo.WEBM"
+        demo_gif = tmp_path / "demo.GIF"
+        for path in (
+            clip_webm,
+            clip_mov,
+            clip_m4v,
+            clip_mp4,
+            demo_webm,
+            demo_gif,
+        ):
+            path.touch()
+
+        n = _make_notification(
+            sender="user-agent",
+            files=[
+                str(clip_webm),
+                str(demo_webm),
+                str(clip_mov),
+                str(clip_m4v),
+                str(clip_mp4),
+                str(demo_gif),
+            ],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(clip_mp4), str(demo_gif)]
+
 
 class TestFormatErrorDigest:
     def test_with_digest_file(self):
@@ -1375,6 +1482,20 @@ class TestFormatImage:
         assert image_file in attachments
 
         Path(image_file).unlink()
+
+    def test_preserves_explicit_same_stem_motion_media_variants(self, tmp_path: Path):
+        animation = tmp_path / "generated.gif"
+        video = tmp_path / "generated.mp4"
+        animation.touch()
+        video.touch()
+
+        n = _make_notification(
+            sender="image",
+            files=[str(animation), str(video)],
+        )
+        _text, _keyboard, attachments = format_notification(n)
+
+        assert attachments == [str(animation), str(video)]
 
 
 class TestFormatGeneric:

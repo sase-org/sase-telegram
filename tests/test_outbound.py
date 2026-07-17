@@ -463,6 +463,60 @@ class TestRunOutboundAttachments:
 
         Path(gif_path).unlink()
 
+    def test_workflow_complete_sends_one_animation_for_each_media_pair(
+        self, tmp_path: Path
+    ):
+        animation_paths = [tmp_path / f"demo-{index}.gif" for index in range(5)]
+        video_paths = [tmp_path / f"demo-{index}.mp4" for index in range(5)]
+        for path in animation_paths + video_paths:
+            path.touch()
+
+        notification = Notification(
+            id="pair0000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: media-pairs"],
+            files=[str(p) for p in animation_paths + video_paths],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_animation"
+            ) as send_animation,
+            patch("sase_telegram.scripts.sase_tg_outbound.send_video") as send_video,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        assert [call.args for call in send_animation.call_args_list] == [
+            ("chat-1", str(path)) for path in animation_paths
+        ]
+        send_video.assert_not_called()
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+
     def test_workflow_complete_video_sends_video_not_document(self):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as video:
             video.write(b"\x00\x00\x00\x18ftypmp42")
@@ -510,17 +564,18 @@ class TestRunOutboundAttachments:
 
         Path(video_path).unlink()
 
-    def test_workflow_complete_media_failure_falls_back_to_document(self):
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as video:
-            video.write(b"webm")
-            video_path = video.name
+    def test_selected_media_failure_falls_back_to_document(self, tmp_path: Path):
+        video_path = tmp_path / "fallback-update.webm"
+        animation_path = tmp_path / "fallback-update.gif"
+        video_path.touch()
+        animation_path.touch()
 
         notification = Notification(
             id="fbk00000-0000-0000-0000-000000000000",
             timestamp=datetime.now(UTC).isoformat(),
             sender="user-agent",
             notes=["Agent completed: fallback-update"],
-            files=[video_path],
+            files=[str(video_path), str(animation_path)],
         )
 
         with (
@@ -543,9 +598,10 @@ class TestRunOutboundAttachments:
                 return_value=SimpleNamespace(message_id=123),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_outbound.send_video",
+                "sase_telegram.scripts.sase_tg_outbound.send_animation",
                 side_effect=RuntimeError("unsupported codec"),
-            ) as send_video,
+            ) as send_animation,
+            patch("sase_telegram.scripts.sase_tg_outbound.send_video") as send_video,
             patch(
                 "sase_telegram.scripts.sase_tg_outbound.send_document"
             ) as send_document,
@@ -554,11 +610,10 @@ class TestRunOutboundAttachments:
             result = _run_outbound(argparse.Namespace(dry_run=False))
 
         assert result == 0
-        send_video.assert_called_once_with("chat-1", video_path)
-        send_document.assert_called_once_with("chat-1", video_path)
+        send_animation.assert_called_once_with("chat-1", str(animation_path))
+        send_video.assert_not_called()
+        send_document.assert_called_once_with("chat-1", str(animation_path))
         md_to_pdf.assert_not_called()
-
-        Path(video_path).unlink()
 
     def test_mixed_chat_diff_pdf_and_image_sends_expected_attachments(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -40,6 +40,16 @@ EXPANDABLE_THRESHOLD = 500
 # Max chars of prompt text to display in workflow-complete messages
 PROMPT_DISPLAY_MAX = 1000
 
+# Workflow completions send one representative for alternate encodings of the
+# same motion-media artifact. Lower values are preferred.
+_MOTION_MEDIA_EXTENSION_PRIORITY = {
+    ".gif": 0,
+    ".mp4": 1,
+    ".m4v": 2,
+    ".mov": 3,
+    ".webm": 4,
+}
+
 _GATE_DEFAULT_ICONS = {
     "CustomGate": "🛡️",
     "EpicApproval": "📋",
@@ -1597,6 +1607,43 @@ def _format_output_variables_section(action_data: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _select_workflow_complete_attachments(attachments: Sequence[str]) -> list[str]:
+    """Coalesce alternate motion-media encodings while preserving group order.
+
+    A logical group is identified by its normalized parent directory and exact
+    filename stem. Representatives are preferred in this deterministic order:
+    GIF, MP4, M4V, MOV, then WEBM. Static images and all other file types remain
+    independent attachments.
+    """
+    selected_by_group: dict[tuple[Path, str], tuple[int, str]] = {}
+
+    def group_key(file_path: str) -> tuple[Path, str] | None:
+        path = Path(file_path)
+        if path.suffix.lower() not in _MOTION_MEDIA_EXTENSION_PRIORITY:
+            return None
+        return path.parent.resolve(strict=False), path.stem
+
+    for file_path in attachments:
+        key = group_key(file_path)
+        if key is None:
+            continue
+        priority = _MOTION_MEDIA_EXTENSION_PRIORITY[Path(file_path).suffix.lower()]
+        current = selected_by_group.get(key)
+        if current is None or priority < current[0]:
+            selected_by_group[key] = (priority, file_path)
+
+    selected: list[str] = []
+    emitted_groups: set[tuple[Path, str]] = set()
+    for file_path in attachments:
+        key = group_key(file_path)
+        if key is None:
+            selected.append(file_path)
+        elif key not in emitted_groups:
+            selected.append(selected_by_group[key][1])
+            emitted_groups.add(key)
+    return selected
+
+
 def _format_workflow_complete(
     n: Notification,
     *,
@@ -1657,7 +1704,10 @@ def _format_workflow_complete(
         )
         text += f"\n\n📝 *Prompt:*\n{escape_markdown_v2(truncated)}"
 
-    attachments = [str(p) for f in n.files if (p := Path(f).expanduser()).exists()]
+    existing_attachments = [
+        str(p) for f in n.files if (p := Path(f).expanduser()).exists()
+    ]
+    attachments = _select_workflow_complete_attachments(existing_attachments)
 
     keyboard: InlineKeyboardMarkup | None = None
     raw_prompt = n.action_data.get("prompt")

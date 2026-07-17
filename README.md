@@ -85,7 +85,8 @@ Installing sase-telegram adds the following commands:
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — built-in agent-management commands plus user-defined commands from `telegram.commands`, all registered with `set_my_commands` so they show up in the chat input UI
 - **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
-  matching Telegram send method, with GIF/video document fallback
+  matching Telegram send method, with GIF/video document fallback and one preferred motion-media representation per
+  same-directory filename stem
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — keeps short plan properties open, makes metadata-heavy property cards expandable, and truncates oversized property values/body previews with an attachment fallback
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -162,8 +163,10 @@ the Markdown body. Nested lists and mappings use indented multiline rows; long c
 large values/body previews are truncated with a clear pointer to the complete plan attachment. Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
 PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
-and videos retry as documents if Telegram rejects inline media delivery. Actionable notifications (plan approvals, HITL
-requests, user questions) are saved as pending actions for the inbound script to match against.
+and videos retry as documents if Telegram rejects inline media delivery. Workflow completions coalesce same-stem motion
+media variants in one directory for delivery while retaining the complete underlying SASE artifact inventory.
+Actionable notifications (plan approvals, HITL requests, user questions) are saved as pending actions for the inbound
+script to match against.
 
 ### Inbound
 
