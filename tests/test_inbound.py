@@ -9,14 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sase.agent.launcher import AgentLaunchResult
-from sase.launch_approval_actions import LaunchApprovalActionError
 
 from sase_telegram.inbound import (
     build_image_prompt,
     build_photo_prompt,
     clear_awaiting_feedback,
     clear_awaiting_feedback_by_prefix,
-    confirmation_text,
     find_externally_handled,
     find_shared_handled_transports,
     get_last_offset,
@@ -24,12 +22,8 @@ from sase_telegram.inbound import (
     load_awaiting_feedback,
     make_image_filename,
     normalize_launch_xprompt_at_refs,
-    process_callback,
-    process_callback_twostep,
     process_text_message,
     reconstruct_code_markers,
-    resolve_launch_response,
-    resolve_plan_response,
     save_awaiting_feedback,
     save_offset,
 )
@@ -115,6 +109,29 @@ def _make_pending_launch(prefix: str, response_dir: str) -> dict:
     }
 
 
+def _make_pending_gate(
+    prefix: str,
+    bundle: Path,
+    *,
+    request_path: Path | None = None,
+    response_path: Path | None = None,
+) -> dict:
+    action_data = {"bundle_path": str(bundle)}
+    if request_path is not None:
+        action_data["request_path"] = str(request_path)
+    if response_path is not None:
+        action_data["response_path"] = str(response_path)
+    return {
+        prefix: {
+            "notification_id": prefix + "00000000-0000-0000-0000-000000000000",
+            "action": "CustomGate",
+            "action_data": action_data,
+            "message_id": 42,
+            "chat_id": "12345",
+        }
+    }
+
+
 class TestOffsetPersistence:
     def setup_method(self) -> None:
         _cleanup()
@@ -142,181 +159,6 @@ class TestOffsetPersistence:
         assert get_last_offset() == 200
 
 
-class TestProcessCallbackPlan:
-    def test_approve(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:approve", pending)
-        assert result is not None
-        assert result.action_type == "plan"
-        assert result.response_data == {"action": "approve"}
-        assert result.response_path == tmp_path / "plan_response.json"
-
-    def test_reject(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:reject", pending)
-        assert result is not None
-        assert result.response_data == {"action": "reject"}
-
-    def test_run(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:run", pending)
-        assert result is not None
-        assert result.action_type == "plan"
-        assert result.response_data == {
-            "action": "approve",
-            "commit_plan": False,
-            "run_coder": True,
-        }
-        assert result.answer_text == "Running coder (no commit)"
-        assert result.response_path == tmp_path / "plan_response.json"
-
-    def test_epic(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:epic", pending)
-        assert result is not None
-        assert result.response_data == {"action": "epic"}
-        assert result.answer_text == "Epic created"
-
-    def test_legend_is_unsupported(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        pending = _make_pending_plan("abcd1234", response_dir)
-        result = process_callback("plan:abcd1234:legend", pending)
-        assert result is None
-        assert not (tmp_path / "plan_response.json").exists()
-
-    def test_unknown_pending(self) -> None:
-        result = process_callback("plan:unknown1:approve", {})
-        assert result is None
-
-
-class TestProcessCallbackHITL:
-    def test_accept(self, tmp_path: Path) -> None:
-        pending = _make_pending_hitl("hitl0001", str(tmp_path))
-        result = process_callback("hitl:hitl0001:accept", pending)
-        assert result is not None
-        assert result.response_data == {"action": "accept", "approved": True}
-        assert result.response_path == tmp_path / "hitl_response.json"
-
-    def test_reject(self, tmp_path: Path) -> None:
-        pending = _make_pending_hitl("hitl0001", str(tmp_path))
-        result = process_callback("hitl:hitl0001:reject", pending)
-        assert result is not None
-        assert result.response_data == {"action": "reject", "approved": False}
-
-    def test_feedback_returns_none(self, tmp_path: Path) -> None:
-        pending = _make_pending_hitl("hitl0001", str(tmp_path))
-        result = process_callback("hitl:hitl0001:feedback", pending)
-        assert result is None
-
-
-class TestProcessCallbackLaunch:
-    def test_approve(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        result = process_callback("launch:lnch0001:approve", pending)
-        assert result is not None
-        assert result.action_type == "launch"
-        assert result.response_data == {"action": "approve"}
-        assert result.answer_text == "Launch approved"
-        assert result.response_path == tmp_path / "launch_response.json"
-
-    def test_reject(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        result = process_callback("launch:lnch0001:reject", pending)
-        assert result is not None
-        assert result.action_type == "launch"
-        assert result.response_data == {"action": "reject"}
-        assert result.answer_text == "Launch rejected"
-
-    def test_feedback_returns_none(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        result = process_callback("launch:lnch0001:feedback", pending)
-        assert result is None
-
-    def test_neutral_bundle_uses_projected_response_path(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        neutral_response = tmp_path / "response.json"
-        pending["lnch0001"]["action_data"].update(
-            {
-                "request_path": str(tmp_path / "request.json"),
-                "response_path": str(neutral_response),
-            }
-        )
-
-        result = process_callback("launch:lnch0001:approve", pending)
-        feedback = process_callback_twostep("launch:lnch0001:feedback", pending)
-
-        assert result is not None
-        assert result.response_path == neutral_response
-        assert feedback is not None
-        assert feedback[1]["response_path"] == str(neutral_response)
-
-
-class TestProcessCallbackQuestion:
-    def test_option_selection_is_not_single_shot(self, tmp_path: Path) -> None:
-        response_dir = str(tmp_path)
-        request = {
-            "questions": [
-                {
-                    "question": "Which approach?",
-                    "options": [
-                        {"label": "Option A", "description": "First"},
-                        {"label": "Option B", "description": "Second"},
-                    ],
-                }
-            ]
-        }
-        (tmp_path / "question_request.json").write_text(json.dumps(request))
-
-        pending = _make_pending_question("ques0001", response_dir)
-        result = process_callback("question:ques0001:0", pending)
-        assert result is None
-
-    def test_custom_returns_none(self, tmp_path: Path) -> None:
-        pending = _make_pending_question("ques0001", str(tmp_path))
-        result = process_callback("question:ques0001:custom", pending)
-        assert result is None
-
-
-class TestProcessCallbackTwostep:
-    def test_hitl_feedback(self, tmp_path: Path) -> None:
-        pending = _make_pending_hitl("hitl0001", str(tmp_path))
-        result = process_callback_twostep("hitl:hitl0001:feedback", pending)
-        assert result is not None
-        prefix, info = result
-        assert prefix == "hitl0001"
-        assert info["action_type"] == "hitl"
-        assert info["artifacts_dir"] == str(tmp_path)
-
-    def test_question_custom(self, tmp_path: Path) -> None:
-        request = {"questions": [{"question": "What do you think?", "options": []}]}
-        (tmp_path / "question_request.json").write_text(json.dumps(request))
-
-        pending = _make_pending_question("ques0001", str(tmp_path))
-        result = process_callback_twostep("question:ques0001:custom", pending)
-        assert result is None
-
-    def test_non_twostep_returns_none(self, tmp_path: Path) -> None:
-        pending = _make_pending_plan("abcd1234", str(tmp_path))
-        result = process_callback_twostep("plan:abcd1234:approve", pending)
-        assert result is None
-
-    def test_unknown_pending_returns_none(self) -> None:
-        result = process_callback_twostep("hitl:unknown1:feedback", {})
-        assert result is None
-
-    def test_launch_feedback(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        result = process_callback_twostep("launch:lnch0001:feedback", pending)
-        assert result is not None
-        prefix, info = result
-        assert prefix == "lnch0001"
-        assert info == {"action_type": "launch", "response_dir": str(tmp_path)}
-
-
 class TestProcessTextMessage:
     def setup_method(self) -> None:
         _cleanup()
@@ -329,22 +171,26 @@ class TestProcessTextMessage:
         self._patcher.stop()
         _cleanup()
 
-    def test_with_hitl_awaiting(self, tmp_path: Path) -> None:
+    def test_with_gate_awaiting(self, tmp_path: Path) -> None:
         save_awaiting_feedback(
             "42",
-            "hitl0001",
-            {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
+            "gate0001",
+            {
+                "action_type": "gate",
+                "bundle_path": str(tmp_path),
+                "selected_option_ids": ["feedback"],
+                "input_data": {},
+                "feedback_is_command_input": True,
+            },
         )
         result = process_text_message("Please fix the typo on line 5")
         assert result is not None
-        assert result.action_type == "hitl"
-        assert result.notif_id_prefix == "hitl0001"
-        assert result.response_data == {
-            "action": "feedback",
-            "approved": False,
-            "feedback": "Please fix the typo on line 5",
-        }
-        assert result.response_path == tmp_path / "hitl_response.json"
+        assert result.action_type == "gate"
+        assert result.notif_id_prefix == "gate0001"
+        assert result.selected_option_ids == ("feedback",)
+        assert result.feedback == "Please fix the typo on line 5"
+        assert result.input_data == {"feedback": "Please fix the typo on line 5"}
+        assert result.response_path == tmp_path / "response.json"
 
     def test_with_question_awaiting(self, tmp_path: Path) -> None:
         save_awaiting_feedback(
@@ -359,155 +205,9 @@ class TestProcessTextMessage:
         result = process_text_message("Use the second approach")
         assert result is None
 
-    def test_with_launch_awaiting(self, tmp_path: Path) -> None:
-        save_awaiting_feedback(
-            "42",
-            "lnch0001",
-            {"action_type": "launch", "response_dir": str(tmp_path)},
-        )
-        result = process_text_message("Too many agents", key="42")
-        assert result is not None
-        assert result.action_type == "launch"
-        assert result.notif_id_prefix == "lnch0001"
-        assert result.response_data == {
-            "action": "feedback",
-            "feedback": "Too many agents",
-        }
-        assert result.response_path == tmp_path / "launch_response.json"
-
     def test_without_awaiting(self) -> None:
         result = process_text_message("Random text")
         assert result is None
-
-
-class TestResolvePlanResponse:
-    def test_epic_gate_choice_is_forwarded_to_shared_executor(
-        self, tmp_path: Path
-    ) -> None:
-        pending = _make_pending_plan("epic001", str(tmp_path))
-        action = pending["epic001"]
-        action["action"] = "EpicApproval"
-        action["files"] = [str(tmp_path / "plan.md")]
-        action["action_data"].update(
-            {
-                "request_id": "epic-request",
-                "request_kind": "epic_plan",
-                "request_path": str(tmp_path / "request.json"),
-                "response_path": str(tmp_path / "response.json"),
-            }
-        )
-        response = process_callback("plan:epic001:epic", pending)
-        assert response is not None
-
-        with patch(
-            "sase.plan_approval_actions.execute_plan_approval_response",
-            return_value=SimpleNamespace(message="Epic approved"),
-        ) as execute:
-            message = resolve_plan_response(response, action)
-
-        assert message == "Epic approved"
-        context, choice = execute.call_args.args
-        assert choice == "epic"
-        assert context.host_files == (str(tmp_path / "plan.md"),)
-        assert context.host_action_data["request_kind"] == "epic_plan"
-
-
-class TestResolveLaunchResponse:
-    def _pending_response(
-        self, tmp_path: Path, callback: str = "launch:lnch0001:reject"
-    ) -> tuple[dict, object]:
-        (tmp_path / "launch_request.json").write_text("{}")
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        response = process_callback(callback, pending)
-        assert response is not None
-        return pending, response
-
-    @patch("sase.agent.launch_request.dispatch_approved_launch_request")
-    def test_approve_dispatches_inline(
-        self, mock_dispatch: MagicMock, tmp_path: Path
-    ) -> None:
-        mock_dispatch.return_value = SimpleNamespace(launched_count=1)
-        pending, response = self._pending_response(tmp_path, "launch:lnch0001:approve")
-
-        message = resolve_launch_response(response, pending["lnch0001"])
-
-        assert message == "Launch approved and dispatched 1 agent"
-        mock_dispatch.assert_called_once_with(tmp_path)
-        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
-            "action": "approve",
-            "dispatch_status": "launched",
-            "launched_count": 1,
-        }
-
-    def test_reject_writes_launch_response(self, tmp_path: Path) -> None:
-        pending, response = self._pending_response(tmp_path, "launch:lnch0001:reject")
-
-        message = resolve_launch_response(response, pending["lnch0001"])
-
-        assert message == "Launch rejected"
-        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
-            "action": "reject"
-        }
-
-    def test_feedback_rejects_with_text(self, tmp_path: Path) -> None:
-        (tmp_path / "launch_request.json").write_text("{}")
-        save_awaiting_feedback(
-            "42",
-            "lnch0001",
-            {"action_type": "launch", "response_dir": str(tmp_path)},
-        )
-        response = process_text_message("Need a smaller fanout", key="42")
-        assert response is not None
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-
-        message = resolve_launch_response(response, pending["lnch0001"])
-
-        assert message == "Feedback received"
-        assert json.loads((tmp_path / "launch_response.json").read_text()) == {
-            "action": "reject",
-            "feedback": "Need a smaller fanout",
-        }
-        assert confirmation_text(response) == "✅ Feedback received — launch rejected"
-
-    def test_already_handled_conflict(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        response = process_callback("launch:lnch0001:reject", pending)
-        assert response is not None
-
-        with pytest.raises(LaunchApprovalActionError) as exc_info:
-            resolve_launch_response(response, pending["lnch0001"])
-
-        assert exc_info.value.code == "conflict_already_handled"
-
-    def test_neutral_action_data_is_forwarded_to_shared_executor(
-        self, tmp_path: Path
-    ) -> None:
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        action_data = pending["lnch0001"]["action_data"]
-        action_data.update(
-            {
-                "request_kind": "launch",
-                "request_path": str(tmp_path / "request.json"),
-                "response_path": str(tmp_path / "response.json"),
-            }
-        )
-        response = process_callback("launch:lnch0001:reject", pending)
-        assert response is not None
-
-        with patch(
-            "sase.launch_approval_actions.execute_launch_approval_response",
-            return_value=SimpleNamespace(message="Launch rejected"),
-        ) as execute:
-            message = resolve_launch_response(response, pending["lnch0001"])
-
-        assert message == "Launch rejected"
-        context = execute.call_args.args[0]
-        assert context.host_action_data["request_path"] == str(
-            tmp_path / "request.json"
-        )
-        assert context.host_action_data["response_path"] == str(
-            tmp_path / "response.json"
-        )
 
 
 class TestHandleTextMessageAgentLaunch:
@@ -577,67 +277,6 @@ class TestHandleTextMessageAgentLaunch:
             mock_record.assert_not_called()
             mock_launch.assert_not_called()
 
-    def test_feedback_flow_still_completes_when_launches_disabled(
-        self, tmp_path: Path
-    ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
-
-        save_awaiting_feedback(
-            "42",
-            "hitl0001",
-            {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
-        )
-        msg = SimpleNamespace(
-            text="Some feedback text",
-            entities=None,
-            message_id=102,
-            reply_to_message=SimpleNamespace(message_id=42),
-        )
-        with (
-            patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._write_response"
-            ) as mock_write,
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
-            patch("sase_telegram.scripts.sase_tg_inbound._send_confirmation"),
-        ):
-            _handle_text_message(msg)
-            mock_write.assert_called_once()
-            mock_launch.assert_not_called()
-
-    def test_feedback_flow_keeps_raw_text(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
-
-        save_awaiting_feedback(
-            "42",
-            "hitl0001",
-            {"action_type": "hitl", "artifacts_dir": str(tmp_path)},
-        )
-        msg = SimpleNamespace(
-            text="#gh@sase is only an example",
-            entities=None,
-            message_id=102,
-            reply_to_message=SimpleNamespace(message_id=42),
-        )
-        with (
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._write_response"
-            ) as mock_write,
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions"),
-            patch("sase_telegram.scripts.sase_tg_inbound._send_confirmation"),
-        ):
-            _handle_text_message(msg)
-
-        response = mock_write.call_args[0][0]
-        assert response.response_data["feedback"] == "#gh@sase is only an example"
-        mock_launch.assert_not_called()
-
     def test_slash_command_dispatches_when_launches_disabled(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
             _handle_text_message,
@@ -655,7 +294,7 @@ class TestHandleTextMessageAgentLaunch:
             mock_handle.assert_called_once_with("/list", msg)
             mock_launch.assert_not_called()
 
-    def test_stale_launch_awaiting_does_not_consume_slash_command(
+    def test_stale_gate_awaiting_does_not_consume_slash_command(
         self, tmp_path: Path
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -664,8 +303,8 @@ class TestHandleTextMessageAgentLaunch:
 
         save_awaiting_feedback(
             "42",
-            "lnch0001",
-            {"action_type": "launch", "response_dir": str(tmp_path)},
+            "gate0001",
+            {"action_type": "gate", "bundle_path": str(tmp_path)},
         )
         msg = SimpleNamespace(
             text="/list",
@@ -690,7 +329,7 @@ class TestHandleTextMessageAgentLaunch:
         mock_tg.send_message.assert_not_called()
         assert load_awaiting_feedback() is None
 
-    def test_stale_launch_awaiting_clears_before_plain_text_launch(
+    def test_stale_gate_awaiting_clears_before_plain_text_launch(
         self, tmp_path: Path
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -699,8 +338,8 @@ class TestHandleTextMessageAgentLaunch:
 
         save_awaiting_feedback(
             "42",
-            "lnch0001",
-            {"action_type": "launch", "response_dir": str(tmp_path)},
+            "gate0001",
+            {"action_type": "gate", "bundle_path": str(tmp_path)},
         )
         msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
         with (
@@ -718,7 +357,7 @@ class TestHandleTextMessageAgentLaunch:
         mock_record.assert_called_once_with("List all open beads", msg)
         mock_launch.assert_called_once_with("List all open beads")
 
-    def test_reply_to_stale_launch_awaiting_sends_friendly_message(
+    def test_reply_to_stale_gate_awaiting_sends_friendly_message(
         self, tmp_path: Path
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -727,8 +366,8 @@ class TestHandleTextMessageAgentLaunch:
 
         save_awaiting_feedback(
             "42",
-            "lnch0001",
-            {"action_type": "launch", "response_dir": str(tmp_path)},
+            "gate0001",
+            {"action_type": "gate", "bundle_path": str(tmp_path)},
         )
         msg = SimpleNamespace(
             text="Too many agents",
@@ -753,17 +392,6 @@ class TestHandleTextMessageAgentLaunch:
             "This action has already been handled",
             reply_to_message_id=100,
         )
-
-    def test_missing_launch_action_error_is_sanitized(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _launch_error_answer_text
-
-        exc = LaunchApprovalActionError(
-            "not_found",
-            "lnch0001",
-            "pending launch action is missing",
-        )
-
-        assert _launch_error_answer_text(exc) == "This action has already been handled"
 
     def test_slash_command_ignored(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -923,9 +551,9 @@ class TestHandleQuestionFlow:
             _handle_callback(self._callback("question:ques0001:1", 42), pending)
 
         response = json.loads(gate.response_path.read_text(encoding="utf-8"))
-        assert response["choice_id"] == "submit"
+        assert response["selected_option_ids"] == ["submit"]
         assert response["source"] == "telegram"
-        assert response["result"]["answers"] == [
+        assert response["option_results"][0]["result"]["answers"] == [
             {
                 "question": "Which path?",
                 "selected": ["Safe"],
@@ -2757,14 +2385,14 @@ class TestAwaitingFeedbackState:
 
     def test_save_load_cycle(self) -> None:
         assert load_awaiting_feedback() is None
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl", "dir": "/tmp"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate", "dir": "/tmp"})
         loaded = load_awaiting_feedback("42")
         assert loaded is not None
         assert loaded["prefix"] == "abcd1234"
-        assert loaded["action_info"]["action_type"] == "hitl"
+        assert loaded["action_info"]["action_type"] == "gate"
 
     def test_clear_specific_key(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
         assert load_awaiting_feedback("42") is not None
         clear_awaiting_feedback("42")
         assert load_awaiting_feedback("42") is None
@@ -2776,10 +2404,10 @@ class TestAwaitingFeedbackState:
 
     def test_concurrent_entries_do_not_overwrite(self) -> None:
         save_awaiting_feedback(
-            "42", "abcd1234", {"action_type": "hitl", "dir": "/tmp/a"}
+            "42", "abcd1234", {"action_type": "gate", "dir": "/tmp/a"}
         )
         save_awaiting_feedback(
-            "43", "efgh5678", {"action_type": "plan", "dir": "/tmp/b"}
+            "43", "efgh5678", {"action_type": "question", "dir": "/tmp/b"}
         )
         all_aw = load_all_awaiting_feedback()
         assert set(all_aw) == {"42", "43"}
@@ -2787,8 +2415,8 @@ class TestAwaitingFeedbackState:
         assert all_aw["43"]["prefix"] == "efgh5678"
 
     def test_clear_one_leaves_others_intact(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
-        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "question"})
         clear_awaiting_feedback("42")
         assert load_awaiting_feedback("42") is None
         remaining = load_awaiting_feedback("43")
@@ -2796,27 +2424,27 @@ class TestAwaitingFeedbackState:
         assert remaining["prefix"] == "efgh5678"
 
     def test_clear_by_prefix_finds_matching_entry(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
-        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "question"})
         cleared = clear_awaiting_feedback_by_prefix("abcd1234")
         assert cleared == "42"
         assert load_awaiting_feedback("42") is None
         assert load_awaiting_feedback("43") is not None
 
     def test_clear_by_prefix_no_match_returns_none(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
         assert clear_awaiting_feedback_by_prefix("zzzz9999") is None
         assert load_awaiting_feedback("42") is not None
 
     def test_load_without_key_returns_unique_entry(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
         loaded = load_awaiting_feedback()
         assert loaded is not None
         assert loaded["prefix"] == "abcd1234"
 
     def test_load_without_key_returns_none_when_ambiguous(self) -> None:
-        save_awaiting_feedback("42", "abcd1234", {"action_type": "hitl"})
-        save_awaiting_feedback("43", "efgh5678", {"action_type": "plan"})
+        save_awaiting_feedback("42", "abcd1234", {"action_type": "gate"})
+        save_awaiting_feedback("43", "efgh5678", {"action_type": "question"})
         # With multiple entries and no key, the caller cannot disambiguate.
         assert load_awaiting_feedback() is None
 
@@ -2826,7 +2454,7 @@ class TestAwaitingFeedbackState:
             json.dumps(
                 {
                     "prefix": "legacy01",
-                    "action_info": {"action_type": "hitl", "dir": str(tmp_path)},
+                    "action_info": {"action_type": "gate", "dir": str(tmp_path)},
                 }
             )
         )
@@ -2840,8 +2468,18 @@ class TestAwaitingFeedbackState:
         assert load_awaiting_feedback() is None
 
     def test_process_text_message_keyed_lookup(self, tmp_path: Path) -> None:
+        gate_bundle = tmp_path / "gate"
+        gate_bundle.mkdir()
         save_awaiting_feedback(
-            "42", "hitl0001", {"action_type": "hitl", "artifacts_dir": str(tmp_path)}
+            "42",
+            "gate0001",
+            {
+                "action_type": "gate",
+                "bundle_path": str(gate_bundle),
+                "selected_option_ids": ["feedback"],
+                "input_data": {},
+                "feedback_is_command_input": False,
+            },
         )
         save_awaiting_feedback(
             "43",
@@ -2852,15 +2490,17 @@ class TestAwaitingFeedbackState:
                 "question_text": "?",
             },
         )
-        # Reply targeting message 42 -> hitl flow.
+        # Reply targeting message 42 -> unified gate flow.
         result = process_text_message("fix it", key="42")
         assert result is not None
-        assert result.action_type == "hitl"
-        assert result.notif_id_prefix == "hitl0001"
+        assert result.action_type == "gate"
+        assert result.notif_id_prefix == "gate0001"
+        assert result.selected_option_ids == ("feedback",)
+        assert result.feedback == "fix it"
 
     def test_process_text_message_ambiguous_returns_none(self, tmp_path: Path) -> None:
-        save_awaiting_feedback("42", "a", {"action_type": "hitl"})
-        save_awaiting_feedback("43", "b", {"action_type": "plan"})
+        save_awaiting_feedback("42", "a", {"action_type": "gate"})
+        save_awaiting_feedback("43", "b", {"action_type": "question"})
         # No key, two entries -> cannot disambiguate.
         assert process_text_message("fix it") is None
 
@@ -4651,137 +4291,55 @@ class TestBeadCommand:
 
 
 class TestFindExternallyHandled:
-    """Tests for find_externally_handled() — detecting TUI-handled actions."""
+    """Tests for external completion of v2 gates and questions."""
 
-    def test_plan_response_file_detected(self, tmp_path: Path) -> None:
-        (tmp_path / "plan_response.json").write_text("{}")
-        pending = _make_pending_plan("plan0001", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "plan0001"
-
-    def test_plan_approved_marker_detected(self, tmp_path: Path) -> None:
-        (tmp_path / "plan_approved.marker").write_text("")
-        pending = _make_pending_plan("plan0002", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "plan0002"
-
-    def test_plan_request_gone_detected(self, tmp_path: Path) -> None:
-        # No plan_request.json means the request was cleaned up (e.g. reject)
-        pending = _make_pending_plan("plan0003", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "plan0003"
-
-    def test_plan_still_pending(self, tmp_path: Path) -> None:
-        (tmp_path / "plan_request.json").write_text("{}")
-        pending = _make_pending_plan("plan0004", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert result == []
-
-    def test_hitl_response_detected(self, tmp_path: Path) -> None:
-        (tmp_path / "hitl_response.json").write_text("{}")
-        pending = _make_pending_hitl("hitl0001", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "hitl0001"
-
-    def test_hitl_still_pending(self, tmp_path: Path) -> None:
-        pending = _make_pending_hitl("hitl0002", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert result == []
-
-    def test_launch_response_detected(self, tmp_path: Path) -> None:
-        (tmp_path / "launch_response.json").write_text("{}")
-        pending = _make_pending_launch("lnch0001", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "lnch0001"
-
-    def test_launch_request_gone_detected(self, tmp_path: Path) -> None:
-        pending = _make_pending_launch("lnch0002", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "lnch0002"
-
-    def test_launch_still_pending(self, tmp_path: Path) -> None:
-        (tmp_path / "launch_request.json").write_text("{}")
-        pending = _make_pending_launch("lnch0003", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert result == []
-
-    def test_neutral_launch_response_and_cancellation_are_detected(
-        self, tmp_path: Path
-    ) -> None:
-        request_path = tmp_path / "request.json"
-        response_path = tmp_path / "response.json"
+    def test_gate_response_detected(self, tmp_path: Path) -> None:
+        bundle = tmp_path / "gate"
+        bundle.mkdir()
+        request_path = bundle / "request.json"
+        response_path = bundle / "response.json"
         request_path.write_text("{}")
-        pending = _make_pending_launch("lnch0004", str(tmp_path))
-        pending["lnch0004"]["action_data"].update(
-            {
-                "request_path": str(request_path),
-                "response_path": str(response_path),
-            }
+        pending = _make_pending_gate(
+            "gate0001", bundle, request_path=request_path, response_path=response_path
         )
 
         assert find_externally_handled(pending) == []
         response_path.write_text("{}")
-        assert find_externally_handled(pending)[0][0] == "lnch0004"
+        assert find_externally_handled(pending) == [("gate0001", 42, "12345")]
 
-        response_path.unlink()
-        (tmp_path / "cancellation.json").write_text("{}")
-        assert find_externally_handled(pending)[0][0] == "lnch0004"
+    def test_gate_cancellation_detected(self, tmp_path: Path) -> None:
+        bundle = tmp_path / "gate"
+        bundle.mkdir()
+        request_path = bundle / "request.json"
+        request_path.write_text("{}")
+        pending = _make_pending_gate("gate0002", bundle, request_path=request_path)
+
+        (bundle / "cancellation.json").write_text("{}")
+        assert find_externally_handled(pending) == [("gate0002", 42, "12345")]
+
+    def test_removed_gate_request_detected(self, tmp_path: Path) -> None:
+        bundle = tmp_path / "gate"
+        bundle.mkdir()
+        pending = _make_pending_gate(
+            "gate0003", bundle, request_path=bundle / "request.json"
+        )
+
+        assert find_externally_handled(pending) == [("gate0003", 42, "12345")]
 
     def test_question_response_detected(self, tmp_path: Path) -> None:
-        (tmp_path / "question_response.json").write_text("{}")
+        (tmp_path / "question_request.json").write_text("{}")
         pending = _make_pending_question("ques0001", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "ques0001"
+        assert find_externally_handled(pending) == []
 
-    def test_question_still_pending(self, tmp_path: Path) -> None:
-        (tmp_path / "question_request.json").write_text(
-            '{"questions":[{"question":"Still pending?","options":[]}]}'
-        )
-        pending = _make_pending_question("ques0002", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert result == []
+        (tmp_path / "question_response.json").write_text("{}")
+        assert find_externally_handled(pending) == [("ques0001", 42, "12345")]
 
-    def test_non_actionable_skipped(self) -> None:
+    def test_non_actionable_and_malformed_entries_are_skipped(self) -> None:
         pending = {
-            "kill-agent1": {
-                "action": "kill",
-                "agent_name": "agent1",
-                "message_id": 42,
-                "chat_id": "12345",
-            }
+            "kill-agent1": {"action": "kill"},
+            "bad-gate": {"action": "CustomGate", "action_data": "invalid"},
         }
-        result = find_externally_handled(pending)
-        assert result == []
-
-    def test_mixed_pending(self, tmp_path: Path) -> None:
-        dir_a = tmp_path / "a"
-        dir_b = tmp_path / "b"
-        dir_a.mkdir()
-        dir_b.mkdir()
-        # Only plan_a is handled (has response file)
-        (dir_a / "plan_response.json").write_text("{}")
-        (dir_b / "plan_request.json").write_text("{}")
-
-        pending = {
-            **_make_pending_plan("plan000a", str(dir_a)),
-            **_make_pending_plan("plan000b", str(dir_b)),
-        }
-        result = find_externally_handled(pending)
-        assert len(result) == 1
-        assert result[0][0] == "plan000a"
-
-    def test_returns_message_id_and_chat_id(self, tmp_path: Path) -> None:
-        (tmp_path / "hitl_response.json").write_text("{}")
-        pending = _make_pending_hitl("hitl0003", str(tmp_path))
-        result = find_externally_handled(pending)
-        assert result == [("hitl0003", 42, "12345")]
+        assert find_externally_handled(pending) == []
 
 
 def _shared_entry(

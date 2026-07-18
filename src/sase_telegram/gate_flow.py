@@ -5,13 +5,18 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from sase.notification_gates.hashing import load_and_verify_bundle
-from sase.notification_gates.models import GateChoice, GateError, GateFeedbackMode
+from sase.notification_gates.models import (
+    GateError,
+    GateFeedbackMode,
+    GateGroup,
+    GateOption,
+)
 
 PROGRESS_FILENAME = "telegram_gate_progress.json"
 
@@ -23,15 +28,17 @@ class GateView:
     bundle_path: Path
     request_id: str
     kind: str
-    choices: tuple[GateChoice, ...]
+    options: tuple[GateOption, ...]
+    groups: tuple[GateGroup, ...]
+    branches: tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
 class GateProgress:
-    """Telegram-private terminal-choice and add-on selection state."""
+    """Telegram-private option selection and expanded-group state."""
 
-    choice_id: str | None = None
-    selected_extra_ids: tuple[str, ...] = ()
+    selected_option_ids: tuple[str, ...] = ()
+    expanded_branch_index: int | None = None
     active_message_id: int | None = None
     chat_id: str | None = None
 
@@ -39,17 +46,19 @@ class GateProgress:
 def load_gate_view(
     action_data: Mapping[str, Any], *, expected_kind: str | None = None
 ) -> GateView:
-    """Load and verify the neutral gate referenced by notification action data."""
+    """Load and verify the v2 gate referenced by notification action data."""
     raw_bundle = action_data.get("bundle_path")
     if not isinstance(raw_bundle, str) or not raw_bundle.strip():
         raise GateError(
-            "missing_gate", "bundle_path", "notification has no neutral gate bundle"
+            "missing_gate", "bundle_path", "notification has no gate bundle"
         )
     action_by_kind = {
         "custom": "CustomGate",
         "epic_plan": "EpicApproval",
         "hitl": "HITL",
+        "launch": "LaunchApproval",
         "plan": "PlanApproval",
+        "question": "UserQuestion",
     }
     action = action_by_kind.get(expected_kind or str(action_data.get("request_kind")))
     if action is None:
@@ -62,7 +71,7 @@ def load_gate_view(
     bundle = resolve_action_bundle(action, normalized_action_data)
     if bundle is None or bundle.legacy:
         raise GateError(
-            "missing_gate", "bundle_path", "notification has no neutral gate bundle"
+            "missing_gate", "bundle_path", "notification has no v2 gate bundle"
         )
     bundle_path = bundle.root
     if bundle_path.resolve(strict=False) != Path(raw_bundle).expanduser().resolve(
@@ -80,21 +89,39 @@ def load_gate_view(
             "kind",
             f"expected a {expected_kind} gate, found {adapter.kind}",
         )
-    raw_choices = envelope.get("choices")
-    if not isinstance(raw_choices, list) or not raw_choices:
-        raise GateError("invalid_request", "choices", "gate has no terminal choices")
+    raw_options = envelope.get("options")
+    raw_groups = envelope.get("groups")
+    raw_branches = envelope.get("branches")
+    if not isinstance(raw_options, list) or not raw_options:
+        raise GateError("invalid_request", "options", "gate has no options")
+    if not isinstance(raw_groups, list) or not isinstance(raw_branches, list):
+        raise GateError(
+            "invalid_request", "branches", "gate branch metadata is missing"
+        )
     default_feedback: GateFeedbackMode = (
         "optional" if adapter.kind == "custom" else "disabled"
     )
-    choices = tuple(
-        GateChoice.from_mapping(raw, index, default_feedback=default_feedback)
-        for index, raw in enumerate(raw_choices)
+    options = tuple(
+        GateOption.from_mapping(raw, index, default_feedback=default_feedback)
+        for index, raw in enumerate(raw_options)
     )
+    groups = tuple(
+        GateGroup.from_mapping(raw, index) for index, raw in enumerate(raw_groups)
+    )
+    branches = tuple(
+        tuple(str(option_id) for option_id in branch)
+        for branch in raw_branches
+        if isinstance(branch, list)
+    )
+    if not branches or len(branches) != len(raw_branches):
+        raise GateError("invalid_request", "branches", "gate has invalid branches")
     return GateView(
         bundle_path=bundle_path,
         request_id=str(envelope.get("request_id") or bundle_path.name),
         kind=adapter.kind,
-        choices=choices,
+        options=options,
+        groups=groups,
+        branches=branches,
     )
 
 
@@ -106,84 +133,73 @@ def progress_path(view: GateView) -> Path:
 def initial_progress(
     view: GateView,
     *,
-    choice_id: str | None = None,
     active_message_id: int | None = None,
     chat_id: str | None = None,
 ) -> GateProgress:
-    """Create progress, selecting the choice's default add-ons when requested."""
-    progress = GateProgress(
+    """Create progress with the sole AND group expanded, when present."""
+    group_indexes = and_branch_indexes(view)
+    expanded = group_indexes[0] if len(group_indexes) == 1 else None
+    selected = default_selection(view, expanded) if expanded is not None else ()
+    return GateProgress(
+        selected_option_ids=selected,
+        expanded_branch_index=expanded,
         active_message_id=active_message_id,
         chat_id=chat_id,
     )
-    if choice_id is None:
-        return progress
-    return select_choice(view, progress, choice_id)
 
 
 def load_progress(
     view: GateView,
     *,
-    default_choice_id: str | None = None,
     active_message_id: int | None = None,
     chat_id: str | None = None,
 ) -> GateProgress:
     """Load saved progress, recovering safely from stale or malformed state."""
-    normalized_default = (
-        default_choice_id
-        if default_choice_id is not None
-        and choice_for_id(view, default_choice_id) is not None
-        else None
+    fallback = initial_progress(
+        view,
+        active_message_id=active_message_id,
+        chat_id=chat_id,
     )
     path = progress_path(view)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return initial_progress(
-            view,
-            choice_id=normalized_default,
-            active_message_id=active_message_id,
-            chat_id=chat_id,
-        )
+        return fallback
     if not isinstance(raw, dict):
-        return initial_progress(
-            view,
-            choice_id=normalized_default,
-            active_message_id=active_message_id,
-            chat_id=chat_id,
-        )
+        return fallback
 
     saved_message_id = _optional_int(raw.get("active_message_id")) or active_message_id
     saved_chat_id = str(raw["chat_id"]) if raw.get("chat_id") is not None else chat_id
-    choice_id = raw.get("choice_id")
-    if not isinstance(choice_id, str) or choice_for_id(view, choice_id) is None:
-        return initial_progress(
-            view,
-            choice_id=normalized_default,
-            active_message_id=saved_message_id,
-            chat_id=saved_chat_id,
-        )
-    selected = raw.get("selected_extra_ids")
-    selected_ids = (
-        tuple(str(item) for item in selected)
-        if isinstance(selected, list)
-        and all(isinstance(item, str) for item in selected)
-        else ()
-    )
-    progress = GateProgress(
-        choice_id=choice_id,
-        selected_extra_ids=selected_ids,
+    group_indexes = and_branch_indexes(view)
+    raw_expanded = _optional_int(raw.get("expanded_branch_index"))
+    if len(group_indexes) == 1:
+        expanded = group_indexes[0]
+    elif raw_expanded in group_indexes:
+        expanded = raw_expanded
+    else:
+        expanded = None
+    if expanded is None:
+        selected_ids: tuple[str, ...] = ()
+    else:
+        selected = raw.get("selected_option_ids")
+        if not (
+            isinstance(selected, list)
+            and all(isinstance(item, str) for item in selected)
+        ):
+            selected_ids = default_selection(view, expanded)
+        else:
+            selected_set = set(selected)
+            selected_ids = tuple(
+                option_id
+                for option_id in view.branches[expanded]
+                if option_id in selected_set
+            )
+    return GateProgress(
+        selected_option_ids=selected_ids,
+        expanded_branch_index=expanded,
         active_message_id=saved_message_id,
         chat_id=saved_chat_id,
     )
-    choice = choice_for_id(view, choice_id)
-    assert choice is not None
-    valid_ids = {extra.id for extra in choice.extras}
-    filtered = tuple(
-        extra.id
-        for extra in choice.extras
-        if extra.id in selected_ids and extra.id in valid_ids
-    )
-    return replace(progress, selected_extra_ids=filtered)
 
 
 def save_progress(view: GateView, progress: GateProgress) -> None:
@@ -191,8 +207,8 @@ def save_progress(view: GateView, progress: GateProgress) -> None:
     path = progress_path(view)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "choice_id": progress.choice_id,
-        "selected_extra_ids": list(progress.selected_extra_ids),
+        "selected_option_ids": list(progress.selected_option_ids),
+        "expanded_branch_index": progress.expanded_branch_index,
         "active_message_id": progress.active_message_id,
         "chat_id": progress.chat_id,
     }
@@ -211,57 +227,117 @@ def clear_progress(view: GateView) -> None:
     progress_path(view).unlink(missing_ok=True)
 
 
-def choice_for_id(view: GateView, choice_id: str) -> GateChoice | None:
-    """Return a verified choice by id."""
-    return next((choice for choice in view.choices if choice.id == choice_id), None)
+def option_for_id(view: GateView, option_id: str) -> GateOption | None:
+    """Return a verified option by id."""
+    return next((option for option in view.options if option.id == option_id), None)
 
 
-def choice_for_token(view: GateView, token: str) -> GateChoice | None:
-    """Resolve a compact ``c<index>`` callback token."""
-    index = _token_index(token, "c")
-    if index is None or index >= len(view.choices):
+def option_index(view: GateView, option_id: str) -> int:
+    """Return the stable envelope index for one option id."""
+    for index, option in enumerate(view.options):
+        if option.id == option_id:
+            return index
+    raise ValueError(f"unknown gate option: {option_id}")
+
+
+def branch_for_token(
+    view: GateView, token: str, *, prefix: str
+) -> tuple[int, tuple[str, ...]] | None:
+    """Resolve a compact branch token such as ``c0`` or ``s1``."""
+    index = _token_index(token, prefix)
+    if index is None or index >= len(view.branches):
         return None
-    return view.choices[index]
+    return index, view.branches[index]
 
 
-def select_choice(
-    view: GateView, progress: GateProgress, choice_id: str
+def option_for_token(view: GateView, token: str) -> GateOption | None:
+    """Resolve a compact ``x<index>`` option token."""
+    index = _token_index(token, "x")
+    if index is None or index >= len(view.options):
+        return None
+    return view.options[index]
+
+
+def and_branch_indexes(view: GateView) -> tuple[int, ...]:
+    """Return query-order indexes of every AND branch."""
+    return tuple(index for index, branch in enumerate(view.branches) if len(branch) > 1)
+
+
+def group_for_branch(view: GateView, branch: Sequence[str]) -> GateGroup | None:
+    """Return submit metadata for one AND branch."""
+    members = tuple(branch)
+    return next((group for group in view.groups if group.options == members), None)
+
+
+def default_selection(view: GateView, branch_index: int) -> tuple[str, ...]:
+    """Return default-selected members of one AND branch in query order."""
+    branch = view.branches[branch_index]
+    by_id = {option.id: option for option in view.options}
+    return tuple(option_id for option_id in branch if by_id[option_id].default_selected)
+
+
+def expand_branch(
+    view: GateView, progress: GateProgress, branch_index: int
 ) -> GateProgress:
-    """Select one terminal choice and restore its default add-ons."""
-    choice = choice_for_id(view, choice_id)
-    if choice is None:
-        raise ValueError(f"unknown gate choice: {choice_id}")
+    """Expand one AND branch and restore its configured default selection."""
+    if branch_index not in and_branch_indexes(view):
+        raise ValueError("only an AND branch can be expanded")
     return replace(
         progress,
-        choice_id=choice.id,
-        selected_extra_ids=tuple(
-            extra.id for extra in choice.extras if extra.default_selected
-        ),
+        expanded_branch_index=branch_index,
+        selected_option_ids=default_selection(view, branch_index),
     )
 
 
-def toggle_extra(
+def toggle_option(
     view: GateView, progress: GateProgress, token: str
 ) -> tuple[GateProgress, bool]:
-    """Toggle one compact ``x<index>`` add-on and return its new state."""
-    if progress.choice_id is None:
-        raise ValueError("select a gate choice before toggling add-ons")
-    choice = choice_for_id(view, progress.choice_id)
-    if choice is None:
-        raise ValueError("selected gate choice is unavailable")
-    index = _token_index(token, "x")
-    if index is None or index >= len(choice.extras):
-        raise ValueError("unknown gate add-on")
-    target = choice.extras[index].id
-    selected = set(progress.selected_extra_ids)
-    if target in selected:
-        selected.remove(target)
+    """Toggle one compact ``x<index>`` group member and return its new state."""
+    expanded = progress.expanded_branch_index
+    if expanded is None:
+        raise ValueError("open a gate group before toggling options")
+    option = option_for_token(view, token)
+    if option is None or option.id not in view.branches[expanded]:
+        raise ValueError("unknown gate option")
+    selected = set(progress.selected_option_ids)
+    if option.id in selected:
+        selected.remove(option.id)
         enabled = False
     else:
-        selected.add(target)
+        selected.add(option.id)
         enabled = True
-    ordered = tuple(extra.id for extra in choice.extras if extra.id in selected)
-    return replace(progress, selected_extra_ids=ordered), enabled
+    ordered = tuple(
+        option_id for option_id in view.branches[expanded] if option_id in selected
+    )
+    return replace(progress, selected_option_ids=ordered), enabled
+
+
+def feedback_mode(
+    view: GateView, selected_option_ids: Sequence[str]
+) -> GateFeedbackMode:
+    """Return the strongest feedback mode among selected options."""
+    ranks: dict[GateFeedbackMode, int] = {
+        "disabled": 0,
+        "optional": 1,
+        "required": 2,
+    }
+    options = [option_for_id(view, option_id) for option_id in selected_option_ids]
+    available = [option.feedback for option in options if option is not None]
+    return max(available, key=ranks.__getitem__) if available else "disabled"
+
+
+def feedback_is_command_input(
+    view: GateView, selected_option_ids: Sequence[str]
+) -> bool:
+    """Return whether a selected option requires feedback in its command input."""
+    for option_id in selected_option_ids:
+        option = option_for_id(view, option_id)
+        if option is None:
+            continue
+        required = option.input_schema.get("required")
+        if isinstance(required, list) and "feedback" in required:
+            return True
+    return False
 
 
 def _token_index(token: str, prefix: str) -> int | None:

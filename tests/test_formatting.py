@@ -240,7 +240,7 @@ class TestMarkdownToTelegramV2:
 
 
 class TestFormatPlanApproval:
-    def test_epic_gate_advertises_only_envelope_remote_choices(
+    def test_epic_v1_envelope_does_not_render_compatibility_choices(
         self, tmp_path: Path
     ) -> None:
         plan_file = tmp_path / "epic.md"
@@ -270,14 +270,7 @@ class TestFormatPlanApproval:
 
         assert "Epic Review" in text
         assert attachments == [str(plan_file)]
-        assert keyboard is not None
-        assert [
-            button.callback_data for row in keyboard.inline_keyboard for button in row
-        ] == [
-            "plan:abcd1234:epic",
-            "plan:abcd1234:reject",
-            "plan:abcd1234:feedback",
-        ]
+        assert keyboard is None
 
     def test_epic_gate_with_unreadable_envelope_never_falls_back_to_legacy_choices(
         self, tmp_path: Path
@@ -335,13 +328,7 @@ class TestFormatPlanApproval:
         assert text.count("Keep users safe") == 1
         assert text.index("🧾 *Properties*") < text.index("*Implementation*")
         assert attachments == [str(plan_file)]
-        assert keyboard is not None
-        assert [
-            [button.text for button in row] for row in keyboard.inline_keyboard
-        ] == [
-            ["📖 Tale", "✅ Approve", "📋 Epic"],
-            ["❌ Reject", "💬 Feedback"],
-        ]
+        assert keyboard is None
 
     def test_property_rich_epic_renders_nested_and_unknown_values(
         self, tmp_path: Path
@@ -463,8 +450,7 @@ Details.
         assert "see attached plan" in text
         assert "body truncated, see attached plan" in text
         assert attachments == [str(plan_file)]
-        assert keyboard is not None
-        assert keyboard.inline_keyboard[0][1].callback_data == "plan:abcd1234:run"
+        assert keyboard is None
 
     def test_unusable_frontmatter_keeps_body_only_preview(self, tmp_path: Path) -> None:
         contents = {
@@ -488,7 +474,7 @@ Details.
 
             assert "Properties" not in text
             assert "Plan Review" in text
-            assert keyboard is not None
+            assert keyboard is None
             assert attachments == [str(plan_file)]
 
         assert (
@@ -541,7 +527,7 @@ Details.
 
         assert "Plan Review" in text
         assert "Properties" not in text
-        assert keyboard is not None
+        assert keyboard is None
         assert attachments == [str(invalid_file)]
 
         unreadable_file = tmp_path / "unreadable.md"
@@ -564,7 +550,7 @@ Details.
         text, keyboard, attachments = format_notification(unreadable)
 
         assert "Plan Review" in text
-        assert keyboard is not None
+        assert keyboard is None
         assert attachments == [str(unreadable_file)]
 
     def test_with_short_plan(self):
@@ -585,27 +571,7 @@ Details.
         # Plan content is now richly formatted (not in a raw code block)
         assert "*Short Plan*" in text
         assert "Some content here" in text
-        assert keyboard is not None
-        assert len(keyboard.inline_keyboard) == 2
-        assert len(keyboard.inline_keyboard[0]) == 3  # Tale + Approve + Epic
-        assert "Tale" in keyboard.inline_keyboard[0][0].text
-        assert keyboard.inline_keyboard[0][0].callback_data.endswith(":approve")
-        assert keyboard.inline_keyboard[0][1].text == "✅ Approve"
-        assert keyboard.inline_keyboard[0][1].callback_data == "plan:" + (
-            keyboard.inline_keyboard[0][0].callback_data.split(":")[1] + ":run"
-        )
-        assert "Epic" in keyboard.inline_keyboard[0][2].text
-        assert len(keyboard.inline_keyboard[1]) == 2  # Reject + Feedback
-        assert "Reject" in keyboard.inline_keyboard[1][0].text
-        assert "Feedback" in keyboard.inline_keyboard[1][1].text
-        button_texts = [
-            button.text for row in keyboard.inline_keyboard for button in row
-        ]
-        callback_values = [
-            button.callback_data for row in keyboard.inline_keyboard for button in row
-        ]
-        assert all("Legend" not in text for text in button_texts)
-        assert all(not value.endswith(":legend") for value in callback_values)
+        assert keyboard is None
         assert attachments == [plan_file]
 
         Path(plan_file).unlink()
@@ -633,7 +599,7 @@ Details.
         assert "truncated" in text
         assert len(text) <= MAX_MESSAGE_LENGTH
         assert plan_file in attachments
-        assert keyboard is not None
+        assert keyboard is None
 
         Path(plan_file).unlink()
 
@@ -718,7 +684,7 @@ Details.
         assert "||" in text
         assert "truncated" not in text
         assert attachments == [plan_file]
-        assert keyboard is not None
+        assert keyboard is None
 
         Path(plan_file).unlink()
 
@@ -731,7 +697,7 @@ Details.
         )
         text, keyboard, attachments = format_notification(n)
         assert "Plan Review" in text
-        assert keyboard is not None
+        assert keyboard is None
         assert attachments == []
 
     def test_humanizes_agent_name_in_header(self, monkeypatch):
@@ -781,17 +747,7 @@ class TestFormatLaunchApproval:
         assert "*Launch Preview*" in text
         assert "Start agent A" in text
         assert attachments == [preview_file]
-        assert keyboard is not None
-        buttons = keyboard.inline_keyboard
-        assert len(buttons) == 1
-        assert [button.text for button in buttons[0]] == [
-            "✅ Approve",
-            "❌ Reject",
-            "💬 Feedback",
-        ]
-        assert buttons[0][0].callback_data == "launch:abcd1234:approve"
-        assert buttons[0][1].callback_data == "launch:abcd1234:reject"
-        assert buttons[0][2].callback_data == "launch:abcd1234:feedback"
+        assert keyboard is None
 
         Path(preview_file).unlink()
 
@@ -807,7 +763,7 @@ class TestFormatLaunchApproval:
 
         assert "Launch Approval" in text
         assert "*Slots:* 1 slot" in text
-        assert keyboard is not None
+        assert keyboard is None
         assert attachments == ["/nonexistent/launch_preview.md"]
 
 
@@ -822,13 +778,7 @@ class TestFormatHITL:
 
         assert "HITL Request" in text
         assert "review" in text
-        assert keyboard is not None
-        buttons = keyboard.inline_keyboard
-        assert len(buttons) == 1
-        assert len(buttons[0]) == 3  # Accept + Reject + Feedback
-        assert "Accept" in buttons[0][0].text
-        assert "Reject" in buttons[0][1].text
-        assert "Feedback" in buttons[0][2].text
+        assert keyboard is None
         assert attachments == []
 
 

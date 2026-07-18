@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import html
 import json
@@ -36,8 +36,6 @@ from sase_telegram.custom_commands import (
 )
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
-from sase.launch_approval_actions import LaunchApprovalActionError
-from sase.plan_approval_actions import PlanApprovalActionError
 from sase.user_question_actions import UserQuestionActionError
 from sase.notification_gates.models import GateError
 from sase_telegram.formatting import (
@@ -50,21 +48,22 @@ from sase_telegram.formatting import (
     format_answered_question,
     format_questions_complete,
     markdown_to_telegram_v2,
-    render_custom_gate_keyboard,
-    render_plan_gate_keyboard,
+    render_gate_keyboard,
     render_question_message,
 )
 from sase_telegram.gate_flow import (
     GateProgress,
     GateView,
-    choice_for_id,
-    choice_for_token,
+    branch_for_token,
     clear_progress as clear_gate_progress,
+    expand_branch,
+    feedback_is_command_input,
+    feedback_mode,
     load_gate_view,
     load_progress as load_gate_progress,
+    option_for_id,
     save_progress as save_gate_progress,
-    select_choice,
-    toggle_extra,
+    toggle_option,
 )
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -80,13 +79,9 @@ from sase_telegram.inbound import (
     load_awaiting_feedback,
     make_image_filename,
     normalize_launch_xprompt_at_refs,
-    process_callback,
-    process_callback_twostep,
     process_text_message,
     reconstruct_code_markers,
-    resolve_launch_response,
     resolve_gate_response,
-    resolve_plan_response,
     resolve_user_question_response,
     save_awaiting_feedback,
     save_offset,
@@ -809,43 +804,13 @@ def _write_response(response: ResponseAction) -> None:
     response.response_path.write_text(json.dumps(response.response_data, indent=2))
 
 
-def _launch_error_answer_text(
-    exc: LaunchApprovalActionError | PlanApprovalActionError,
-) -> str:
-    if exc.code in {"conflict_already_handled", "not_found"}:
-        return _STALE_AWAITING_FEEDBACK_TEXT
-    if exc.code in {"invalid_request", "stale", "expired"}:
-        return "This request has expired"
-    if exc.code == "dispatch_failed":
-        return f"Launch dispatch failed: {exc}"
-    return str(exc)
-
-
 def _resolve_response(
     response: ResponseAction, action: dict[str, Any] | None
 ) -> str | None:
-    if response.action_type == "plan":
-        action_data = action.get("action_data") if isinstance(action, dict) else None
-        if (
-            isinstance(action_data, dict)
-            and action_data.get("request_id")
-            and action_data.get("request_kind")
-        ):
-            return resolve_plan_response(response, action)
-        # Preserve the pre-gate Telegram path for already in-flight legacy
-        # PlanApproval rows, including very old rows without plan_request.json.
-        _write_response(response)
-        return response.answer_text
-    if response.action_type == "launch":
-        return resolve_launch_response(response, action)
+    if response.action_type == "gate":
+        return resolve_gate_response(response, action)
     if response.action_type == "question":
         return resolve_user_question_response(response, action)
-    if response.action_type == "custom":
-        return resolve_gate_response(response, action)
-    if response.action_type == "hitl":
-        action_data = action.get("action_data") if isinstance(action, dict) else None
-        if isinstance(action_data, dict) and action_data.get("request_kind") == "hitl":
-            return resolve_gate_response(response, action)
     _write_response(response)
     return response.answer_text
 
@@ -1229,121 +1194,12 @@ def _handle_question_callback(callback_query: Any, pending: dict[str, Any]) -> N
     )
 
 
-def _send_plan_confirmation(action: dict[str, Any], choice: str) -> None:
-    """Send a confirmation message with a fork copy button after plan actions."""
-    labels = {
-        "approve": "Plan approved",
-        "commit": "Plan committed",
-        "epic": "Epic created",
-    }
-    label = labels.get(choice, "Plan updated")
-    text = escape_markdown_v2(label)
-
-    action_data = action.get("action_data")
-    if not isinstance(action_data, dict):
-        action_data = {}
-
-    def text_value(*keys: str) -> str | None:
-        for key in keys:
-            value = action_data.get(key)
-            if isinstance(value, str) and value:
-                return value
-            value = action.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return None
-
-    fork_text = build_fork_copy_text(
-        text_value("agent_name"),
-        prompt=text_value("prompt"),
-        vcs_tag=text_value("agent_vcs_tag", "vcs_tag"),
-        cl_name=text_value("agent_cl_name", "cl_name"),
-    )
-    if fork_text:
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "🍴 Fork",
-                        copy_text=CopyTextButton(text=fork_text),
-                    )
-                ]
-            ]
-        )
-    else:
-        keyboard = None
-
-    chat_id = action.get("chat_id")
-    if chat_id:
-        telegram_client.send_message(
-            chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
-        )
-
-
-def _is_plain_plan_reject(response: ResponseAction) -> bool:
-    return (
-        response.action_type == "plan"
-        and response.response_data.get("action") == "reject"
-        and "feedback" not in response.response_data
-    )
-
-
-def _plan_reject_agent_name(action: dict[str, Any] | None) -> str | None:
-    if not action:
-        return None
-
-    action_data = action.get("action_data")
-    containers = [action_data, action] if isinstance(action_data, dict) else [action]
-    for container in containers:
-        agent_name = container.get("agent_name")
-        if isinstance(agent_name, str) and agent_name.strip():
-            return agent_name.strip()
-    return None
-
-
-def _kill_agent_after_plan_reject(agent_name: str) -> None:
-    from sase.agent.running import kill_named_agent
-
-    result = kill_named_agent(agent_name)
-    if not getattr(result, "success", False):
-        log.info(
-            "Plan reject kill for agent %s was non-fatal: %s",
-            agent_name,
-            getattr(result, "message", result),
-        )
-
-
-def _handle_post_response_side_effects(
-    response: ResponseAction, action: dict[str, Any] | None
-) -> None:
-    if not _is_plain_plan_reject(response):
-        return
-
-    agent_name = _plan_reject_agent_name(action)
-    if agent_name is None:
-        log.info(
-            "Skipping plan reject kill for %s: no agent_name in pending action",
-            response.notif_id_prefix,
-        )
-        return
-
-    try:
-        _kill_agent_after_plan_reject(agent_name)
-    except Exception:
-        log.warning(
-            "Failed to kill agent %s after Telegram plan reject",
-            agent_name,
-            exc_info=True,
-        )
-
-
 def _shared_action_resolution(prefix: str) -> str | None:
     """Return the shared-store resolution for a notification prefix.
 
     Returns ``"already_handled"`` or ``"stale"`` when the shared host store
-    (with legacy records merged in) reports the action is no longer actionable,
-    or ``None`` when the store has no opinion / is unavailable. Best-effort so
-    the legacy callback path keeps working against older `sase` installs.
+    (with migrated records merged in) reports the action is no longer actionable,
+    or ``None`` when the store has no opinion or is unavailable.
     """
     try:
         from sase.notifications.pending_actions import (
@@ -1432,14 +1288,12 @@ def _begin_gate_feedback(
     prefix: str,
     view: GateView,
     progress: GateProgress,
-    *,
-    action_type: str,
-    input_data: object,
-    prompt: str,
+    selected_option_ids: tuple[str, ...],
 ) -> None:
-    if progress.choice_id is None:
-        _answer_callback(callback_query, "Choose an action first")
+    if not selected_option_ids:
+        _answer_callback(callback_query, "Select at least one option")
         return
+    progress = replace(progress, selected_option_ids=selected_option_ids)
     save_gate_progress(view, progress)
     key = (
         str(progress.active_message_id)
@@ -1450,14 +1304,16 @@ def _begin_gate_feedback(
         key,
         prefix,
         {
-            "action_type": action_type,
+            "action_type": "gate",
             "bundle_path": str(view.bundle_path),
-            "choice_id": progress.choice_id,
-            "selected_extra_ids": list(progress.selected_extra_ids),
-            "input_data": input_data,
+            "selected_option_ids": list(selected_option_ids),
+            "input_data": {},
+            "feedback_is_command_input": feedback_is_command_input(
+                view, selected_option_ids
+            ),
         },
     )
-    _answer_callback(callback_query, prompt)
+    _answer_callback(callback_query, "Send the required feedback as a text message")
     message_id = _action_message_id(action)
     chat_id = _callback_chat_id(callback_query, action)
     if message_id is not None and chat_id is not None:
@@ -1466,18 +1322,32 @@ def _begin_gate_feedback(
         )
 
 
-def _handle_custom_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
+_GATE_KIND_BY_ACTION = {
+    "CustomGate": "custom",
+    "EpicApproval": "epic_plan",
+    "HITL": "hitl",
+    "LaunchApproval": "launch",
+    "PlanApproval": "plan",
+}
+
+
+def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
+    """Handle one compact callback for any v2 non-question gate."""
     cb = decode(callback_query.data)
     action = pending.get(cb.notif_id_prefix)
-    if action is None or action.get("action") != "CustomGate":
+    if action is None:
         _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
+        return
+    expected_kind = _GATE_KIND_BY_ACTION.get(str(action.get("action")))
+    if expected_kind is None:
+        _answer_callback(callback_query, "This request has expired")
         return
     action_data = action.get("action_data")
     if not isinstance(action_data, dict):
         _answer_callback(callback_query, "This request has expired")
         return
     try:
-        view = load_gate_view(action_data, expected_kind="custom")
+        view = load_gate_view(action_data, expected_kind=expected_kind)
     except GateError as exc:
         _answer_callback(callback_query, _gate_error_answer_text(exc))
         _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
@@ -1490,51 +1360,32 @@ def _handle_custom_gate_callback(callback_query: Any, pending: dict[str, Any]) -
         active_message_id=message_id,
         chat_id=chat_id,
     )
-    if cb.choice.startswith("c"):
-        choice = choice_for_token(view, cb.choice)
-        if choice is None:
-            _answer_callback(callback_query, "Invalid gate choice")
-            return
-        progress = select_choice(view, progress, choice.id)
-        if choice.feedback == "required" and not choice.extras:
-            _begin_gate_feedback(
-                callback_query,
-                action,
-                cb.notif_id_prefix,
-                view,
-                progress,
-                action_type="custom",
-                input_data={},
-                prompt="Send the required feedback as a text message",
-            )
-            return
-        if choice.extras or choice.feedback == "optional":
+    selected_option_ids: tuple[str, ...] | None = None
+    branch_result = branch_for_token(view, cb.choice, prefix="c")
+    if branch_result is not None:
+        branch_index, branch = branch_result
+        if len(branch) > 1:
+            progress = expand_branch(view, progress, branch_index)
             save_gate_progress(view, progress)
             if message_id is not None and chat_id is not None:
                 telegram_client.edit_message_reply_markup(
                     chat_id,
                     message_id,
-                    reply_markup=render_custom_gate_keyboard(
+                    reply_markup=render_gate_keyboard(
                         cb.notif_id_prefix, view, progress
                     ),
                 )
-            _answer_callback(callback_query, f"Selected {choice.label}")
+            first = option_for_id(view, branch[0])
+            _answer_callback(
+                callback_query,
+                f"Opened {first.label if first is not None else 'gate group'}",
+            )
             return
-        response = ResponseAction(
-            action_type="custom",
-            notif_id_prefix=cb.notif_id_prefix,
-            response_path=view.bundle_path / "response.json",
-            response_data={},
-            answer_text=None,
-            choice_id=choice.id,
-            input_data={},
-        )
-        _execute_gate_callback_response(callback_query, action, response, view)
-        return
+        selected_option_ids = branch
 
-    if cb.choice.startswith("x"):
+    elif cb.choice.startswith("x"):
         try:
-            progress, enabled = toggle_extra(view, progress, cb.choice)
+            progress, enabled = toggle_option(view, progress, cb.choice)
         except ValueError as exc:
             _answer_callback(callback_query, str(exc))
             return
@@ -1543,193 +1394,48 @@ def _handle_custom_gate_callback(callback_query: Any, pending: dict[str, Any]) -
             telegram_client.edit_message_reply_markup(
                 chat_id,
                 message_id,
-                reply_markup=render_custom_gate_keyboard(
-                    cb.notif_id_prefix, view, progress
-                ),
+                reply_markup=render_gate_keyboard(cb.notif_id_prefix, view, progress),
             )
         _answer_callback(
-            callback_query, "Add-on selected" if enabled else "Add-on cleared"
+            callback_query, "Option selected" if enabled else "Option cleared"
         )
         return
 
-    choice = (
-        choice_for_id(view, progress.choice_id)
-        if progress.choice_id is not None
-        else None
-    )
-    if choice is None:
-        _answer_callback(callback_query, "Choose an action first")
-        return
-    if cb.choice == "feedback":
-        if choice.feedback != "optional":
-            _answer_callback(callback_query, "Feedback is not optional for this choice")
+    else:
+        submit_result = branch_for_token(view, cb.choice, prefix="s")
+        if submit_result is None:
+            _answer_callback(callback_query, "Invalid gate callback")
             return
-        _begin_gate_feedback(
-            callback_query,
-            action,
-            cb.notif_id_prefix,
-            view,
-            progress,
-            action_type="custom",
-            input_data={},
-            prompt="Send your feedback as a text message",
+        branch_index, branch = submit_result
+        if len(branch) == 1 or progress.expanded_branch_index != branch_index:
+            _answer_callback(callback_query, "Open this gate group before submitting")
+            return
+        selected_set = set(progress.selected_option_ids)
+        selected_option_ids = tuple(
+            option_id for option_id in branch if option_id in selected_set
         )
+
+    if not selected_option_ids:
+        _answer_callback(callback_query, "Select at least one option")
         return
-    if cb.choice != "submit":
-        _answer_callback(callback_query, "Invalid gate callback")
-        return
-    if choice.feedback == "required":
+    if feedback_mode(view, selected_option_ids) == "required":
         _begin_gate_feedback(
             callback_query,
             action,
             cb.notif_id_prefix,
             view,
             progress,
-            action_type="custom",
-            input_data={},
-            prompt="Send the required feedback as a text message",
+            selected_option_ids,
         )
         return
     response = ResponseAction(
-        action_type="custom",
+        action_type="gate",
         notif_id_prefix=cb.notif_id_prefix,
         response_path=view.bundle_path / "response.json",
         response_data={},
         answer_text=None,
-        choice_id=choice.id,
-        selected_extra_ids=progress.selected_extra_ids,
+        selected_option_ids=selected_option_ids,
         input_data={},
-    )
-    _execute_gate_callback_response(callback_query, action, response, view)
-
-
-def _handle_plan_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
-    cb = decode(callback_query.data)
-    action = pending.get(cb.notif_id_prefix)
-    if action is None:
-        _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
-        return
-    action_data = action.get("action_data")
-    if not isinstance(action_data, dict):
-        _answer_callback(callback_query, "This request has expired")
-        return
-    try:
-        view = load_gate_view(action_data, expected_kind="plan")
-    except GateError as exc:
-        _answer_callback(callback_query, _gate_error_answer_text(exc))
-        return
-    message_id = _callback_origin_message_id(callback_query, action)
-    chat_id = _callback_chat_id(callback_query, action)
-    progress = load_gate_progress(
-        view,
-        default_choice_id="approve",
-        active_message_id=message_id,
-        chat_id=chat_id,
-    )
-    if cb.choice.startswith("x"):
-        try:
-            progress, enabled = toggle_extra(view, progress, cb.choice)
-        except ValueError as exc:
-            _answer_callback(callback_query, str(exc))
-            return
-        save_gate_progress(view, progress)
-        if message_id is not None and chat_id is not None:
-            telegram_client.edit_message_reply_markup(
-                chat_id,
-                message_id,
-                reply_markup=render_plan_gate_keyboard(
-                    cb.notif_id_prefix, view, progress
-                ),
-            )
-        _answer_callback(
-            callback_query, "Add-on selected" if enabled else "Add-on cleared"
-        )
-        return
-    if cb.choice != "submit":
-        _answer_callback(callback_query, "Invalid plan callback")
-        return
-    from sase.plan_gate import PLAN_COMMIT_EXTRA_ID, PLAN_RUN_CODER_EXTRA_ID
-
-    selected = set(progress.selected_extra_ids)
-    response = ResponseAction(
-        action_type="plan",
-        notif_id_prefix=cb.notif_id_prefix,
-        response_path=view.bundle_path / "response.json",
-        response_data={
-            "action": "approve",
-            "commit_plan": PLAN_COMMIT_EXTRA_ID in selected,
-            "run_coder": PLAN_RUN_CODER_EXTRA_ID in selected,
-        },
-        answer_text="Plan approved",
-        choice_id="approve",
-    )
-    try:
-        answer_text = _resolve_response(response, action)
-    except PlanApprovalActionError as exc:
-        _answer_callback(callback_query, _launch_error_answer_text(exc))
-        if exc.code == "conflict_already_handled":
-            _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
-            clear_gate_progress(view)
-        return
-    _answer_callback(callback_query, answer_text)
-    _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)
-    clear_gate_progress(view)
-    _send_plan_confirmation(action, "approve")
-
-
-def _neutral_hitl_input(choice_id: str) -> dict[str, object]:
-    approved_ids = {"accept", "approve", "approved", "yes"}
-    return {"action": choice_id, "approved": choice_id in approved_ids}
-
-
-def _handle_neutral_hitl_callback(callback_query: Any, pending: dict[str, Any]) -> None:
-    cb = decode(callback_query.data)
-    action = pending.get(cb.notif_id_prefix)
-    if action is None:
-        _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
-        return
-    action_data = action.get("action_data")
-    if not isinstance(action_data, dict):
-        _answer_callback(callback_query, "This request has expired")
-        return
-    try:
-        view = load_gate_view(action_data, expected_kind="hitl")
-    except GateError as exc:
-        _answer_callback(callback_query, _gate_error_answer_text(exc))
-        return
-    choice = choice_for_token(view, cb.choice)
-    if choice is None:
-        _answer_callback(callback_query, "Invalid HITL choice")
-        return
-    message_id = _callback_origin_message_id(callback_query, action)
-    chat_id = _callback_chat_id(callback_query, action)
-    progress = select_choice(
-        view,
-        GateProgress(active_message_id=message_id, chat_id=chat_id),
-        choice.id,
-    )
-    input_data = _neutral_hitl_input(choice.id)
-    if choice.feedback == "required" or choice.id == "feedback":
-        _begin_gate_feedback(
-            callback_query,
-            action,
-            cb.notif_id_prefix,
-            view,
-            progress,
-            action_type="neutral_hitl",
-            input_data=input_data,
-            prompt="Send your feedback as a text message",
-        )
-        return
-    response = ResponseAction(
-        action_type="hitl",
-        notif_id_prefix=cb.notif_id_prefix,
-        response_path=view.bundle_path / "response.json",
-        response_data={},
-        answer_text=None,
-        choice_id=choice.id,
-        selected_extra_ids=progress.selected_extra_ids,
-        input_data=input_data,
     )
     _execute_gate_callback_response(callback_query, action, response, view)
 
@@ -1739,7 +1445,7 @@ def _resolve_callback_already_handled(
 ) -> tuple[str, dict[str, Any], str] | None:
     """Return ``(prefix, action, resolution)`` when a callback is already resolved.
 
-    Only notification-backed callbacks (plan/hitl/question) with a live pending
+    Only notification-backed callbacks (gate/question) with a live pending
     record are guarded — agent management callbacks and unknown actions fall
     through to the existing handlers.
     """
@@ -1747,7 +1453,7 @@ def _resolve_callback_already_handled(
         cb = decode(data_str)
     except ValueError:
         return None
-    if cb.action_type not in {"gate", "plan", "hitl", "launch", "question"}:
+    if cb.action_type not in {"gate", "question"}:
         return None
     action = pending.get(cb.notif_id_prefix)
     if action is None:
@@ -1827,108 +1533,14 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             _handle_question_callback(callback_query, pending)
             return
         if decoded.action_type == "gate":
-            _handle_custom_gate_callback(callback_query, pending)
+            _handle_gate_callback(callback_query, pending)
             return
-        if decoded.action_type == "plan" and (
-            decoded.choice == "submit" or decoded.choice.startswith("x")
-        ):
-            _handle_plan_gate_callback(callback_query, pending)
-            return
-        if decoded.action_type == "hitl" and decoded.choice.startswith("c"):
-            action = pending.get(decoded.notif_id_prefix)
-            action_data = action.get("action_data") if action else None
-            if (
-                isinstance(action_data, dict)
-                and action_data.get("request_kind") == "hitl"
-            ):
-                _handle_neutral_hitl_callback(callback_query, pending)
-                return
     except ValueError:
-        pass
-
-    # Check two-step first (feedback/custom -> save awaiting state)
-    twostep = process_callback_twostep(data_str, pending)
-    if twostep is not None:
-        prefix, action_info = twostep
-        action = pending.get(prefix)
-        # Key by the originating Telegram message_id so concurrent two-step
-        # flows do not overwrite each other. Fall back to the prefix when the
-        # pending entry is somehow missing the message_id.
-        key = (
-            str(action["message_id"])
-            if action and action.get("message_id") is not None
-            else prefix
-        )
-        save_awaiting_feedback(key, prefix, action_info)
-        telegram_client.answer_callback_query(
-            callback_query.id, "Send your feedback as a text message"
-        )
-        if action:
-            telegram_client.edit_message_reply_markup(
-                action["chat_id"], action["message_id"], reply_markup=None
-            )
+        telegram_client.answer_callback_query(callback_query.id, "Invalid callback")
         return
-
-    # Regular one-shot callback
-    response = process_callback(data_str, pending)
-
-    if response is None:
-        # Unknown or already-handled callback
-        try:
-            cb = decode(data_str)
-        except ValueError:
-            telegram_client.answer_callback_query(callback_query.id, "Invalid callback")
-            return
-        if cb.action_type == "plan" and cb.choice == "legend":
-            telegram_client.answer_callback_query(
-                callback_query.id, "Legend is no longer supported"
-            )
-            return
-        telegram_client.answer_callback_query(
-            callback_query.id, "This action has already been handled"
-        )
-        return
-
-    # Check if the response directory still exists (expired request)
-    if not response.response_path.parent.exists():
-        telegram_client.answer_callback_query(
-            callback_query.id, "This request has expired"
-        )
-        pending_actions.remove(response.notif_id_prefix)
-        return
-
-    action = pending.get(response.notif_id_prefix)
-    try:
-        answer_text = _resolve_response(response, action)
-    except (LaunchApprovalActionError, PlanApprovalActionError) as exc:
-        telegram_client.answer_callback_query(
-            callback_query.id, _launch_error_answer_text(exc)
-        )
-        if action:
-            telegram_client.edit_message_reply_markup(
-                action["chat_id"], action["message_id"], reply_markup=None
-            )
-        pending_actions.remove(response.notif_id_prefix)
-        clear_awaiting_feedback_by_prefix(response.notif_id_prefix)
-        return
-    _handle_post_response_side_effects(response, action)
-    telegram_client.answer_callback_query(callback_query.id, answer_text)
-
-    if action:
-        telegram_client.edit_message_reply_markup(
-            action["chat_id"], action["message_id"], reply_markup=None
-        )
-
-    # Send confirmation with Fork copy button for completed plan actions.
-    if response.action_type == "plan" and response.response_data.get("action") in (
-        "approve",
-        "commit",
-        "epic",
-    ):
-        if action:
-            _send_plan_confirmation(action, response.response_data["action"])
-
-    pending_actions.remove(response.notif_id_prefix)
+    telegram_client.answer_callback_query(
+        callback_query.id, "This action has already been handled"
+    )
 
 
 def _get_agent_retry_prompt(name: str) -> str | None:
@@ -4205,20 +3817,15 @@ def _handle_text_message(
         action = pending_actions.get(response.notif_id_prefix)
         try:
             _resolve_response(response, action)
-        except (GateError, LaunchApprovalActionError, PlanApprovalActionError) as exc:
+        except GateError as exc:
             chat_id = _message_chat_id(message) or _configured_chat_id()
             if chat_id is not None:
-                error_text = (
-                    _gate_error_answer_text(exc)
-                    if isinstance(exc, GateError)
-                    else _launch_error_answer_text(exc)
-                )
                 telegram_client.send_message(
                     chat_id,
-                    error_text,
+                    _gate_error_answer_text(exc),
                     reply_to_message_id=message.message_id,
                 )
-            if not isinstance(exc, GateError) or exc.code in {
+            if exc.code in {
                 "already_answered",
                 "gate_cancelled",
                 "not_found",
@@ -4345,7 +3952,7 @@ def _register_commands_if_needed(
 
 
 def _dismiss_resolved_button(prefix: str, message_id: int, chat_id: str) -> None:
-    """Remove a resolved action's inline keyboard and drop its legacy record."""
+    """Remove a resolved action's inline keyboard and Telegram pending record."""
     try:
         telegram_client.edit_message_reply_markup(
             chat_id, message_id, reply_markup=None
@@ -4363,9 +3970,8 @@ def _find_shared_handled_transports(
 
     Gated on ``live_prefixes`` (the prefixes that still have a Telegram pending
     record) so a resolved-but-retained shared row is dismissed exactly once
-    rather than re-edited on every tick until it goes stale. Best-effort: an
-    older installed `sase` package may lack the shared store, so any failure
-    degrades to the legacy filesystem cleanup path.
+    rather than re-edited on every tick until it goes stale. Shared-store
+    failures fall back to direct v2 gate and question completion detection.
     """
     try:
         from sase.notifications.pending_actions import read_pending_action_store

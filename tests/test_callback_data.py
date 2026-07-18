@@ -43,3 +43,12 @@ class TestRoundtrip:
         encoded = encode(*original)
         decoded = decode(encoded)
         assert decoded == CallbackData(*original)
+
+    @pytest.mark.parametrize("token", ["c1234", "x1234", "s1234"])
+    def test_compact_gate_tokens_roundtrip_within_telegram_limit(
+        self, token: str
+    ) -> None:
+        encoded = encode("gate", "abcd1234", token)
+
+        assert len(encoded.encode("utf-8")) <= 64
+        assert decode(encoded) == CallbackData("gate", "abcd1234", token)

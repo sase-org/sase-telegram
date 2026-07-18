@@ -114,13 +114,12 @@ IMAGES_DIR = Path.home() / ".sase" / "telegram" / "images"
 class ResponseAction:
     """A response to write based on a user's Telegram interaction."""
 
-    action_type: str  # "plan", "hitl", "launch", "question"
+    action_type: str  # "gate" or the specialized "question" flow
     notif_id_prefix: str  # 8-char prefix
     response_path: Path  # Where to write response JSON
     response_data: dict[str, Any]  # JSON content
     answer_text: str | None  # Text for answer_callback_query popup
-    choice_id: str | None = None  # Envelope choice, separate from legacy JSON
-    selected_extra_ids: tuple[str, ...] = ()
+    selected_option_ids: tuple[str, ...] = ()
     feedback: str | None = None
     input_data: object | None = None
 
@@ -284,188 +283,6 @@ def _get_question_text(response_dir: str) -> str:
         return ""
 
 
-def process_callback(
-    callback_data_str: str, pending: dict[str, Any]
-) -> ResponseAction | None:
-    """Decode a callback and build a ResponseAction for immediate responses.
-
-    Returns None for two-step callbacks (feedback/custom) and unknown actions.
-    """
-    from sase_telegram.callback_data import decode
-
-    cb = decode(callback_data_str)
-    action = pending.get(cb.notif_id_prefix)
-    if action is None:
-        return None
-
-    action_data = action["action_data"]
-
-    if cb.action_type == "plan":
-        response_dir = action_data["response_dir"]
-        response_path = Path(
-            action_data.get("response_path")
-            or Path(response_dir) / "plan_response.json"
-        )
-        if cb.choice == "approve":
-            return ResponseAction(
-                action_type="plan",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "approve"},
-                answer_text="Plan approved",
-                choice_id="approve",
-            )
-        elif cb.choice == "reject":
-            return ResponseAction(
-                action_type="plan",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "reject"},
-                answer_text="Plan rejected",
-                choice_id="reject",
-            )
-        elif cb.choice == "epic":
-            return ResponseAction(
-                action_type="plan",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "epic"},
-                answer_text="Epic created",
-                choice_id="epic",
-            )
-        elif cb.choice == "run":
-            return ResponseAction(
-                action_type="plan",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={
-                    "action": "approve",
-                    "commit_plan": False,
-                    "run_coder": True,
-                },
-                answer_text="Running coder (no commit)",
-                choice_id="run",
-            )
-        elif cb.choice in {"tale", "commit"}:
-            return ResponseAction(
-                action_type="plan",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "approve"},
-                answer_text=f"{cb.choice.title()} approved",
-                choice_id=cb.choice,
-            )
-
-    elif cb.action_type == "hitl":
-        artifacts_dir = action_data["artifacts_dir"]
-        response_path = Path(artifacts_dir) / "hitl_response.json"
-        if cb.choice == "accept":
-            return ResponseAction(
-                action_type="hitl",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "accept", "approved": True},
-                answer_text="Accepted",
-            )
-        elif cb.choice == "reject":
-            return ResponseAction(
-                action_type="hitl",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "reject", "approved": False},
-                answer_text="Rejected",
-            )
-        # "feedback" handled by twostep
-
-    elif cb.action_type == "launch":
-        response_dir = action_data["response_dir"]
-        response_path = Path(
-            action_data.get("response_path")
-            or Path(response_dir) / "launch_response.json"
-        )
-        if cb.choice == "approve":
-            return ResponseAction(
-                action_type="launch",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "approve"},
-                answer_text="Launch approved",
-            )
-        elif cb.choice == "reject":
-            return ResponseAction(
-                action_type="launch",
-                notif_id_prefix=cb.notif_id_prefix,
-                response_path=response_path,
-                response_data={"action": "reject"},
-                answer_text="Launch rejected",
-            )
-        # "feedback" handled by twostep
-
-    elif cb.action_type == "question":
-        # Telegram question sessions are progress-aware and handled by
-        # scripts.sase_tg_inbound so multi-question requests cannot be
-        # resolved from a single callback.
-        return None
-
-    return None
-
-
-def process_callback_twostep(
-    callback_data_str: str, pending: dict[str, Any]
-) -> tuple[str, dict[str, Any]] | None:
-    """Check if a callback initiates a two-step feedback flow.
-
-    Returns (notif_id_prefix, action_info) for feedback/custom callbacks,
-    or None for regular one-shot callbacks.
-    """
-    from sase_telegram.callback_data import decode
-
-    cb = decode(callback_data_str)
-    action = pending.get(cb.notif_id_prefix)
-    if action is None:
-        return None
-
-    action_data = action["action_data"]
-
-    if cb.action_type == "plan" and cb.choice == "feedback":
-        info = {
-            "action_type": "plan",
-            "response_dir": action_data["response_dir"],
-        }
-        if response_path := action_data.get("response_path"):
-            info["response_path"] = response_path
-        return (
-            cb.notif_id_prefix,
-            info,
-        )
-
-    if cb.action_type == "hitl" and cb.choice == "feedback":
-        return (
-            cb.notif_id_prefix,
-            {
-                "action_type": "hitl",
-                "artifacts_dir": action_data["artifacts_dir"],
-            },
-        )
-
-    if cb.action_type == "launch" and cb.choice == "feedback":
-        info = {
-            "action_type": "launch",
-            "response_dir": action_data["response_dir"],
-        }
-        if response_path := action_data.get("response_path"):
-            info["response_path"] = response_path
-        return (
-            cb.notif_id_prefix,
-            info,
-        )
-
-    if cb.action_type == "question" and cb.choice == "custom":
-        return None
-
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Text message processing (two-step completion)
 # ---------------------------------------------------------------------------
@@ -486,79 +303,32 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
     prefix: str = awaiting["prefix"]
     info: dict[str, Any] = awaiting["action_info"]
 
-    if info["action_type"] == "plan":
-        response_path = info.get("response_path")
-        return ResponseAction(
-            action_type="plan",
-            notif_id_prefix=prefix,
-            response_path=(
-                Path(response_path)
-                if response_path
-                else Path(info["response_dir"]) / "plan_response.json"
-            ),
-            response_data={
-                "action": "reject",
-                "feedback": text,
-            },
-            answer_text=None,
-            choice_id="feedback",
-        )
-
-    if info["action_type"] == "hitl":
-        return ResponseAction(
-            action_type="hitl",
-            notif_id_prefix=prefix,
-            response_path=Path(info["artifacts_dir"]) / "hitl_response.json",
-            response_data={
-                "action": "feedback",
-                "approved": False,
-                "feedback": text,
-            },
-            answer_text=None,
-        )
-
-    if info["action_type"] == "launch":
-        response_path = info.get("response_path")
-        return ResponseAction(
-            action_type="launch",
-            notif_id_prefix=prefix,
-            response_path=(
-                Path(response_path)
-                if response_path
-                else Path(info["response_dir"]) / "launch_response.json"
-            ),
-            response_data={
-                "action": "feedback",
-                "feedback": text,
-            },
-            answer_text=None,
-        )
-
     if info["action_type"] == "question":
         return None
 
-    if info["action_type"] in {"custom", "neutral_hitl"}:
-        raw_extra_ids = info.get("selected_extra_ids", [])
-        extra_ids = (
-            tuple(str(item) for item in raw_extra_ids)
-            if isinstance(raw_extra_ids, list)
-            and all(isinstance(item, str) for item in raw_extra_ids)
+    if info["action_type"] == "gate":
+        raw_option_ids = info.get("selected_option_ids", [])
+        option_ids = (
+            tuple(str(item) for item in raw_option_ids)
+            if isinstance(raw_option_ids, list)
+            and all(isinstance(item, str) for item in raw_option_ids)
             else ()
         )
-        choice_id = info.get("choice_id")
-        if not isinstance(choice_id, str) or not choice_id:
+        if not option_ids:
             return None
-        action_type = "custom" if info["action_type"] == "custom" else "hitl"
+        raw_input = info.get("input_data", {})
+        input_data = dict(raw_input) if isinstance(raw_input, dict) else {}
+        if info.get("feedback_is_command_input") is True:
+            input_data["feedback"] = text
         return ResponseAction(
-            action_type=action_type,
+            action_type="gate",
             notif_id_prefix=prefix,
             response_path=Path(info["bundle_path"]) / "response.json",
             response_data={},
             answer_text=None,
-            choice_id=choice_id,
-            selected_extra_ids=extra_ids,
+            selected_option_ids=option_ids,
             feedback=text,
-            input_data=info.get("input_data", {}),
+            input_data=input_data,
         )
 
     return None
@@ -568,8 +338,8 @@ def resolve_gate_response(
     response: ResponseAction,
     action: dict[str, Any] | None,
 ) -> str:
-    """Resolve a neutral custom/HITL gate through the shared host executor."""
-    from sase.notification_gates.executor import execute_gate_choice
+    """Resolve any v2 gate through the shared host executor."""
+    from sase.notification_gates.executor import execute_gate_selection
     from sase.notification_gates.models import GateError
     from sase.notification_gates.paths import resolve_action_bundle
 
@@ -580,19 +350,26 @@ def resolve_gate_response(
     action_data = action.get("action_data")
     if not isinstance(action_data, dict):
         raise GateError("invalid_request", "action_data", "gate action data is missing")
-    action_name = "CustomGate" if response.action_type == "custom" else "HITL"
+    action_name = action.get("action")
+    if action_name not in {
+        "CustomGate",
+        "EpicApproval",
+        "HITL",
+        "LaunchApproval",
+        "PlanApproval",
+    }:
+        raise GateError("invalid_request", "action", "unsupported gate action")
     bundle = resolve_action_bundle(action_name, action_data)
     if bundle is None or bundle.legacy or not bundle.request.is_file():
+        raise GateError("invalid_request", "bundle_path", "v2 gate bundle is missing")
+    if not response.selected_option_ids:
         raise GateError(
-            "invalid_request", "bundle_path", "neutral gate bundle is missing"
+            "invalid_request", "selected_option_ids", "gate selection is missing"
         )
-    if not response.choice_id:
-        raise GateError("invalid_request", "choice_id", "gate choice is missing")
-    execution = execute_gate_choice(
+    execution = execute_gate_selection(
         bundle.root,
-        response.choice_id,
+        response.selected_option_ids,
         {} if response.input_data is None else response.input_data,
-        selected_extra_ids=response.selected_extra_ids,
         feedback=response.feedback,
         source="telegram",
     )
@@ -600,120 +377,7 @@ def resolve_gate_response(
         raise GateError(
             "already_answered", response.notif_id_prefix, "gate is already answered"
         )
-    failures = [
-        result
-        for result in execution.response.get("extra_results", [])
-        if isinstance(result, dict) and result.get("status") == "failed"
-    ]
-    if failures:
-        return f"Gate answered; {len(failures)} add-on command(s) failed"
-    return f"Gate answered with {response.choice_id}"
-
-
-def resolve_launch_response(
-    response: ResponseAction,
-    action: dict[str, Any] | None,
-) -> str:
-    """Resolve a LaunchApproval response through the host shared executor."""
-    from sase.launch_approval_actions import (
-        LaunchApprovalActionContext,
-        LaunchApprovalActionError,
-        execute_launch_approval_response,
-    )
-
-    if action is None:
-        raise LaunchApprovalActionError(
-            "not_found",
-            response.notif_id_prefix,
-            "pending launch action is missing",
-        )
-    action_data = action.get("action_data")
-    if not isinstance(action_data, dict):
-        raise LaunchApprovalActionError(
-            "invalid_request",
-            "action_data",
-            "launch action data is missing",
-        )
-
-    choice = response.response_data.get("action")
-    feedback = response.response_data.get("feedback")
-    result = execute_launch_approval_response(
-        LaunchApprovalActionContext(
-            id=str(action.get("notification_id") or response.notif_id_prefix),
-            host_files=tuple(str(path) for path in action.get("files", [])),
-            host_action_data={
-                str(key): str(value) for key, value in action_data.items()
-            },
-        ),
-        str(choice),
-        feedback=str(feedback) if feedback is not None else None,
-    )
-    return result.message
-
-
-def resolve_plan_response(
-    response: ResponseAction,
-    action: dict[str, Any] | None,
-) -> str:
-    """Resolve a plan response through the shared neutral/legacy host action."""
-    from sase.plan_approval_actions import (
-        PlanApprovalActionContext,
-        PlanApprovalActionError,
-        execute_plan_approval_response,
-    )
-
-    if action is None:
-        raise PlanApprovalActionError(
-            "not_found",
-            response.notif_id_prefix,
-            "pending plan action is missing",
-        )
-    action_data = action.get("action_data")
-    if not isinstance(action_data, dict):
-        raise PlanApprovalActionError(
-            "invalid_request",
-            "action_data",
-            "plan action data is missing",
-        )
-    choice = response.choice_id
-    if not isinstance(choice, str):
-        choice = str(response.response_data.get("action") or "reject")
-    # The compatibility Telegram "Tale" button used callback choice
-    # ``approve``. New neutral requests advertise a literal ``tale`` choice.
-    if (
-        choice == "approve"
-        and not action_data.get("request_id")
-        and response.answer_text == "Plan approved"
-    ):
-        choice = "tale"
-    feedback = response.response_data.get("feedback")
-    raw_files = action.get("files", [])
-    if not isinstance(raw_files, list):
-        raw_files = []
-    if not raw_files and isinstance(action.get("plan_file"), str):
-        raw_files = [action["plan_file"]]
-    result = execute_plan_approval_response(
-        PlanApprovalActionContext(
-            id=str(action.get("notification_id") or response.notif_id_prefix),
-            host_files=tuple(str(path) for path in raw_files),
-            host_action_data={
-                str(key): str(value) for key, value in action_data.items()
-            },
-        ),
-        choice,
-        feedback=str(feedback) if feedback is not None else None,
-        commit_plan=(
-            response.response_data.get("commit_plan")
-            if isinstance(response.response_data.get("commit_plan"), bool)
-            else None
-        ),
-        run_coder=(
-            response.response_data.get("run_coder")
-            if isinstance(response.response_data.get("run_coder"), bool)
-            else None
-        ),
-    )
-    return result.message
+    return f"Gate answered with {', '.join(response.selected_option_ids)}"
 
 
 def resolve_user_question_response(
@@ -762,15 +426,9 @@ def resolve_user_question_response(
 
 def confirmation_text(response: ResponseAction) -> str:
     """Return a human-readable confirmation string for a two-step response."""
-    if response.action_type == "plan":
-        return "\u2705 Feedback received \u2014 plan will be revised"
-    if response.action_type == "hitl":
-        return "\u2705 Feedback received"
-    if response.action_type == "launch":
-        return "\u2705 Feedback received \u2014 launch rejected"
     if response.action_type == "question":
         return "\u2705 Answer received"
-    if response.action_type == "custom":
+    if response.action_type == "gate":
         return "\u2705 Gate response received"
     return "\u2705 Response received"
 
@@ -799,7 +457,7 @@ _ACTIONABLE_ACTIONS = {
 }
 
 
-def _neutral_gate_handled(action_data: dict[str, Any]) -> bool:
+def _gate_handled(action_data: dict[str, Any]) -> bool:
     response_value = action_data.get("response_path")
     if isinstance(response_value, str) and response_value:
         if Path(response_value).exists():
@@ -816,6 +474,16 @@ def _neutral_gate_handled(action_data: dict[str, Any]) -> bool:
     )
 
 
+def _question_handled(action_data: dict[str, Any]) -> bool:
+    response_dir = action_data.get("response_dir")
+    if not isinstance(response_dir, str) or not response_dir:
+        return False
+    root = Path(response_dir)
+    return (root / "question_response.json").exists() or not (
+        root / "question_request.json"
+    ).exists()
+
+
 def find_externally_handled(
     pending: dict[str, Any],
 ) -> list[tuple[str, int, str]]:
@@ -830,70 +498,15 @@ def find_externally_handled(
         if action not in _ACTIONABLE_ACTIONS:
             continue
         action_data = entry.get("action_data", {})
+        if not isinstance(action_data, dict):
+            continue
 
-        if action in {"PlanApproval", "EpicApproval"}:
-            response_dir = Path(action_data.get("response_dir", ""))
-            response_path = Path(
-                action_data.get("response_path") or response_dir / "plan_response.json"
-            )
-            request_path = Path(
-                action_data.get("request_path") or response_dir / "plan_request.json"
-            )
-            if (
-                response_path.exists()
-                or (response_dir / "cancellation.json").exists()
-                or (response_dir / "plan_approved.marker").exists()
-                or (response_dir != Path("") and not request_path.exists())
-            ):
-                handled.append((prefix, entry["message_id"], entry["chat_id"]))
-
-        elif action == "HITL":
-            if action_data.get("request_kind") == "hitl":
-                if _neutral_gate_handled(action_data):
-                    handled.append((prefix, entry["message_id"], entry["chat_id"]))
-                continue
-            artifacts_dir = Path(action_data.get("artifacts_dir", ""))
-            if (artifacts_dir / "hitl_response.json").exists():
-                handled.append((prefix, entry["message_id"], entry["chat_id"]))
-
-        elif action == "LaunchApproval":
-            response_dir = Path(action_data.get("response_dir", ""))
-            response_path = Path(
-                action_data.get("response_path")
-                or response_dir / "launch_response.json"
-            )
-            request_path = Path(
-                action_data.get("request_path") or response_dir / "launch_request.json"
-            )
-            cancellation_path = response_dir / "cancellation.json"
-            if (
-                response_path.exists()
-                or cancellation_path.exists()
-                or (response_dir != Path("") and not request_path.exists())
-            ):
-                handled.append((prefix, entry["message_id"], entry["chat_id"]))
-
-        elif action == "UserQuestion":
-            response_dir = Path(action_data.get("response_dir", ""))
-            response_path = Path(
-                action_data.get("response_path")
-                or response_dir / "question_response.json"
-            )
-            request_path = Path(
-                action_data.get("request_path")
-                or response_dir / "question_request.json"
-            )
-            cancellation_path = response_dir / "cancellation.json"
-            if (
-                response_path.exists()
-                or cancellation_path.exists()
-                or (response_dir != Path("") and not request_path.exists())
-            ):
-                handled.append((prefix, entry["message_id"], entry["chat_id"]))
-
-        elif action == "CustomGate":
-            if _neutral_gate_handled(action_data):
-                handled.append((prefix, entry["message_id"], entry["chat_id"]))
+        if (
+            _question_handled(action_data)
+            if action == "UserQuestion"
+            else _gate_handled(action_data)
+        ):
+            handled.append((prefix, entry["message_id"], entry["chat_id"]))
 
     return handled
 

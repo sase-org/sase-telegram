@@ -11,16 +11,19 @@ from typing import Any
 
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
-from sase.notification_gates.models import GateChoice
+from sase.notification_gates.models import GateOption
 from sase.notifications.models import Notification
 
 from sase_telegram import callback_data
 from sase_telegram.gate_flow import (
     GateProgress,
     GateView,
-    choice_for_id,
+    group_for_branch,
+    initial_progress,
     load_gate_view,
     load_progress,
+    option_for_id,
+    option_index,
 )
 from sase_telegram.question_flow import (
     CUSTOM_SELECTED_LABEL,
@@ -935,67 +938,83 @@ def _notification_gate_icon(n: Notification) -> str:
     return n.icon or _GATE_DEFAULT_ICONS.get(n.action or "", "🔔")
 
 
-def _choice_button_text(choice: GateChoice) -> str:
-    icon = choice.icon or "•"
-    return f"{icon} {choice.label}"
+def _option_button_text(option: GateOption) -> str:
+    icon = option.icon or "•"
+    return f"{icon} {option.label}"
 
 
-def render_custom_gate_keyboard(
+def render_gate_keyboard(
     prefix: str,
     view: GateView,
     progress: GateProgress | None = None,
 ) -> InlineKeyboardMarkup:
-    """Render compact custom-gate callbacks backed by server-side state."""
+    """Render every gate kind from its verified option-query branches."""
+    progress = progress or initial_progress(view)
     rows: list[list[InlineKeyboardButton]] = []
-    for index, choice in enumerate(view.choices):
-        selected = progress is not None and progress.choice_id == choice.id
-        label = _choice_button_text(choice)
-        if selected:
-            label = f"🔘 {label}"
+    singleton_row: list[InlineKeyboardButton] = []
+
+    def flush_singletons() -> None:
+        if singleton_row:
+            rows.append(list(singleton_row))
+            singleton_row.clear()
+
+    by_id = {option.id: option for option in view.options}
+    selected_ids = set(progress.selected_option_ids)
+    for branch_index, branch in enumerate(view.branches):
+        if len(branch) == 1:
+            option = by_id[branch[0]]
+            singleton_row.append(
+                InlineKeyboardButton(
+                    _option_button_text(option),
+                    callback_data=callback_data.encode(
+                        "gate", prefix, f"c{branch_index}"
+                    ),
+                )
+            )
+            continue
+
+        flush_singletons()
+        group = group_for_branch(view, branch)
+        if group is None:
+            continue
+        group_text = f"{group.icon or '•'} {group.label or by_id[branch[0]].label}"
+        if progress.expanded_branch_index != branch_index:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        group_text,
+                        callback_data=callback_data.encode(
+                            "gate", prefix, f"c{branch_index}"
+                        ),
+                    )
+                ]
+            )
+            continue
+        for option_id in branch:
+            option = by_id[option_id]
+            checked = "☑️" if option_id in selected_ids else "⬜"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"{checked} {_option_button_text(option)}",
+                        callback_data=callback_data.encode(
+                            "gate", prefix, f"x{option_index(view, option_id)}"
+                        ),
+                    )
+                ]
+            )
         rows.append(
             [
                 InlineKeyboardButton(
-                    label,
-                    callback_data=callback_data.encode("gate", prefix, f"c{index}"),
+                    group_text,
+                    callback_data=callback_data.encode(
+                        "gate", prefix, f"s{branch_index}"
+                    ),
                 )
             ]
         )
 
-    if progress is None or progress.choice_id is None:
-        return InlineKeyboardMarkup(rows)
-    selected_choice = choice_for_id(view, progress.choice_id)
-    if selected_choice is None:
-        return InlineKeyboardMarkup(rows)
-    selected_ids = set(progress.selected_extra_ids)
-    for index, extra in enumerate(selected_choice.extras):
-        checked = "☑️" if extra.id in selected_ids else "⬜"
-        icon = f" {extra.icon}" if extra.icon else ""
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"{checked}{icon} {extra.label}",
-                    callback_data=callback_data.encode("gate", prefix, f"x{index}"),
-                )
-            ]
-        )
-    final_row: list[InlineKeyboardButton] = []
-    if selected_choice.feedback == "optional":
-        final_row.append(
-            InlineKeyboardButton(
-                "💬 Add feedback",
-                callback_data=callback_data.encode("gate", prefix, "feedback"),
-            )
-        )
-    submit_label = (
-        "💬 Continue" if selected_choice.feedback == "required" else "✅ Submit"
-    )
-    final_row.append(
-        InlineKeyboardButton(
-            submit_label,
-            callback_data=callback_data.encode("gate", prefix, "submit"),
-        )
-    )
-    rows.append(final_row)
+    flush_singletons()
     return InlineKeyboardMarkup(rows)
 
 
@@ -1015,11 +1034,7 @@ def _format_custom_gate(
         )
         return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, list(n.files)
     progress = load_progress(view)
-    keyboard = render_custom_gate_keyboard(
-        _notif_prefix(n),
-        view,
-        progress if progress.choice_id is not None else None,
-    )
+    keyboard = render_gate_keyboard(_notif_prefix(n), view, progress)
     return text, keyboard, list(n.files)
 
 
@@ -1086,171 +1101,18 @@ def _format_plan_approval(
             plan_body if plan_content else "",
         )
 
-    neutral_choices = _neutral_plan_choices(n)
-    neutral_view = _neutral_plan_gate_view(n)
-    neutral_request = (
-        bool(n.action_data.get("request_id")) or n.action == "EpicApproval"
-    )
-    if neutral_choices is None and neutral_request:
-        keyboard = None
-    elif neutral_choices is None:
-        row1 = [
-            InlineKeyboardButton(
-                "📖 Tale",
-                callback_data=callback_data.encode("plan", prefix, "approve"),
-            ),
-            InlineKeyboardButton(
-                "✅ Approve",
-                callback_data=callback_data.encode("plan", prefix, "run"),
-            ),
-            InlineKeyboardButton(
-                "📋 Epic",
-                callback_data=callback_data.encode("plan", prefix, "epic"),
-            ),
-        ]
-        row2 = [
-            InlineKeyboardButton(
-                "❌ Reject",
-                callback_data=callback_data.encode("plan", prefix, "reject"),
-            ),
-            InlineKeyboardButton(
-                "💬 Feedback",
-                callback_data=callback_data.encode("plan", prefix, "feedback"),
-            ),
-        ]
-        keyboard = InlineKeyboardMarkup([row1, row2])
-    elif neutral_view is not None:
-        default_choice_id = "approve" if neutral_view.kind == "plan" else None
-        progress = load_progress(
-            neutral_view,
-            default_choice_id=default_choice_id,
-        )
-        keyboard = render_plan_gate_keyboard(prefix, neutral_view, progress)
-    else:
-        approval_order = ("tale", "approve", "epic")
-        action_order = ("reject", "feedback")
-        rows = [
-            [
-                _plan_choice_button(prefix, choice_id, neutral_choices[choice_id])
-                for choice_id in order
-                if choice_id in neutral_choices
-            ]
-            for order in (approval_order, action_order)
-        ]
-        keyboard = InlineKeyboardMarkup([row for row in rows if row])
-    return text, keyboard, attachments
-
-
-def render_plan_gate_keyboard(
-    prefix: str,
-    view: GateView,
-    progress: GateProgress,
-) -> InlineKeyboardMarkup:
-    """Render compatibility presets plus the new approval add-on toggles."""
-    by_id = {choice.id: choice for choice in view.choices}
-    rows: list[list[InlineKeyboardButton]] = []
-    for order in (("tale", "approve", "epic"), ("reject", "feedback")):
-        row = [
-            _plan_choice_button(
-                prefix,
-                choice_id,
-                by_id[choice_id].label,
-                icon=by_id[choice_id].icon,
-            )
-            for choice_id in order
-            if choice_id in by_id
-        ]
-        if row:
-            rows.append(row)
-
-    approve = by_id.get("approve")
-    if approve is None or not approve.extras:
-        return InlineKeyboardMarkup(rows)
-    selected_ids = set(progress.selected_extra_ids)
-    for index, extra in enumerate(approve.extras):
-        checked = "☑️" if extra.id in selected_ids else "⬜"
-        icon = f" {extra.icon}" if extra.icon else ""
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"{checked}{icon} {extra.label}",
-                    callback_data=callback_data.encode("plan", prefix, f"x{index}"),
-                )
-            ]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "✅ Approve with selected add-ons",
-                callback_data=callback_data.encode("plan", prefix, "submit"),
-            )
-        ]
-    )
-    return InlineKeyboardMarkup(rows)
-
-
-def _neutral_plan_gate_view(n: Notification) -> GateView | None:
-    if not n.action_data.get("bundle_path"):
-        return None
     expected_kind = "epic_plan" if n.action == "EpicApproval" else "plan"
+    if not n.action_data.get("bundle_path"):
+        return text, None, attachments
     try:
-        return load_gate_view(n.action_data, expected_kind=expected_kind)
+        view = load_gate_view(n.action_data, expected_kind=expected_kind)
     except Exception:
-        return None
-
-
-def _neutral_plan_choices(n: Notification) -> dict[str, str] | None:
-    """Read the envelope-advertised Telegram-safe plan choice subset."""
-    request_path = n.action_data.get("request_path")
-    if not request_path:
-        return None
-    try:
-        request = json.loads(Path(request_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(request, dict) or request.get("kind") not in {
-        "plan",
-        "epic_plan",
-    }:
-        return None
-    raw_choices = request.get("choices")
-    if not isinstance(raw_choices, list):
-        return None
-    remote_ids = {"approve", "tale", "epic", "reject", "feedback"}
-    choices: dict[str, str] = {}
-    for raw in raw_choices:
-        if not isinstance(raw, dict):
-            continue
-        choice_id = raw.get("id")
-        label = raw.get("label")
-        if (
-            isinstance(choice_id, str)
-            and choice_id in remote_ids
-            and isinstance(label, str)
-            and label
-        ):
-            choices[choice_id] = label
-    return choices
-
-
-def _plan_choice_button(
-    prefix: str,
-    choice_id: str,
-    label: str,
-    *,
-    icon: str | None = None,
-) -> InlineKeyboardButton:
-    icons = {
-        "approve": "✅",
-        "tale": "📖",
-        "epic": "📋",
-        "reject": "❌",
-        "feedback": "💬",
-    }
-    return InlineKeyboardButton(
-        f"{icon or icons.get(choice_id, '•')} {label}",
-        callback_data=callback_data.encode("plan", prefix, choice_id),
-    )
+        unavailable = escape_markdown_v2(
+            "Controls unavailable: the gate request could not be read."
+        )
+        return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, attachments
+    keyboard = render_gate_keyboard(prefix, view, load_progress(view))
+    return text, keyboard, attachments
 
 
 def _format_launch_approval(
@@ -1305,24 +1167,16 @@ def _format_launch_approval(
                     break
                 target = int(target * 0.8)
 
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "✅ Approve",
-                    callback_data=callback_data.encode("launch", prefix, "approve"),
-                ),
-                InlineKeyboardButton(
-                    "❌ Reject",
-                    callback_data=callback_data.encode("launch", prefix, "reject"),
-                ),
-                InlineKeyboardButton(
-                    "💬 Feedback",
-                    callback_data=callback_data.encode("launch", prefix, "feedback"),
-                ),
-            ]
-        ]
-    )
+    if not n.action_data.get("bundle_path"):
+        return text, None, attachments
+    try:
+        view = load_gate_view(n.action_data, expected_kind="launch")
+    except Exception:
+        unavailable = escape_markdown_v2(
+            "Controls unavailable: the launch gate could not be read."
+        )
+        return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, attachments
+    keyboard = render_gate_keyboard(prefix, view, load_progress(view))
     return text, keyboard, attachments
 
 
@@ -1331,44 +1185,16 @@ def _format_hitl(n: Notification) -> tuple[str, InlineKeyboardMarkup | None, lis
     notes_text = _format_notes_text(n.notes)
     text = f"{_notification_gate_icon(n)} *HITL Request*\n\n{notes_text}"
 
-    if n.action_data.get("request_kind") == "hitl" and n.action_data.get("bundle_path"):
-        try:
-            view = load_gate_view(n.action_data, expected_kind="hitl")
-        except Exception:
-            unavailable = escape_markdown_v2(
-                "Controls unavailable: the HITL request could not be read."
-            )
-            return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, []
-        rows = [
-            [
-                InlineKeyboardButton(
-                    _choice_button_text(choice),
-                    callback_data=callback_data.encode("hitl", prefix, f"c{index}"),
-                )
-            ]
-            for index, choice in enumerate(view.choices)
-        ]
-        return text, InlineKeyboardMarkup(rows), []
-
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "✅ Accept",
-                    callback_data=callback_data.encode("hitl", prefix, "accept"),
-                ),
-                InlineKeyboardButton(
-                    "❌ Reject",
-                    callback_data=callback_data.encode("hitl", prefix, "reject"),
-                ),
-                InlineKeyboardButton(
-                    "💬 Feedback",
-                    callback_data=callback_data.encode("hitl", prefix, "feedback"),
-                ),
-            ]
-        ]
-    )
-    return text, keyboard, []
+    if not n.action_data.get("bundle_path"):
+        return text, None, []
+    try:
+        view = load_gate_view(n.action_data, expected_kind="hitl")
+    except Exception:
+        unavailable = escape_markdown_v2(
+            "Controls unavailable: the HITL request could not be read."
+        )
+        return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, []
+    return text, render_gate_keyboard(prefix, view, load_progress(view)), []
 
 
 def _question_header(index: int, total: int) -> str:

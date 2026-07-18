@@ -1,4 +1,4 @@
-"""Telegram custom-gate formatting, state, and executor integration tests."""
+"""Telegram gate formatting, progress, and executor integration tests."""
 
 from __future__ import annotations
 
@@ -7,25 +7,26 @@ from datetime import datetime
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
+from sase.agent.launch_request import create_launch_approval_request
 from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
 from sase.plan_gate import create_plan_approval_gate
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
-from sase_telegram.scripts.sase_tg_outbound import _run_outbound
 from sase_telegram.scripts.sase_tg_inbound import (
     _handle_callback,
     _handle_text_message,
 )
+from sase_telegram.scripts.sase_tg_outbound import _run_outbound
 
 VALID_TALE_PLAN = """---
 tier: tale
 title: Telegram plan approval
-goal: Verify Telegram add-on selection
+goal: Verify Telegram option selection
 ---
 # Plan
 
@@ -86,8 +87,14 @@ def _command_script(result: str) -> str:
 def _custom_spec(
     *, request_id: str = "telegram-custom", feedback: str = "optional"
 ) -> dict[str, object]:
+    option_records = (
+        ("proceed", "Proceed safely", "✅", True, feedback, "proceeded"),
+        ("audit", "Write audit record", "📝", True, "optional", "audited"),
+        ("verify", "Verify health", "🩺", False, "optional", "healthy"),
+        ("cancel", "Cancel", "❌", True, "disabled", "cancelled"),
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "request_id": request_id,
         "kind": "custom",
         "producer": {"agent": "telegram-test"},
@@ -98,68 +105,48 @@ def _custom_spec(
             "notes": ["Restart the guarded service?"],
             "files": ["preview.md"],
         },
-        "choices": [
+        "query": "(proceed AND audit AND verify) OR cancel",
+        "options": [
             {
-                "id": "proceed",
+                "id": option_id,
+                "label": label,
+                "icon": icon,
+                "default_selected": default_selected,
+                "feedback": feedback_mode,
+                "command": {"argv": [f"commands/{option_id}"]},
+                "input_schema": {"type": "object"},
+                "result_schema": {"type": "object"},
+            }
+            for (
+                option_id,
+                label,
+                icon,
+                default_selected,
+                feedback_mode,
+                _result,
+            ) in option_records
+        ],
+        "groups": [
+            {
+                "options": ["proceed", "audit", "verify"],
                 "label": "Proceed safely",
                 "icon": "✅",
-                "feedback": feedback,
-                "command": {"argv": ["commands/proceed"]},
-                "input_schema": {"type": "object"},
-                "result_schema": {"type": "object"},
-                "extras": [
-                    {
-                        "id": "audit",
-                        "label": "Write audit record",
-                        "icon": "📝",
-                        "default_selected": True,
-                        "command": {"argv": ["commands/audit"]},
-                    },
-                    {
-                        "id": "verify",
-                        "label": "Verify health",
-                        "icon": "🩺",
-                        "default_selected": False,
-                        "command": {"argv": ["commands/verify"]},
-                    },
-                ],
-            },
-            {
-                "id": "cancel",
-                "label": "Cancel",
-                "icon": "❌",
-                "feedback": "disabled",
-                "command": {"argv": ["commands/cancel"]},
-                "input_schema": {"type": "object"},
-                "result_schema": {"type": "object"},
-            },
+            }
         ],
         "resources": [
             {
-                "path": "commands/proceed",
+                "path": f"commands/{option_id}",
                 "role": "command",
-                "content": _command_script("proceeded"),
-            },
-            {
-                "path": "commands/audit",
-                "role": "command",
-                "content": _command_script("audited"),
-            },
-            {
-                "path": "commands/verify",
-                "role": "command",
-                "content": _command_script("healthy"),
-            },
-            {
-                "path": "commands/cancel",
-                "role": "command",
-                "content": _command_script("cancelled"),
-            },
+                "content": _command_script(result),
+            }
+            for option_id, _label, _icon, _selected, _feedback, result in option_records
+        ]
+        + [
             {
                 "path": "preview.md",
                 "role": "preview",
                 "content": "# Guarded restart\n",
-            },
+            }
         ],
         "auto": False,
     }
@@ -167,13 +154,14 @@ def _custom_spec(
 
 def _hitl_spec() -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "request_id": "telegram-hitl",
         "kind": "hitl",
         "producer": {"agent": "telegram-test"},
         "payload": {"step_name": "review", "output": {"ok": True}},
         "presentation": {"notes": ["Review workflow output"]},
-        "choices": [
+        "query": "accept",
+        "options": [
             {
                 "id": "accept",
                 "label": "Accept",
@@ -197,11 +185,8 @@ def _hitl_spec() -> dict[str, object]:
 def _notification(result: object, *, action: str, sender: str) -> Notification:
     bundle_path = Path(result.bundle_path)
     request = json.loads((bundle_path / "request.json").read_text(encoding="utf-8"))
-    request_id = str(request["request_id"])
-    kind = str(request["kind"])
-    notification_id = str(result.notification_id)
     return Notification(
-        id=notification_id,
+        id=str(result.notification_id),
         timestamp="2026-07-17T00:00:00+00:00",
         sender=sender,
         icon="🛡️" if action == "CustomGate" else None,
@@ -211,11 +196,12 @@ def _notification(result: object, *, action: str, sender: str) -> Notification:
         else [],
         action=action,
         action_data={
-            "request_id": request_id,
-            "request_kind": kind,
+            "request_id": str(request["request_id"]),
+            "request_kind": str(request["kind"]),
             "bundle_path": str(bundle_path),
             "request_path": str(bundle_path / "request.json"),
             "response_path": str(bundle_path / "response.json"),
+            "response_dir": str(bundle_path),
             "artifacts_dir": str(bundle_path),
         },
     )
@@ -249,7 +235,11 @@ def _callback(data: str, callback_id: str = "callback") -> SimpleNamespace:
     )
 
 
-def test_custom_gate_formatting_uses_icons_compact_callbacks_and_fallback(
+def _button_data(keyboard: object) -> list[str]:
+    return [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+
+def test_custom_gate_renders_expanded_group_with_compact_callbacks_and_fallback(
     gate_home: Path,
 ) -> None:
     result = create_gate(_custom_spec())
@@ -261,13 +251,20 @@ def test_custom_gate_formatting_uses_icons_compact_callbacks_and_fallback(
     assert "**>" in text
     assert keyboard is not None
     assert [row[0].text for row in keyboard.inline_keyboard] == [
+        "☑️ ✅ Proceed safely",
+        "☑️ 📝 Write audit record",
+        "⬜ 🩺 Verify health",
         "✅ Proceed safely",
         "❌ Cancel",
     ]
-    assert (
-        keyboard.inline_keyboard[0][0].callback_data
-        == "gate:" + notification.id[:8] + ":c0"
-    )
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:x0",
+        f"gate:{prefix}:x1",
+        f"gate:{prefix}:x2",
+        f"gate:{prefix}:s0",
+        f"gate:{prefix}:c1",
+    ]
     assert attachments == notification.files
 
     notification.action_data["request_id"] = "missing"
@@ -277,25 +274,24 @@ def test_custom_gate_formatting_uses_icons_compact_callbacks_and_fallback(
 
 
 @pytest.mark.parametrize(
-    ("case", "toggle_extra_indexes", "expected_extra_ids"),
+    ("case", "toggle_tokens", "expected_option_ids"),
     [
-        pytest.param("none", (0,), [], id="none"),
-        pytest.param("some", (), ["audit"], id="some"),
-        pytest.param("all", (1,), ["audit", "verify"], id="all"),
+        pytest.param("proceed-only", ("x1",), ["proceed"], id="one"),
+        pytest.param("defaults", (), ["proceed", "audit"], id="defaults"),
+        pytest.param("all", ("x2",), ["proceed", "audit", "verify"], id="all"),
     ],
 )
-def test_custom_gate_add_on_selection_matrix_executes_through_callback_flow(
+def test_group_selection_matrix_executes_options_in_query_order(
     gate_home: Path,
     case: str,
-    toggle_extra_indexes: tuple[int, ...],
-    expected_extra_ids: list[str],
+    toggle_tokens: tuple[str, ...],
+    expected_option_ids: list[str],
 ) -> None:
-    result = create_gate(_custom_spec(request_id=f"telegram-add-ons-{case}"))
+    result = create_gate(_custom_spec(request_id=f"telegram-options-{case}"))
     notification = _notification(result, action="CustomGate", sender="safety-agent")
     prefix = notification.id[:8]
     action = _pending(notification)
     pending_actions.add(prefix, action)
-    pending = {prefix: action}
 
     with (
         patch(
@@ -305,76 +301,21 @@ def test_custom_gate_add_on_selection_matrix_executes_through_callback_flow(
             "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
         ),
     ):
-        _handle_callback(_callback(f"gate:{prefix}:c0", f"choose-{case}"), pending)
-        for extra_index in toggle_extra_indexes:
-            _handle_callback(
-                _callback(f"gate:{prefix}:x{extra_index}", f"toggle-{case}"),
-                pending,
-            )
-        _handle_callback(_callback(f"gate:{prefix}:submit", f"submit-{case}"), pending)
+        for token in toggle_tokens:
+            _handle_callback(_callback(f"gate:{prefix}:{token}"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:s0"), {prefix: action})
 
     response = json.loads(
         Path(notification.action_data["response_path"]).read_text(encoding="utf-8")
     )
-    expected_results = {
-        "audit": {"status": "audited"},
-        "verify": {"status": "healthy"},
-    }
-    assert response["choice_id"] == "proceed"
-    assert response["selected_extra_ids"] == expected_extra_ids
+    assert response["selected_option_ids"] == expected_option_ids
     assert response["source"] == "telegram"
-    assert response["extra_results"] == [
-        {
-            "id": extra_id,
-            "status": "succeeded",
-            "result": expected_results[extra_id],
-        }
-        for extra_id in expected_extra_ids
-    ]
+    assert [result["id"] for result in response["option_results"]] == (
+        expected_option_ids
+    )
 
 
-def test_custom_gate_toggle_submit_and_duplicate_callback(
-    gate_home: Path,
-) -> None:
-    result = create_gate(_custom_spec())
-    notification = _notification(result, action="CustomGate", sender="safety-agent")
-    prefix = notification.id[:8]
-    action = _pending(notification)
-    pending_actions.add(prefix, action)
-    pending = {prefix: action}
-
-    with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ) as answer,
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ) as edit,
-    ):
-        _handle_callback(_callback(f"gate:{prefix}:c0", "choose"), pending)
-        configured = edit.call_args.kwargs["reply_markup"]
-        assert configured.inline_keyboard[2][0].text.startswith("☑️ 📝")
-        assert configured.inline_keyboard[3][0].text.startswith("⬜ 🩺")
-
-        _handle_callback(_callback(f"gate:{prefix}:x1", "toggle"), pending)
-        _handle_callback(_callback(f"gate:{prefix}:submit", "submit"), pending)
-
-        response_path = Path(notification.action_data["response_path"])
-        response = json.loads(response_path.read_text(encoding="utf-8"))
-        assert response["choice_id"] == "proceed"
-        assert response["selected_extra_ids"] == ["audit", "verify"]
-        assert response["source"] == "telegram"
-        assert inbound.find_externally_handled({prefix: action}) == [
-            (prefix, 42, "chat-1")
-        ]
-
-        before = response_path.read_text(encoding="utf-8")
-        _handle_callback(_callback(f"gate:{prefix}:submit", "duplicate"), pending)
-        assert response_path.read_text(encoding="utf-8") == before
-        answer.assert_any_call("duplicate", "This action has already been handled")
-
-
-def test_required_feedback_uses_two_step_text_flow(gate_home: Path) -> None:
+def test_required_feedback_uses_generic_two_step_text_flow(gate_home: Path) -> None:
     result = create_gate(
         _custom_spec(request_id="telegram-feedback", feedback="required")
     )
@@ -396,8 +337,7 @@ def test_required_feedback_uses_two_step_text_flow(gate_home: Path) -> None:
             return_value="chat-1",
         ),
     ):
-        _handle_callback(_callback(f"gate:{prefix}:c0", "choose"), {prefix: action})
-        _handle_callback(_callback(f"gate:{prefix}:submit", "submit"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:s0", "submit"), {prefix: action})
         answer.assert_any_call("submit", "Send the required feedback as a text message")
         assert not Path(notification.action_data["response_path"]).exists()
 
@@ -414,10 +354,10 @@ def test_required_feedback_uses_two_step_text_flow(gate_home: Path) -> None:
         Path(notification.action_data["response_path"]).read_text(encoding="utf-8")
     )
     assert response["feedback"] == "Please schedule it after midnight."
-    assert response["selected_extra_ids"] == ["audit"]
+    assert response["selected_option_ids"] == ["proceed", "audit"]
 
 
-def test_neutral_hitl_uses_shared_executor_not_legacy_writer(gate_home: Path) -> None:
+def test_hitl_uses_the_same_renderer_and_executor(gate_home: Path) -> None:
     result = create_gate(_hitl_spec())
     notification = _notification(result, action="HITL", sender="hitl")
     prefix = notification.id[:8]
@@ -426,7 +366,7 @@ def test_neutral_hitl_uses_shared_executor_not_legacy_writer(gate_home: Path) ->
 
     _, keyboard, _ = format_notification(notification)
     assert keyboard is not None
-    assert keyboard.inline_keyboard[0][0].callback_data == f"hitl:{prefix}:c0"
+    assert _button_data(keyboard) == [f"gate:{prefix}:c0"]
 
     with (
         patch(
@@ -436,18 +376,67 @@ def test_neutral_hitl_uses_shared_executor_not_legacy_writer(gate_home: Path) ->
             "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
         ),
     ):
-        _handle_callback(_callback(f"hitl:{prefix}:c0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
 
     bundle = Path(notification.action_data["bundle_path"])
     response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
-    assert response["choice_id"] == "accept"
-    assert response["input"] == {"action": "accept", "approved": True}
+    assert response["selected_option_ids"] == ["accept"]
     assert not (bundle / "hitl_response.json").exists()
 
 
-def test_epic_approval_formats_verified_gate_without_tale_default(
-    gate_home: Path,
-) -> None:
+def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> None:
+    result = create_launch_approval_request(
+        {
+            "schema_version": 1,
+            "prompt": "%n(telegram-launch, reviewer)\nReview this change",
+            "reason": "Verify the Telegram launch controls",
+            "approval": "required",
+            "max_slots": 1,
+        },
+        source_surface="telegram-test",
+    )
+    notification = _notification(
+        SimpleNamespace(
+            bundle_path=result.response_dir,
+            notification_id=result.notification_id,
+        ),
+        action="LaunchApproval",
+        sender="launch",
+    )
+    notification.files = [str(result.preview_path)]
+
+    _, keyboard, attachments = format_notification(notification)
+
+    assert keyboard is not None
+    assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
+        ["✅ Approve", "❌ Reject", "💬 Send Feedback"]
+    ]
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:c0",
+        f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
+    ]
+    assert attachments == notification.files
+
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c1"), {prefix: action})
+
+    response = json.loads(result.response_path.read_text(encoding="utf-8"))
+    assert response["selected_option_ids"] == ["reject"]
+    assert response["source"] == "telegram"
+
+
+def test_epic_approval_uses_singleton_branch_row(gate_home: Path) -> None:
     notification = _epic_notification(gate_home, "telegram-epic-formatting")
     bundle = Path(notification.action_data["bundle_path"])
 
@@ -457,17 +446,16 @@ def test_epic_approval_formats_verified_gate_without_tale_default(
     assert attachments == notification.files
     assert notification.dismissed is True
     assert keyboard is not None
-    assert [
-        button.callback_data for row in keyboard.inline_keyboard for button in row
-    ] == [
-        f"plan:{notification.id[:8]}:epic",
-        f"plan:{notification.id[:8]}:reject",
-        f"plan:{notification.id[:8]}:feedback",
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:c0",
+        f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
     ]
     assert not (bundle / "telegram_gate_progress.json").exists()
 
 
-def test_epic_approval_outbound_sends_and_advances_high_water_mark(
+def test_epic_approval_outbound_sends_generic_keyboard(
     gate_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -498,23 +486,23 @@ def test_epic_approval_outbound_sends_and_advances_high_water_mark(
         patch("sase_telegram.scripts.sase_tg_outbound.send_document"),
         patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
     ):
-        result = _run_outbound(argparse.Namespace(dry_run=False))
+        assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
 
-    assert result == 0
     keyboard = send_message.call_args.kwargs["reply_markup"]
-    assert [
-        button.callback_data for row in keyboard.inline_keyboard for button in row
-    ] == [
-        f"plan:{notification.id[:8]}:epic",
-        f"plan:{notification.id[:8]}:reject",
-        f"plan:{notification.id[:8]}:feedback",
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:c0",
+        f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
     ]
     assert float(last_sent_file.read_text(encoding="utf-8")) == pytest.approx(
         datetime.fromisoformat(notification.timestamp).timestamp()
     )
 
 
-def test_plan_approval_renders_and_submits_add_on_toggles(gate_home: Path) -> None:
+def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
+    gate_home: Path,
+) -> None:
     plan_file = gate_home / "plan.md"
     plan_file.write_text(VALID_TALE_PLAN, encoding="utf-8")
     result = create_plan_approval_gate(plan_file, "telegram-plan")
@@ -523,20 +511,24 @@ def test_plan_approval_renders_and_submits_add_on_toggles(gate_home: Path) -> No
     notification.files = [str(bundle / "plan.md")]
     prefix = notification.id[:8]
     action = _pending(notification)
-    action["files"] = list(notification.files)
-    action["plan_file"] = notification.files[0]
     pending_actions.add(prefix, action)
 
     _, keyboard, _ = format_notification(notification)
     assert keyboard is not None
     rows = keyboard.inline_keyboard
-    assert [button.callback_data for button in rows[0]] == [
-        f"plan:{prefix}:tale",
-        f"plan:{prefix}:approve",
+    assert [[button.text for button in row] for row in rows] == [
+        ["☑️ ✅ Approve"],
+        ["☑️ 💾 Commit plan file to the plans sidecar"],
+        ["✅ Approve"],
+        ["❌ Reject", "💬 Send Feedback"],
     ]
-    assert rows[2][0].text.startswith("☑️ 💾 Commit plan file")
-    assert rows[3][0].text.startswith("☑️ ▶️ Run coder follow-up")
-    assert rows[4][0].callback_data == f"plan:{prefix}:submit"
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:x0",
+        f"gate:{prefix}:x1",
+        f"gate:{prefix}:s0",
+        f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
+    ]
 
     with (
         patch(
@@ -545,54 +537,10 @@ def test_plan_approval_renders_and_submits_add_on_toggles(gate_home: Path) -> No
         patch(
             "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
         ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("sase.plan_approval_actions.run_plan_side_effects"),
     ):
-        pending = {prefix: action}
-        _handle_callback(_callback(f"plan:{prefix}:x0", "commit-off"), pending)
-        _handle_callback(_callback(f"plan:{prefix}:x1", "coder-off"), pending)
-        _handle_callback(_callback(f"plan:{prefix}:submit", "submit"), pending)
+        _handle_callback(_callback(f"gate:{prefix}:x0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:s0"), {prefix: action})
 
     response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
-    assert response["choice_id"] == "approve"
-    assert response["selected_extra_ids"] == []
-    assert response["result"]["commit_plan"] is False
-    assert response["result"]["run_coder"] is False
-
-
-def test_plan_approval_submits_default_selected_add_ons(gate_home: Path) -> None:
-    plan_file = gate_home / "default-plan.md"
-    plan_file.write_text(VALID_TALE_PLAN, encoding="utf-8")
-    result = create_plan_approval_gate(plan_file, "telegram-plan-defaults")
-    notification = _notification(result, action="PlanApproval", sender="plan")
-    bundle = Path(notification.action_data["bundle_path"])
-    notification.files = [str(bundle / "plan.md")]
-    prefix = notification.id[:8]
-    action = _pending(notification)
-    action["files"] = list(notification.files)
-    action["plan_file"] = notification.files[0]
-    pending_actions.add(prefix, action)
-
-    _, keyboard, _ = format_notification(notification)
-    assert keyboard is not None
-    assert keyboard.inline_keyboard[2][0].text.startswith("☑️ 💾 Commit plan file")
-    assert keyboard.inline_keyboard[3][0].text.startswith("☑️ ▶️ Run coder follow-up")
-
-    with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-    ):
-        _handle_callback(
-            _callback(f"plan:{prefix}:submit", "submit-defaults"),
-            {prefix: action},
-        )
-
-    response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
-    assert response["choice_id"] == "approve"
-    assert response["selected_extra_ids"] == ["commit_plan", "run_coder"]
-    assert response["result"]["commit_plan"] is True
-    assert response["result"]["run_coder"] is True
+    assert response["selected_option_ids"] == ["commit"]
