@@ -94,7 +94,7 @@ def _custom_spec(
         ("cancel", "Cancel", "❌", True, "disabled", "cancelled"),
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "request_id": request_id,
         "kind": "custom",
         "producer": {"agent": "telegram-test"},
@@ -106,6 +106,7 @@ def _custom_spec(
             "files": ["preview.md"],
         },
         "query": "(proceed AND audit AND verify) OR cancel",
+        "primary_branch": ["proceed", "audit", "verify"],
         "options": [
             {
                 "id": option_id,
@@ -154,13 +155,14 @@ def _custom_spec(
 
 def _hitl_spec() -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "request_id": "telegram-hitl",
         "kind": "hitl",
         "producer": {"agent": "telegram-test"},
         "payload": {"step_name": "review", "output": {"ok": True}},
         "presentation": {"notes": ["Review workflow output"]},
         "query": "accept",
+        "primary_branch": ["accept"],
         "options": [
             {
                 "id": "accept",
@@ -446,7 +448,7 @@ def test_epic_approval_uses_singleton_branch_row(gate_home: Path) -> None:
 
     text, keyboard, attachments = format_notification(notification)
 
-    assert "Epic Review" in text
+    assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
     assert attachments == notification.files
     assert notification.dismissed is True
     assert keyboard is not None
@@ -618,9 +620,9 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
     assert keyboard is not None
     rows = keyboard.inline_keyboard
     assert [[button.text for button in row] for row in rows] == [
-        ["☑️ ✅ Approve"],
+        ["☑️ ✅ Launch coder agent"],
         ["☑️ 💾 Commit plan file to the plans sidecar"],
-        ["✅ Approve"],
+        ["✅ Tale"],
         ["❌ Reject", "💬 Send Feedback"],
     ]
     assert _button_data(keyboard) == [

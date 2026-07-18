@@ -62,7 +62,7 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan Approval      | Shows an ordered frontmatter Properties card and plan body with Tale / ✅ Approve / Epic / Reject / Feedback buttons |
+| Plan / Epic Approval | Shows an ordered frontmatter Properties card and plan body with approval controls; epic headings include a glanceable phase count when available |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat/media attachments and a Fork copy button           |
@@ -160,7 +160,9 @@ The outbound script acquires an exclusive file lock (to prevent concurrent runs 
 notifications using a high-water mark timestamp, and formats them as Telegram MarkdownV2 messages with inline
 keyboards. Plan approvals present every parseable top-level frontmatter field in an ordered **Properties** card before
 the Markdown body. Nested lists and mappings use indented multiline rows; long cards become expandable, and unusually
-large values/body previews are truncated with a clear pointer to the complete plan attachment. Chat
+large values/body previews are truncated with a clear pointer to the complete plan attachment. Epic review headings
+show the authored phase-sequence length at a glance (for example, `Epic Review · 3 phases`); the suffix is omitted when
+the file or its `phases` metadata cannot be safely read. Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
 PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
 and videos retry as documents if Telegram rejects inline media delivery. Workflow completions coalesce same-stem motion

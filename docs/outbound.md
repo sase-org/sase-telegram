@@ -53,6 +53,9 @@ Plan approvals split the attached file once with SASE's safe frontmatter parser.
 shown in a **Properties** card before the rich Markdown body: identity/lifecycle fields use a predictable semantic
 order, and unfamiliar fields follow alphabetically. Lists and mappings render as indented multiline values, while
 empty values and containers remain explicit. Short cards stay open; metadata-heavy cards use an expandable blockquote.
+Epic approval headings also show the top-level phase-sequence length at a glance, such as
+`Epic Review · 3 phases` or `Epic Review · 1 phase`. The suffix is best-effort and is omitted when the plan cannot be
+read or parsed, `phases` is absent, or its value is not a sequence; tale review headings remain unchanged.
 
 The header, review note, Properties card, and body share Telegram's 4096-character budget. Property labels are retained
 when space is tight; only large displayed values and then the body preview are truncated, each with a pointer to the

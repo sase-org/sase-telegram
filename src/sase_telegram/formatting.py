@@ -461,6 +461,23 @@ def _read_plan_document(
     return content, dict(frontmatter), body
 
 
+def _epic_phase_summary(
+    action: str | None,
+    frontmatter: Mapping[object, object],
+) -> str:
+    """Return a compact phase summary for a verified epic phase sequence."""
+    if action != "EpicApproval":
+        return ""
+
+    phases = frontmatter.get("phases")
+    if not isinstance(phases, Sequence) or isinstance(phases, (str, bytes, bytearray)):
+        return ""
+
+    count = len(phases)
+    label = "phase" if count == 1 else "phases"
+    return f" · {count} {label}"
+
+
 def _plan_file_exists(plan_file: str) -> bool:
     """Return whether a plan can still be offered as an attachment."""
     try:
@@ -1045,6 +1062,15 @@ def _format_plan_approval(
     notes_text = _format_notes_text(n.notes)
     attachments: list[str] = []
 
+    plan_content = ""
+    plan_body = ""
+    frontmatter: dict[Any, Any] = {}
+    if n.files:
+        plan_file = n.files[0]
+        if _plan_file_exists(plan_file):
+            attachments.append(plan_file)
+        plan_content, frontmatter, plan_body = _read_plan_document(plan_file)
+
     from sase.llm_provider.registry import format_provider_model_label
 
     agent_name = n.action_data.get("agent_name")
@@ -1056,26 +1082,18 @@ def _format_plan_approval(
 
     raw_provider = n.action_data.get("llm_provider")
     raw_model = n.action_data.get("model")
+    phase_summary = _epic_phase_summary(n.action, frontmatter)
     if raw_provider or raw_model:
         label = escape_markdown_v2(format_provider_model_label(raw_provider, raw_model))
         review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
-        plan_title = f"📋 *{label} {review_kind} Review*"
+        plan_title = f"📋 *{label} {review_kind} Review{phase_summary}*"
     else:
         review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
-        plan_title = f"📋 *{review_kind} Review*"
+        plan_title = f"📋 *{review_kind} Review{phase_summary}*"
     header_text = f"{plan_title}{name_line}"
     runtime = n.action_data.get("runtime")
     if runtime:
         header_text += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
-
-    plan_content = ""
-    plan_body = ""
-    frontmatter: dict[Any, Any] = {}
-    if n.files:
-        plan_file = n.files[0]
-        if _plan_file_exists(plan_file):
-            attachments.append(plan_file)
-        plan_content, frontmatter, plan_body = _read_plan_document(plan_file)
 
     if frontmatter:
         try:

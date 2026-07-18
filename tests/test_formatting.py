@@ -240,6 +240,152 @@ class TestMarkdownToTelegramV2:
 
 
 class TestFormatPlanApproval:
+    def test_epic_heading_shows_plural_count_with_review_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text(
+            "---\n"
+            "tier: epic\n"
+            "phases:\n"
+            "  - name: Foundation\n"
+            "  - name: Delivery\n"
+            "  - name: Verification\n"
+            "---\n\n"
+            "# Epic\n",
+            encoding="utf-8",
+        )
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+            action_data={
+                "agent_name": "test_agent",
+                "llm_provider": "claude",
+                "model": "opus",
+                "runtime": "4m32s",
+            },
+        )
+
+        text, _, _ = format_notification(notification)
+
+        assert text.splitlines()[:2] == [
+            "📋 *CLAUDE\\(opus\\) Epic Review · 3 phases*  _@test\\_agent_",
+            "*Runtime:* 4m32s",
+        ]
+
+    def test_epic_heading_uses_singular_phase(self, tmp_path: Path) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text(
+            "---\ntier: epic\nphases:\n  - name: Implementation\n---\n# Epic\n",
+            encoding="utf-8",
+        )
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+        )
+
+        text, _, _ = format_notification(notification)
+
+        assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+
+    def test_epic_heading_handles_empty_phase_sequence(self, tmp_path: Path) -> None:
+        plan_file = tmp_path / "empty-epic.md"
+        plan_file.write_text(
+            "---\ntier: epic\nphases: []\n---\n# Empty epic\n",
+            encoding="utf-8",
+        )
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+        )
+
+        text, _, _ = format_notification(notification)
+
+        assert text.splitlines()[0] == "📋 *Epic Review · 0 phases*"
+
+    def test_tale_heading_omits_phase_count(self, tmp_path: Path) -> None:
+        plan_file = tmp_path / "tale.md"
+        plan_file.write_text(
+            "---\ntier: tale\nphases:\n  - one\n  - two\n---\n# Tale\n",
+            encoding="utf-8",
+        )
+        notification = _make_notification(
+            action="PlanApproval",
+            sender="plan",
+            files=[str(plan_file)],
+        )
+
+        text, _, _ = format_notification(notification)
+
+        assert text.splitlines()[0] == "📋 *Plan Review*"
+
+    def test_epic_heading_omits_unverified_phase_counts(self, tmp_path: Path) -> None:
+        contents = {
+            "plain.md": "# Plain epic\n",
+            "malformed.md": "---\nphases: [broken\n---\n# Malformed epic\n",
+            "scalar.md": "---\ntier: epic\nphases: three\n---\n# Scalar phases\n",
+            "mapping.md": "---\ntier: epic\nphases: {first: one}\n---\n# Mapping phases\n",
+        }
+        for filename, content in contents.items():
+            plan_file = tmp_path / filename
+            plan_file.write_text(content, encoding="utf-8")
+            notification = _make_notification(
+                action="EpicApproval",
+                sender="epic",
+                files=[str(plan_file)],
+            )
+
+            text, keyboard, attachments = format_notification(notification)
+
+            assert text.splitlines()[0] == "📋 *Epic Review*"
+            assert keyboard is None
+            assert attachments == [str(plan_file)]
+
+        missing_file = tmp_path / "missing.md"
+        text, keyboard, attachments = format_notification(
+            _make_notification(
+                action="EpicApproval",
+                sender="epic",
+                files=[str(missing_file)],
+            )
+        )
+        assert text.splitlines()[0] == "📋 *Epic Review*"
+        assert keyboard is None
+        assert attachments == []
+
+    def test_verified_count_survives_property_rendering_fallback(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text(
+            "---\ntier: epic\nphases:\n  - one\n  - two\n---\n# Epic body\n",
+            encoding="utf-8",
+        )
+
+        def fail_properties(_frontmatter):
+            raise ValueError("bad property")
+
+        monkeypatch.setattr(
+            formatting,
+            "_ordered_plan_properties",
+            fail_properties,
+        )
+        notification = _make_notification(
+            action="EpicApproval",
+            sender="epic",
+            files=[str(plan_file)],
+        )
+
+        text, keyboard, attachments = format_notification(notification)
+
+        assert text.splitlines()[0] == "📋 *Epic Review · 2 phases*"
+        assert "*Epic body*" in text
+        assert keyboard is None
+        assert attachments == [str(plan_file)]
+
     def test_epic_v1_envelope_does_not_render_compatibility_choices(
         self, tmp_path: Path
     ) -> None:
@@ -428,14 +574,16 @@ Details.
             "phases:\n"
             "  - name: Foundation\n"
             f"    details: {phase_details}\n"
+            "  - name: Delivery\n"
+            "  - name: Verification\n"
             "z_future: still visible\n"
             "---\n\n"
             f"{body}\n",
             encoding="utf-8",
         )
         n = _make_notification(
-            action="PlanApproval",
-            sender="plan",
+            action="EpicApproval",
+            sender="epic",
             notes=["Plan ready"],
             files=[str(plan_file)],
         )
@@ -443,10 +591,12 @@ Details.
         text, keyboard, attachments = format_notification(n)
 
         assert len(text) <= MAX_MESSAGE_LENGTH
+        assert text.splitlines()[0] == "📋 *Epic Review · 3 phases*"
         for label in ("Title", "Tier", "Goal", "Phases", "Prompt", "Z future"):
             assert f"*{label}:*" in text
         properties_block = text[text.index("🧾 *Properties*") : text.index("━" * 20)]
         assert "**>" in properties_block
+        assert "Foundation" in properties_block
         assert "see attached plan" in text
         assert "body truncated, see attached plan" in text
         assert attachments == [str(plan_file)]
