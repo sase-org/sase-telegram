@@ -365,6 +365,72 @@ class TestRunOutboundAttachments:
 
         Path(pdf_path).unlink()
 
+    @pytest.mark.parametrize(
+        "original_plan_file",
+        [None, "", "   ", "/", ".", "bad\x00plan.md"],
+        ids=["missing", "empty", "blank", "root", "dot", "control-character"],
+    )
+    def test_plan_pdf_with_unusable_original_name_uses_generated_filename(
+        self,
+        tmp_path: Path,
+        original_plan_file: str | None,
+    ) -> None:
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("# Plan\n", encoding="utf-8")
+        pdf_path = tmp_path / "plan.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        action_data = {}
+        if original_plan_file is not None:
+            action_data["original_plan_file"] = original_plan_file
+        notification = Notification(
+            id="plan0000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="plan",
+            notes=["Plan ready for review"],
+            files=[str(plan_path)],
+            action="PlanApproval",
+            action_data=action_data,
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.format_notification",
+                return_value=("Plan review", None, [str(plan_path)]),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch("sase_telegram.scripts.sase_tg_outbound.pending_actions.add"),
+            patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.md_to_pdf",
+                return_value=str(pdf_path),
+            ) as md_to_pdf,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        md_to_pdf.assert_called_once_with(str(plan_path))
+        send_document.assert_called_once_with("chat-1", str(pdf_path))
+
     def test_workflow_complete_image_sends_photo_not_document(self):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image:
             image.write(b"\x89PNG\r\n\x1a\n")

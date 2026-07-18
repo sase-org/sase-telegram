@@ -185,6 +185,18 @@ def _hitl_spec() -> dict[str, object]:
 def _notification(result: object, *, action: str, sender: str) -> Notification:
     bundle_path = Path(result.bundle_path)
     request = json.loads((bundle_path / "request.json").read_text(encoding="utf-8"))
+    action_data = dict(request.get("presentation", {}).get("action_data", {}))
+    action_data.update(
+        {
+            "request_id": str(request["request_id"]),
+            "request_kind": str(request["kind"]),
+            "bundle_path": str(bundle_path),
+            "request_path": str(bundle_path / "request.json"),
+            "response_path": str(bundle_path / "response.json"),
+            "response_dir": str(bundle_path),
+            "artifacts_dir": str(bundle_path),
+        }
+    )
     return Notification(
         id=str(result.notification_id),
         timestamp="2026-07-17T00:00:00+00:00",
@@ -195,15 +207,7 @@ def _notification(result: object, *, action: str, sender: str) -> Notification:
         if (bundle_path / "preview.md").exists()
         else [],
         action=action,
-        action_data={
-            "request_id": str(request["request_id"]),
-            "request_kind": str(request["kind"]),
-            "bundle_path": str(bundle_path),
-            "request_path": str(bundle_path / "request.json"),
-            "response_path": str(bundle_path / "response.json"),
-            "response_dir": str(bundle_path),
-            "artifacts_dir": str(bundle_path),
-        },
+        action_data=action_data,
     )
 
 
@@ -483,7 +487,7 @@ def test_epic_approval_outbound_sends_generic_keyboard(
             return_value=SimpleNamespace(message_id=42),
         ) as send_message,
         patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf", return_value=None),
-        patch("sase_telegram.scripts.sase_tg_outbound.send_document"),
+        patch("sase_telegram.scripts.sase_tg_outbound.send_document") as send_document,
         patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
     ):
         assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
@@ -498,6 +502,103 @@ def test_epic_approval_outbound_sends_generic_keyboard(
     assert float(last_sent_file.read_text(encoding="utf-8")) == pytest.approx(
         datetime.fromisoformat(notification.timestamp).timestamp()
     )
+    send_document.assert_called_once_with("chat-1", notification.files[0])
+
+
+@pytest.mark.parametrize(
+    ("plan_content", "action", "proposal_name", "expected_filename"),
+    [
+        pytest.param(
+            VALID_TALE_PLAN,
+            "PlanApproval",
+            "telegram.plan.review.tale.md",
+            "telegram.plan.review.tale.pdf",
+            id="tale",
+        ),
+        pytest.param(
+            VALID_EPIC_PLAN,
+            "EpicApproval",
+            "telegram.plan.review.epic.md",
+            "telegram.plan.review.epic.pdf",
+            id="epic",
+        ),
+    ],
+)
+def test_plan_approval_outbound_names_rendered_pdf_after_durable_proposal(
+    gate_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plan_content: str,
+    action: str,
+    proposal_name: str,
+    expected_filename: str,
+) -> None:
+    durable_dir = gate_home / "durable" / "nested"
+    durable_dir.mkdir(parents=True)
+    plan_file = durable_dir / proposal_name
+    plan_file.write_text(plan_content, encoding="utf-8")
+    result = create_plan_approval_gate(plan_file, f"telegram-{action.lower()}")
+    notification = _notification(result, action=action, sender="plan")
+    bundle_plan = Path(result.bundle_path) / "plan.md"
+    notification.files = [str(bundle_plan)]
+    last_sent_file = gate_home / f"last-sent-{action.lower()}"
+    last_sent_file.write_text("0", encoding="utf-8")
+    monkeypatch.setattr(outbound, "LAST_SENT_FILE", last_sent_file)
+    rendered_pdf = bundle_plan.with_suffix(".pdf")
+    rendered_bytes = b"%PDF-1.4\nrendered plan bytes\n"
+    sent_documents: list[tuple[str, str, bytes, str | None]] = []
+
+    def render_plan(source: str) -> str:
+        assert source == str(bundle_plan)
+        assert Path(source).read_text(encoding="utf-8") == plan_content
+        rendered_pdf.write_bytes(rendered_bytes)
+        return str(rendered_pdf)
+
+    def capture_document(
+        chat_id: str,
+        file_path: str,
+        *,
+        filename: str | None = None,
+    ) -> None:
+        sent_documents.append(
+            (chat_id, file_path, Path(file_path).read_bytes(), filename)
+        )
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+            return_value=[notification],
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+            return_value="chat-1",
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+            return_value=True,
+        ),
+        patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.send_message",
+            return_value=SimpleNamespace(message_id=42),
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.md_to_pdf",
+            side_effect=render_plan,
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.send_document",
+            side_effect=capture_document,
+        ),
+        patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
+    ):
+        assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
+
+    assert notification.action_data["original_plan_file"] == str(plan_file)
+    assert sent_documents == [
+        ("chat-1", str(rendered_pdf), rendered_bytes, expected_filename)
+    ]
+    assert bundle_plan.exists()
+    assert not rendered_pdf.exists()
 
 
 def test_tale_plan_pins_five_control_layout_and_submits_selected_options(

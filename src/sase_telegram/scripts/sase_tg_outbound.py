@@ -181,6 +181,34 @@ def _display_filename_override(file_path: str) -> str | None:
     return f"{display_stem}{path.suffix}"
 
 
+def _plan_pdf_filename_override(n: Any) -> str | None:
+    """Return the durable proposal's basename as a PDF filename."""
+    if n.action not in {"PlanApproval", "EpicApproval"}:
+        return None
+
+    original_plan_file = n.action_data.get("original_plan_file")
+    if not isinstance(original_plan_file, str):
+        return None
+
+    raw_path = original_plan_file.strip()
+    if not raw_path or any(ord(char) < 32 or ord(char) == 127 for char in raw_path):
+        return None
+
+    # Treat both separators as path components so presentation metadata can
+    # never leak directories into Telegram's document name.
+    basename = raw_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if basename in {"", ".", ".."}:
+        return None
+
+    try:
+        filename = Path(basename).with_suffix(".pdf").name
+    except (OSError, ValueError):
+        return None
+    if filename in {"", ".", ".."} or "/" in filename or "\\" in filename:
+        return None
+    return filename
+
+
 def _send_document_with_display_filename(chat_id: str, file_path: str) -> None:
     filename = _display_filename_override(file_path)
     if filename is None:
@@ -457,6 +485,11 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
         diff_paths = [f for f in attachments if _is_diff_file(f)]
         non_diff_paths = [f for f in attachments if not _is_diff_file(f)]
         diff_embedded = False
+        primary_plan_attachment = (
+            attachments[0]
+            if n.action in {"PlanApproval", "EpicApproval"} and attachments
+            else None
+        )
 
         for file_path in non_diff_paths:
             try:
@@ -506,7 +539,16 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                 pdf_path = md_to_pdf(actual_path)
                 if pdf_path:
                     pdf_temps.append(Path(pdf_path))
-                    _send_document_with_display_filename(chat_id, pdf_path)
+                    plan_filename = (
+                        _plan_pdf_filename_override(n)
+                        if file_path == primary_plan_attachment
+                        and actual_path == file_path
+                        else None
+                    )
+                    if plan_filename is None:
+                        _send_document_with_display_filename(chat_id, pdf_path)
+                    else:
+                        send_document(chat_id, pdf_path, filename=plan_filename)
                 else:
                     _send_document_with_display_filename(chat_id, actual_path)
                 rate_limit.record_send()
