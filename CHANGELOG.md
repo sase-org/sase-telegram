@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/sase-org/sase-telegram/compare/v0.3.0...v0.4.0) (2026-07-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* Legacy per-kind gate callbacks and plan preset compatibility are removed in favor of v2 gate bundles.
+* Telegram plan approvals no longer support the Legend action.
+
+### Features
+
+* add configurable Telegram slash commands (sase-6f.2) ([e2527d0](https://github.com/sase-org/sase-telegram/commit/e2527d0e30ddb345d79e474c614b405aaadb596a))
+* add fork copy buttons to plan confirmations ([d6aff49](https://github.com/sase-org/sase-telegram/commit/d6aff498342747da027b9b3579103c23dcf6e024))
+* enrich Telegram agent list views ([03794a4](https://github.com/sase-org/sase-telegram/commit/03794a4a8cf37aecc2d45f736130dfa64643444e))
+* remove Telegram Legend plan action ([820816a](https://github.com/sase-org/sase-telegram/commit/820816a115dec824d0c05f11e8ba9d2a5efb5177))
+* render output variables in completion messages ([48a0ae1](https://github.com/sase-org/sase-telegram/commit/48a0ae1ee4426395d182addb763c44364cf352b8))
+* show epic phase counts in review headings ([8a4ae36](https://github.com/sase-org/sase-telegram/commit/8a4ae368eacaa730ccbda676e29c50a825c58ac6))
+* show plan frontmatter properties in approvals ([c6d1f33](https://github.com/sase-org/sase-telegram/commit/c6d1f3320fb1c4de887a4f5b0bef222ccf161342))
+* support command-backed plan approval gates (sase-6e.6) ([5f01e5d](https://github.com/sase-org/sase-telegram/commit/5f01e5db1dd7e444b9970cfc17670eed92e7074b))
+* support command-backed Telegram questions (sase-6e.5) ([848a609](https://github.com/sase-org/sase-telegram/commit/848a609da82dad3e5b5115a73998d7d251b1ede2))
+* support custom Telegram notification gates (sase-6i.6) ([1437771](https://github.com/sase-org/sase-telegram/commit/14377710cbe75b95b13693a0742a7dd5dc4789db))
+* support neutral launch approval gates (sase-6e.4) ([424bbff](https://github.com/sase-org/sase-telegram/commit/424bbff50a1693bdce5fafa489cd60adb4ba0dfb))
+* unify Telegram gate keyboards (sase-6p.6) ([f902f16](https://github.com/sase-org/sase-telegram/commit/f902f1685871f3bd5be92253b57bb7df82b3ba9d))
+
+
+### Bug Fixes
+
+* deduplicate workflow completion media variants ([5ed48ee](https://github.com/sase-org/sase-telegram/commit/5ed48ee083233ea7c2dde74496654245402c79b7))
+* filter Telegram bead picker to active statuses ([6257eee](https://github.com/sase-org/sase-telegram/commit/6257eee012bfbbfced5379d5af1b7d9e1ca016ed))
+* handle epic gates without tale defaults ([7497004](https://github.com/sase-org/sase-telegram/commit/749700483215005f61e2c0ea1abe7e3ce54b786a))
+* preserve descriptive plan PDF filenames ([f482a50](https://github.com/sase-org/sase-telegram/commit/f482a501cafae3647ef582dea50542edae78fc8f))
+* prioritize custom Telegram commands ([7b902c7](https://github.com/sase-org/sase-telegram/commit/7b902c773177e6b6a30a98d6794c69c9a34f8f75))
+
+
+### Documentation
+
+* clarify Telegram ChangeSpec wording ([14f3c19](https://github.com/sase-org/sase-telegram/commit/14f3c196b64a8ca9efc04a98cfa1d18f3190910a))
+
 ## [0.3.0](https://github.com/sase-org/sase-telegram/compare/v0.2.3...v0.3.0) (2026-07-07)
 
 
