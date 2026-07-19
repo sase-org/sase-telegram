@@ -7,10 +7,12 @@ The encoded string must not exceed 64 bytes (Telegram API limit).
 
 from __future__ import annotations
 
+import secrets
 from typing import NamedTuple
 
 MAX_CALLBACK_BYTES = 64
 SEPARATOR = ":"
+_CALLBACK_KEY_BYTES = 9
 
 
 class CallbackData(NamedTuple):
@@ -19,6 +21,11 @@ class CallbackData(NamedTuple):
     action_type: str
     notif_id_prefix: str
     choice: str
+
+
+def generate_key() -> str:
+    """Generate a short URL-safe key for server-resolved callback data."""
+    return secrets.token_urlsafe(_CALLBACK_KEY_BYTES)
 
 
 def encode(action_type: str, notif_id_prefix: str, choice: str) -> str:

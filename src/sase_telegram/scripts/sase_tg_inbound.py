@@ -26,7 +26,7 @@ from sase_telegram import (
     telegram_client,
 )
 from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_output
-from sase_telegram.callback_data import decode, encode
+from sase_telegram.callback_data import decode, encode, generate_key
 from sase_telegram.custom_commands import (
     CommandResult,
     CustomCommand,
@@ -132,6 +132,8 @@ _LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
 _STALE_AWAITING_FEEDBACK_TEXT = "This action has already been handled"
 _CUSTOM_COMMAND_CAPTION_LIMIT = 1024
 _CUSTOM_COMMAND_STDERR_LIMIT = 1000
+_KILL_SELECTION_PENDING_KEY = "kill-selection"
+_KILL_SELECTION_CHOICE = "select"
 
 
 @dataclass(frozen=True)
@@ -1501,7 +1503,10 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     try:
         cb = decode(data_str)
         if cb.action_type == "kill":
-            _handle_kill_from_callback(callback_query, cb.notif_id_prefix)
+            if cb.choice == _KILL_SELECTION_CHOICE:
+                _handle_kill_selection_from_callback(callback_query, cb.notif_id_prefix)
+            else:
+                _handle_kill_from_callback(callback_query, cb.notif_id_prefix)
             return
         if cb.action_type == "retry":
             _handle_retry_from_callback(callback_query, cb.notif_id_prefix)
@@ -1715,6 +1720,26 @@ def _handle_kill_from_callback(callback_query: Any, agent_name: str) -> None:
         pass  # Callback popup is best-effort; confirmation message matters more
 
     _send_kill_result(agent_name, result, kill_info, prompt_fallback=prompt_fallback)
+
+
+def _handle_kill_selection_from_callback(
+    callback_query: Any,
+    selection_key: str,
+) -> None:
+    """Resolve a persisted /kill selection key and kill its agent."""
+    selection = pending_actions.get(_KILL_SELECTION_PENDING_KEY)
+    agent_names = selection.get("agent_names") if selection else None
+    agent_name = (
+        agent_names.get(selection_key) if isinstance(agent_names, dict) else None
+    )
+    if not isinstance(agent_name, str) or not agent_name:
+        telegram_client.answer_callback_query(
+            callback_query.id,
+            "This kill selection has expired",
+        )
+        return
+
+    _handle_kill_from_callback(callback_query, agent_name)
 
 
 def _handle_retry_from_callback(callback_query: Any, agent_name: str) -> None:
@@ -2689,20 +2714,57 @@ def _show_kill_selection(chat_id: str) -> None:
         telegram_client.send_message(chat_id, "No named agents to kill.")
         return
 
-    descriptions = [
-        _format_agent_description(name, a.model or "?", a.duration, a.prompt)
-        for a, name in named_agents
-    ]
-    text = "Select an agent to kill:\n\n" + "\n\n".join(descriptions)
-    buttons = [
-        [
-            InlineKeyboardButton(
-                display_cl_name(name),
-                callback_data=encode("kill", name, "go"),
+    descriptions: list[str] = []
+    buttons: list[list[InlineKeyboardButton]] = []
+    agent_names: dict[str, str] = {}
+    for agent, name in named_agents:
+        try:
+            selection_key = generate_key()
+            if selection_key in agent_names:
+                raise ValueError(f"Duplicate kill selection key: {selection_key!r}")
+            callback_data = encode(
+                "kill",
+                selection_key,
+                _KILL_SELECTION_CHOICE,
             )
-        ]
-        for _, name in named_agents
-    ]
+        except Exception:
+            log.warning(
+                "Skipping /kill selection button for agent %s",
+                name,
+                exc_info=True,
+            )
+            continue
+
+        agent_names[selection_key] = name
+        descriptions.append(
+            _format_agent_description(
+                name,
+                agent.model or "?",
+                agent.duration,
+                agent.prompt,
+            )
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    display_cl_name(name),
+                    callback_data=callback_data,
+                )
+            ]
+        )
+
+    if not buttons:
+        telegram_client.send_message(chat_id, "No selectable agents to kill.")
+        return
+
+    text = "Select an agent to kill:\n\n" + "\n\n".join(descriptions)
+    pending_actions.add(
+        _KILL_SELECTION_PENDING_KEY,
+        {
+            "action": _KILL_SELECTION_PENDING_KEY,
+            "agent_names": agent_names,
+        },
+    )
 
     telegram_client.send_message(
         chat_id,

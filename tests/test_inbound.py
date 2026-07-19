@@ -3638,16 +3638,22 @@ class TestHandleListCommand:
 
 
 class TestHandleKillSelection:
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_humanizes_visible_labels_but_keeps_callback_raw(
+    def test_humanizes_visible_labels_and_persists_callback_key(
         self,
         mock_tg: MagicMock,
+        mock_pending: MagicMock,
     ) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _show_kill_selection
 
         agents = [_running_agent("sase_agent")]
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                return_value="killkey1",
+            ),
             patch(
                 "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
                 side_effect=lambda name: (
@@ -3663,7 +3669,120 @@ class TestHandleKillSelection:
         keyboard = call_args.kwargs["reply_markup"]
         button = keyboard.inline_keyboard[0][0]
         assert button.text == "SASE Core_agent"
-        assert button.callback_data == "kill:sase_agent:go"
+        assert button.callback_data == "kill:killkey1:select"
+        mock_pending.add.assert_called_once_with(
+            "kill-selection",
+            {
+                "action": "kill-selection",
+                "agent_names": {"killkey1": "sase_agent"},
+            },
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_long_agent_name_roundtrips_through_persisted_key(
+        self,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _handle_callback,
+            _show_kill_selection,
+        )
+
+        long_name = "split_file." + ("very_long_clan_member." * 4)
+        agents = [_running_agent(long_name)]
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                return_value="longkey1",
+            ),
+        ):
+            _show_kill_selection("12345")
+
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        callback_data = keyboard.inline_keyboard[0][0].callback_data
+        assert callback_data == "kill:longkey1:select"
+        assert len(callback_data.encode("utf-8")) <= 64
+
+        mock_pending.get.return_value = {
+            "action": "kill-selection",
+            "agent_names": {"longkey1": long_name},
+        }
+        callback = SimpleNamespace(id="cb1", data=callback_data)
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_kill_from_callback"
+        ) as mock_kill:
+            _handle_callback(callback, {})
+
+        mock_kill.assert_called_once_with(callback, long_name)
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_bad_button_is_skipped_without_aborting_selection(
+        self,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _show_kill_selection
+
+        agents = [_running_agent("bad-agent"), _running_agent("good-agent")]
+
+        def encode_selection(action: str, key: str, choice: str) -> str:
+            if key == "badkey":
+                raise ValueError("cannot encode this button")
+            return f"{action}:{key}:{choice}"
+
+        with (
+            patch("sase.agent.running.list_running_agents", return_value=agents),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                side_effect=["badkey", "goodkey"],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.encode",
+                side_effect=encode_selection,
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            _show_kill_selection("12345")
+
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 1
+        assert keyboard.inline_keyboard[0][0].text == "good-agent"
+        assert keyboard.inline_keyboard[0][0].callback_data == ("kill:goodkey:select")
+        mock_pending.add.assert_called_once_with(
+            "kill-selection",
+            {
+                "action": "kill-selection",
+                "agent_names": {"goodkey": "good-agent"},
+            },
+        )
+        assert "Skipping /kill selection button for agent bad-agent" in caplog.text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_expired_selection_is_answered_without_killing(
+        self,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        mock_pending.get.return_value = None
+        callback = SimpleNamespace(id="cb1", data="kill:missing:select")
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_kill_from_callback"
+        ) as mock_kill:
+            _handle_callback(callback, {})
+
+        mock_kill.assert_not_called()
+        mock_tg.answer_callback_query.assert_called_once_with(
+            "cb1",
+            "This kill selection has expired",
+        )
 
 
 class TestHandleForkCommand:

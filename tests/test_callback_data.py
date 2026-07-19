@@ -2,7 +2,7 @@
 
 import pytest
 
-from sase_telegram.callback_data import CallbackData, decode, encode
+from sase_telegram.callback_data import CallbackData, decode, encode, generate_key
 
 
 class TestEncode:
@@ -43,6 +43,14 @@ class TestRoundtrip:
         encoded = encode(*original)
         decoded = decode(encoded)
         assert decoded == CallbackData(*original)
+
+    def test_generated_server_key_roundtrips_within_telegram_limit(self) -> None:
+        key = generate_key()
+
+        encoded = encode("kill", key, "select")
+
+        assert len(encoded.encode("utf-8")) <= 64
+        assert decode(encoded) == CallbackData("kill", key, "select")
 
     @pytest.mark.parametrize("token", ["c1234", "x1234", "s1234"])
     def test_compact_gate_tokens_roundtrip_within_telegram_limit(
