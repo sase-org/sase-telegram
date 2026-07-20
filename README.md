@@ -62,7 +62,7 @@ Installing sase-telegram adds the following commands:
 
 | Type               | Telegram Behavior                                                                           |
 | ------------------ | ------------------------------------------------------------------------------------------- |
-| Plan / Epic Approval | Shows an ordered frontmatter Properties card and plan body with approval controls; epic headings include a glanceable phase count when available |
+| Plan / Epic Approval | Shows an ordered frontmatter Properties card and plan body with approval controls; epic reviews include glanceable phase counts and validated size totals when available |
 | HITL Request       | Shows request notes with Accept / Reject / Feedback buttons                                 |
 | User Question      | Shows question with dynamic option buttons + Custom input                                   |
 | Workflow Complete   | Sends a summary message with diff/chat/media attachments and a Fork copy button           |
@@ -162,7 +162,11 @@ keyboards. Plan approvals present every parseable top-level frontmatter field in
 the Markdown body. Nested lists and mappings use indented multiline rows; long cards become expandable, and unusually
 large values/body previews are truncated with a clear pointer to the complete plan attachment. Epic review headings
 show the authored phase-sequence length at a glance (for example, `Epic Review · 3 phases`); the suffix is omitted when
-the file or its `phases` metadata cannot be safely read. Chat
+the file or its `phases` metadata cannot be safely read. A validated epic also shows a separate summary such as
+`Phase sizes: 2 small · 1 medium · 1 large`, always ordered small, medium, then large with zero buckets omitted. The
+detailed `phases[].size` values remain visible in Properties, while legacy missing sizes normalize to `small`. If plan
+validation or the required SASE capability is unavailable, the summary is quietly omitted without affecting delivery.
+Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
 PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
 and videos retry as documents if Telegram rejects inline media delivery. Workflow completions coalesce same-stem motion

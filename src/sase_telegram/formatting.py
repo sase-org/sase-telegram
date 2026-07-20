@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence, Set
 from datetime import date
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -476,6 +477,36 @@ def _epic_phase_summary(
     count = len(phases)
     label = "phase" if count == 1 else "phases"
     return f" · {count} {label}"
+
+
+def _epic_phase_size_summary(action: str | None, content: str) -> str:
+    """Return normalized epic phase sizes when validation is available."""
+    if action != "EpicApproval" or not content:
+        return ""
+
+    try:
+        plan_validate = import_module("sase.sdd.plan_validate")
+        validate_plan = plan_validate.validate_plan
+        validation = validate_plan(content, "epic", mode="launch")
+        if not validation.ok or validation.plan is None:
+            return ""
+
+        phases = validation.plan.phases
+        if not phases:
+            return ""
+
+        counts = {"small": 0, "medium": 0, "large": 0}
+        for phase in phases:
+            if phase.size not in counts:
+                return ""
+            counts[phase.size] += 1
+    except Exception:
+        # Older SASE installations and preview-time validator failures must not
+        # interfere with Telegram notification delivery.
+        return ""
+
+    breakdown = " · ".join(f"{count} {size}" for size, count in counts.items() if count)
+    return f"Phase sizes: {breakdown}"
 
 
 def _plan_file_exists(plan_file: str) -> bool:
@@ -1083,6 +1114,7 @@ def _format_plan_approval(
     raw_provider = n.action_data.get("llm_provider")
     raw_model = n.action_data.get("model")
     phase_summary = _epic_phase_summary(n.action, frontmatter)
+    phase_size_summary = _epic_phase_size_summary(n.action, plan_content)
     if raw_provider or raw_model:
         label = escape_markdown_v2(format_provider_model_label(raw_provider, raw_model))
         review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
@@ -1091,6 +1123,8 @@ def _format_plan_approval(
         review_kind = "Epic" if n.action == "EpicApproval" else "Plan"
         plan_title = f"📋 *{review_kind} Review{phase_summary}*"
     header_text = f"{plan_title}{name_line}"
+    if phase_size_summary:
+        header_text += f"\n{phase_size_summary}"
     runtime = n.action_data.get("runtime")
     if runtime:
         header_text += f"\n*Runtime:* {escape_markdown_v2(runtime)}"

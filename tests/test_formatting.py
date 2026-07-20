@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+
 from sase.notifications.models import Notification
 import sase_telegram.formatting as formatting
 from sase_telegram.formatting import (
@@ -41,6 +43,58 @@ def _make_notification(
         files=files or [],
         action=action,
         action_data=action_data or {},
+    )
+
+
+def _epic_plan_content(
+    sizes: list[str | None],
+    *,
+    extra_frontmatter: str = "",
+) -> str:
+    lines = [
+        "---",
+        "tier: epic",
+        "title: Telegram phase sizing",
+        "goal: Verify normalized phase sizes",
+    ]
+    if extra_frontmatter:
+        lines.extend(extra_frontmatter.splitlines())
+    lines.append("phases:")
+    for index, size in enumerate(sizes, start=1):
+        lines.extend(
+            [
+                f"  - id: phase-{index}",
+                f"    title: Phase {index}",
+                (
+                    "    depends_on: []"
+                    if index == 1
+                    else f"    depends_on: [phase-{index - 1}]"
+                ),
+                f'    description: "Phase {index} section: deliver phase {index}."',
+            ]
+        )
+        if size is not None:
+            lines.append(f"    size: {size}")
+    lines.extend(["---", "", "# Epic", "", "Preview body.", ""])
+    return "\n".join(lines)
+
+
+def _install_validated_phase_sizes(monkeypatch, sizes: list[str]) -> None:
+    def validate_plan(content: str, tier: str, *, mode: str):
+        assert content
+        assert tier == "epic"
+        assert mode == "launch"
+        return SimpleNamespace(
+            ok=True,
+            plan=SimpleNamespace(
+                phases=tuple(SimpleNamespace(size=size) for size in sizes)
+            ),
+        )
+
+    monkeypatch.setattr(
+        formatting,
+        "import_module",
+        lambda _module_name: SimpleNamespace(validate_plan=validate_plan),
     )
 
 
@@ -241,18 +295,15 @@ class TestMarkdownToTelegramV2:
 
 class TestFormatPlanApproval:
     def test_epic_heading_shows_plural_count_with_review_metadata(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch
     ) -> None:
+        _install_validated_phase_sizes(
+            monkeypatch,
+            ["small", "medium", "small", "large"],
+        )
         plan_file = tmp_path / "epic.md"
         plan_file.write_text(
-            "---\n"
-            "tier: epic\n"
-            "phases:\n"
-            "  - name: Foundation\n"
-            "  - name: Delivery\n"
-            "  - name: Verification\n"
-            "---\n\n"
-            "# Epic\n",
+            _epic_plan_content(["small", "medium", "small", "large"]),
             encoding="utf-8",
         )
         notification = _make_notification(
@@ -269,15 +320,19 @@ class TestFormatPlanApproval:
 
         text, _, _ = format_notification(notification)
 
-        assert text.splitlines()[:2] == [
-            "📋 *CLAUDE\\(opus\\) Epic Review · 3 phases*  _@test\\_agent_",
+        assert text.splitlines()[:3] == [
+            "📋 *CLAUDE\\(opus\\) Epic Review · 4 phases*  _@test\\_agent_",
+            "Phase sizes: 2 small · 1 medium · 1 large",
             "*Runtime:* 4m32s",
         ]
 
-    def test_epic_heading_uses_singular_phase(self, tmp_path: Path) -> None:
+    def test_epic_heading_uses_singular_phase(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _install_validated_phase_sizes(monkeypatch, ["large"])
         plan_file = tmp_path / "epic.md"
         plan_file.write_text(
-            "---\ntier: epic\nphases:\n  - name: Implementation\n---\n# Epic\n",
+            _epic_plan_content(["large"]),
             encoding="utf-8",
         )
         notification = _make_notification(
@@ -288,7 +343,53 @@ class TestFormatPlanApproval:
 
         text, _, _ = format_notification(notification)
 
-        assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+        assert text.splitlines()[:2] == [
+            "📋 *Epic Review · 1 phase*",
+            "Phase sizes: 1 large",
+        ]
+
+    def test_epic_size_summary_omits_zero_buckets(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _install_validated_phase_sizes(monkeypatch, ["medium", "medium", "medium"])
+        plan_file = tmp_path / "repeated-sizes.md"
+        plan_file.write_text(
+            _epic_plan_content(["medium", "medium", "medium"]),
+            encoding="utf-8",
+        )
+
+        text, _, _ = format_notification(
+            _make_notification(
+                action="EpicApproval",
+                sender="epic",
+                files=[str(plan_file)],
+            )
+        )
+
+        assert text.splitlines()[1] == "Phase sizes: 3 medium"
+
+    def test_epic_size_summary_normalizes_legacy_sizes_to_small(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _install_validated_phase_sizes(monkeypatch, ["small", "small"])
+        plan_file = tmp_path / "legacy-sizes.md"
+        plan_file.write_text(
+            _epic_plan_content([None, None]),
+            encoding="utf-8",
+        )
+
+        text, _, _ = format_notification(
+            _make_notification(
+                action="EpicApproval",
+                sender="epic",
+                files=[str(plan_file)],
+            )
+        )
+
+        assert text.splitlines()[:2] == [
+            "📋 *Epic Review · 2 phases*",
+            "Phase sizes: 2 small",
+        ]
 
     def test_epic_heading_handles_empty_phase_sequence(self, tmp_path: Path) -> None:
         plan_file = tmp_path / "empty-epic.md"
@@ -305,6 +406,7 @@ class TestFormatPlanApproval:
         text, _, _ = format_notification(notification)
 
         assert text.splitlines()[0] == "📋 *Epic Review · 0 phases*"
+        assert "Phase sizes:" not in text
 
     def test_tale_heading_omits_phase_count(self, tmp_path: Path) -> None:
         plan_file = tmp_path / "tale.md"
@@ -341,6 +443,7 @@ class TestFormatPlanApproval:
             text, keyboard, attachments = format_notification(notification)
 
             assert text.splitlines()[0] == "📋 *Epic Review*"
+            assert "Phase sizes:" not in text
             assert keyboard is None
             assert attachments == [str(plan_file)]
 
@@ -353,15 +456,104 @@ class TestFormatPlanApproval:
             )
         )
         assert text.splitlines()[0] == "📋 *Epic Review*"
+        assert "Phase sizes:" not in text
         assert keyboard is None
         assert attachments == []
+
+    def test_invalid_epic_validation_keeps_raw_count_and_preview(
+        self, tmp_path: Path
+    ) -> None:
+        contents = {
+            "invalid-size.md": _epic_plan_content(["huge"]),
+            "invalid-structure.md": _epic_plan_content(
+                ["small"],
+                extra_frontmatter="unknown_field: true",
+            ),
+        }
+        for filename, content in contents.items():
+            plan_file = tmp_path / filename
+            plan_file.write_text(content, encoding="utf-8")
+
+            text, keyboard, attachments = format_notification(
+                _make_notification(
+                    action="EpicApproval",
+                    sender="epic",
+                    files=[str(plan_file)],
+                )
+            )
+
+            assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+            assert "Phase sizes:" not in text
+            assert "*Epic*" in text
+            assert keyboard is None
+            assert attachments == [str(plan_file)]
+
+    def test_validator_failures_omit_sizes_without_weakening_preview(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        plan_file = tmp_path / "epic.md"
+        plan_file.write_text(_epic_plan_content(["small"]), encoding="utf-8")
+
+        def import_failure(_module_name: str):
+            raise ImportError("validator unavailable")
+
+        def validation_failure(*_args, **_kwargs):
+            raise RuntimeError("binding unavailable")
+
+        loaders = (
+            import_failure,
+            lambda _module_name: SimpleNamespace(),
+            lambda _module_name: SimpleNamespace(validate_plan=validation_failure),
+            lambda _module_name: SimpleNamespace(
+                validate_plan=lambda *_args, **_kwargs: SimpleNamespace(
+                    ok=False,
+                    plan=None,
+                )
+            ),
+            lambda _module_name: SimpleNamespace(
+                validate_plan=lambda *_args, **_kwargs: SimpleNamespace(
+                    ok=True,
+                    plan=SimpleNamespace(phases=()),
+                )
+            ),
+            lambda _module_name: SimpleNamespace(
+                validate_plan=lambda *_args, **_kwargs: SimpleNamespace(
+                    ok=True,
+                    plan=SimpleNamespace(),
+                )
+            ),
+            lambda _module_name: SimpleNamespace(
+                validate_plan=lambda *_args, **_kwargs: SimpleNamespace(
+                    ok=True,
+                    plan=SimpleNamespace(phases=(SimpleNamespace(size="unexpected"),)),
+                )
+            ),
+        )
+        for loader in loaders:
+            with monkeypatch.context() as context:
+                context.setattr(formatting, "import_module", loader)
+
+                text, keyboard, attachments = format_notification(
+                    _make_notification(
+                        action="EpicApproval",
+                        sender="epic",
+                        files=[str(plan_file)],
+                    )
+                )
+
+            assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+            assert "Phase sizes:" not in text
+            assert "*Epic*" in text
+            assert keyboard is None
+            assert attachments == [str(plan_file)]
 
     def test_verified_count_survives_property_rendering_fallback(
         self, tmp_path: Path, monkeypatch
     ) -> None:
+        _install_validated_phase_sizes(monkeypatch, ["small", "large"])
         plan_file = tmp_path / "epic.md"
         plan_file.write_text(
-            "---\ntier: epic\nphases:\n  - one\n  - two\n---\n# Epic body\n",
+            _epic_plan_content(["small", "large"]),
             encoding="utf-8",
         )
 
@@ -382,7 +574,8 @@ class TestFormatPlanApproval:
         text, keyboard, attachments = format_notification(notification)
 
         assert text.splitlines()[0] == "📋 *Epic Review · 2 phases*"
-        assert "*Epic body*" in text
+        assert text.splitlines()[1] == "Phase sizes: 1 small · 1 large"
+        assert "*Epic*" in text
         assert keyboard is None
         assert attachments == [str(plan_file)]
 
@@ -557,7 +750,10 @@ Details.
         assert "café & tea\\!" in text
         assert text.index("🧾 *Properties*") < text.index("*Epic body*")
 
-    def test_large_properties_and_body_share_one_budget(self, tmp_path: Path) -> None:
+    def test_large_properties_and_body_share_one_budget(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _install_validated_phase_sizes(monkeypatch, ["small", "medium", "large"])
         plan_file = tmp_path / "large-epic.md"
         goal = "safe_goal " * 500
         prompt = "prompt_value " * 500
@@ -572,11 +768,19 @@ Details.
             f"goal: {goal}\n"
             f"prompt: {prompt}\n"
             "phases:\n"
-            "  - name: Foundation\n"
-            f"    details: {phase_details}\n"
-            "  - name: Delivery\n"
-            "  - name: Verification\n"
-            "z_future: still visible\n"
+            "  - id: foundation\n"
+            "    title: Foundation\n"
+            "    depends_on: []\n"
+            f"    description: {phase_details}\n"
+            "    size: small\n"
+            "  - id: delivery\n"
+            "    title: Delivery\n"
+            "    depends_on: [foundation]\n"
+            "    size: medium\n"
+            "  - id: verification\n"
+            "    title: Verification\n"
+            "    depends_on: [delivery]\n"
+            "    size: large\n"
             "---\n\n"
             f"{body}\n",
             encoding="utf-8",
@@ -592,7 +796,8 @@ Details.
 
         assert len(text) <= MAX_MESSAGE_LENGTH
         assert text.splitlines()[0] == "📋 *Epic Review · 3 phases*"
-        for label in ("Title", "Tier", "Goal", "Phases", "Prompt", "Z future"):
+        assert text.splitlines()[1] == ("Phase sizes: 1 small · 1 medium · 1 large")
+        for label in ("Title", "Tier", "Goal", "Phases", "Prompt"):
             assert f"*{label}:*" in text
         properties_block = text[text.index("🧾 *Properties*") : text.index("━" * 20)]
         assert "**>" in properties_block
@@ -667,15 +872,16 @@ Details.
         invalid_file = tmp_path / "invalid.md"
         invalid_file.write_bytes(b"\xff\xfe\x00")
         invalid = _make_notification(
-            action="PlanApproval",
-            sender="plan",
+            action="EpicApproval",
+            sender="epic",
             notes=["Plan ready"],
             files=[str(invalid_file)],
         )
 
         text, keyboard, attachments = format_notification(invalid)
 
-        assert "Plan Review" in text
+        assert "Epic Review" in text
+        assert "Phase sizes:" not in text
         assert "Properties" not in text
         assert keyboard is None
         assert attachments == [str(invalid_file)]
@@ -691,15 +897,16 @@ Details.
 
         monkeypatch.setattr(Path, "read_text", fail_for_unreadable)
         unreadable = _make_notification(
-            action="PlanApproval",
-            sender="plan",
+            action="EpicApproval",
+            sender="epic",
             notes=["Plan ready"],
             files=[str(unreadable_file)],
         )
 
         text, keyboard, attachments = format_notification(unreadable)
 
-        assert "Plan Review" in text
+        assert "Epic Review" in text
+        assert "Phase sizes:" not in text
         assert keyboard is None
         assert attachments == [str(unreadable_file)]
 

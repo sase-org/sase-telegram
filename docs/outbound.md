@@ -56,6 +56,11 @@ empty values and containers remain explicit. Short cards stay open; metadata-hea
 Epic approval headings also show the top-level phase-sequence length at a glance, such as
 `Epic Review · 3 phases` or `Epic Review · 1 phase`. The suffix is best-effort and is omitted when the plan cannot be
 read or parsed, `phases` is absent, or its value is not a sequence; tale review headings remain unchanged.
+Successfully validated, nonempty epics add a separate line such as
+`Phase sizes: 2 small · 1 medium · 1 large`. Buckets always appear in `small`, `medium`, `large` order and zero buckets
+are omitted. This compact line complements the complete nested `phases[].size` values in Properties; legacy missing
+sizes normalize to `small` in launch-consumption mode. Validation errors, unavailable validator capabilities, and
+preview-time validator failures quietly omit the line without changing the raw phase count, attachment, or controls.
 
 The header, review note, Properties card, and body share Telegram's 4096-character budget. Property labels are retained
 when space is tight; only large displayed values and then the body preview are truncated, each with a pointer to the

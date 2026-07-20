@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from inspect import signature
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from sase.agent.launch_request import create_launch_approval_request
 from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
 from sase.plan_gate import create_plan_approval_gate
+from sase.sdd.plan_validate import validate_plan as validate_sase_plan
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
 from sase_telegram.scripts.sase_tg_inbound import (
@@ -46,6 +48,15 @@ phases:
 
 Implement the requested change.
 """
+
+
+def _epic_plan_for_installed_sase() -> str:
+    if "mode" not in signature(validate_sase_plan).parameters:
+        return VALID_EPIC_PLAN
+    return VALID_EPIC_PLAN.replace(
+        "    depends_on: []\n",
+        "    depends_on: []\n    size: small\n",
+    )
 
 
 @pytest.fixture()
@@ -225,7 +236,7 @@ def _pending(notification: Notification) -> dict[str, object]:
 
 def _epic_notification(gate_home: Path, request_id: str) -> Notification:
     plan_file = gate_home / f"{request_id}.md"
-    plan_file.write_text(VALID_EPIC_PLAN, encoding="utf-8")
+    plan_file.write_text(_epic_plan_for_installed_sase(), encoding="utf-8")
     result = create_plan_approval_gate(plan_file, request_id)
     notification = _notification(result, action="EpicApproval", sender="epic")
     notification.files = [str(Path(result.bundle_path) / "plan.md")]
@@ -445,10 +456,29 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
 def test_epic_approval_uses_singleton_branch_row(gate_home: Path) -> None:
     notification = _epic_notification(gate_home, "telegram-epic-formatting")
     bundle = Path(notification.action_data["bundle_path"])
+    legacy_plan = gate_home / "legacy-epic.md"
+    legacy_plan.write_text(VALID_EPIC_PLAN, encoding="utf-8")
+    notification.files = [str(legacy_plan)]
 
-    text, keyboard, attachments = format_notification(notification)
+    def validate_plan(content: str, tier: str, *, mode: str):
+        assert "size:" not in content
+        assert tier == "epic"
+        assert mode == "launch"
+        return SimpleNamespace(
+            ok=True,
+            plan=SimpleNamespace(phases=(SimpleNamespace(size="small"),)),
+        )
 
-    assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+    with patch(
+        "sase_telegram.formatting.import_module",
+        return_value=SimpleNamespace(validate_plan=validate_plan),
+    ):
+        text, keyboard, attachments = format_notification(notification)
+
+    assert text.splitlines()[:2] == [
+        "📋 *Epic Review · 1 phase*",
+        "Phase sizes: 1 small",
+    ]
     assert attachments == notification.files
     assert notification.dismissed is True
     assert keyboard is not None
@@ -459,6 +489,31 @@ def test_epic_approval_uses_singleton_branch_row(gate_home: Path) -> None:
         f"gate:{prefix}:c2",
     ]
     assert not (bundle / "telegram_gate_progress.json").exists()
+
+
+def test_epic_validator_failure_preserves_gate_and_attachment(
+    gate_home: Path,
+) -> None:
+    notification = _epic_notification(gate_home, "telegram-epic-degraded")
+
+    with patch(
+        "sase_telegram.formatting.import_module",
+        side_effect=ImportError("validator unavailable"),
+    ):
+        text, keyboard, attachments = format_notification(notification)
+
+    assert text.splitlines()[0] == "📋 *Epic Review · 1 phase*"
+    assert "Phase sizes:" not in text
+    assert "🧾 *Properties*" in text
+    assert "*Plan*" in text
+    assert attachments == notification.files
+    assert keyboard is not None
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:c0",
+        f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
+    ]
 
 
 def test_epic_approval_outbound_sends_generic_keyboard(
@@ -518,7 +573,7 @@ def test_epic_approval_outbound_sends_generic_keyboard(
             id="tale",
         ),
         pytest.param(
-            VALID_EPIC_PLAN,
+            _epic_plan_for_installed_sase(),
             "EpicApproval",
             "telegram.plan.review.epic.md",
             "telegram.plan.review.epic.pdf",
