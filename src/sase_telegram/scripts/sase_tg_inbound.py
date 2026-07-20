@@ -26,6 +26,18 @@ from sase_telegram import (
     telegram_client,
 )
 from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_output
+from sase_telegram.agent_format import (
+    _detail_rows,
+    _entry_display_name,
+    _entry_model_label,
+    _format_agent_list_block,
+    _format_detail_grid,
+    _format_header_status_counts,
+    _format_status_token,
+    _html,
+    _pack_html_blocks,
+    format_agent_detail,
+)
 from sase_telegram.callback_data import decode, encode, generate_key
 from sase_telegram.custom_commands import (
     CommandResult,
@@ -86,6 +98,20 @@ from sase_telegram.inbound import (
     save_awaiting_feedback,
     save_offset,
 )
+from sase_telegram.show_entities import (
+    InvalidShowReference,
+    ShowNotFound,
+    ShowTarget,
+    build_kinship_index,
+    resolve_show_reference,
+)
+from sase_telegram.show_format import (
+    ShowButtonSpec,
+    ShowView,
+    format_show_index,
+    format_show_not_found,
+    format_show_target,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +124,6 @@ _UPDATE_COMPLETION_PENDING_DIR = (
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
-_LIST_HTML_CHUNK_LIMIT = 3900
 _LIST_STATUS_BUCKET_ORDER = (
     "Stopped",
     "Failed",
@@ -1517,6 +1542,9 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         if cb.action_type == "list":
             _handle_list_callback(callback_query, cb.notif_id_prefix, cb.choice)
             return
+        if cb.action_type == "show":
+            _handle_show_callback(callback_query, cb.notif_id_prefix, cb.choice)
+            return
     except ValueError:
         pass
 
@@ -2316,6 +2344,8 @@ def _handle_command(
         _handle_kill_command(args)
     elif command == "list":
         _handle_list_command(args)
+    elif command == "show":
+        _handle_show_command(args, message=message)
     elif command == "fork":
         _handle_fork_command()
     elif command == "changes":
@@ -2480,209 +2510,6 @@ def _format_agent_description(
             snippet = snippet[:80] + "…"
         line += f"\n<i>{html.escape(snippet)}</i>"
     return line
-
-
-def _html(text: object) -> str:
-    return html.escape(str(text), quote=False)
-
-
-def _entry_name(entry: Any) -> str:
-    name = getattr(entry, "name", None)
-    return name if isinstance(name, str) and name else "(unnamed)"
-
-
-def _entry_display_name(entry: Any) -> str:
-    return display_cl_name(_entry_name(entry))
-
-
-def _entry_model_label(entry: Any) -> str:
-    model = getattr(entry, "model", None)
-    model_label = model if isinstance(model, str) and model else "?"
-    effort = getattr(entry, "reasoning_effort", None)
-    if isinstance(effort, str) and effort:
-        return f"{model_label} @ {effort}"
-    return model_label
-
-
-def _format_compact_duration(seconds: float | int) -> str:
-    total = max(int(seconds), 0)
-    days, remainder = divmod(total, 86_400)
-    hours, remainder = divmod(remainder, 3_600)
-    minutes, secs = divmod(remainder, 60)
-    if days:
-        return f"{days}d{hours}h"
-    if hours:
-        return f"{hours}h{minutes}m"
-    if minutes:
-        return f"{minutes}m" if secs == 0 else f"{minutes}m{secs}s"
-    return f"{secs}s"
-
-
-def _format_wait_token(entry: Any) -> str:
-    wait = getattr(entry, "wait", None)
-    wait_for = tuple(getattr(wait, "wait_for", ()) or ())
-    remaining = getattr(wait, "remaining_seconds", None)
-    wait_until = getattr(wait, "wait_until", None)
-    wait_duration = getattr(wait, "wait_duration_seconds", None)
-
-    if wait_for:
-        deps = ", ".join(str(dep) for dep in wait_for[:2])
-        if len(wait_for) > 2:
-            deps += f" +{len(wait_for) - 2}"
-        if isinstance(remaining, int) and remaining > 0:
-            return f"⏳ on {deps} · ~{_format_compact_duration(remaining)} left"
-        return f"⏳ on {deps}"
-    if isinstance(remaining, int) and remaining > 0:
-        return f"⏳ ~{_format_compact_duration(remaining)} left"
-    if isinstance(wait_until, str) and wait_until:
-        return f"⏳ until {_format_wait_until(wait_until)}"
-    if isinstance(wait_duration, (int, float)) and wait_duration > 0:
-        return f"⏳ {_format_compact_duration(wait_duration)}"
-    return "⏳ waiting"
-
-
-def _format_wait_until(wait_until: str) -> str:
-    try:
-        parsed = datetime.fromisoformat(wait_until.replace("Z", "+00:00"))
-    except ValueError:
-        return wait_until
-    return parsed.strftime("%H:%M")
-
-
-def _format_finished_time(entry: Any) -> str:
-    finished_at = getattr(entry, "finished_at", None)
-    if isinstance(finished_at, datetime):
-        return finished_at.strftime("%H:%M")
-    duration = getattr(entry, "duration", None)
-    return duration if isinstance(duration, str) and duration else "done"
-
-
-def _format_status_token(entry: Any) -> str:
-    status = str(getattr(entry, "status", "") or "")
-    if status == "QUESTION":
-        return "❓ needs answer"
-    if status == "PLAN":
-        return "📋 plan ready"
-    if status == "WAITING":
-        return _format_wait_token(entry)
-    if status == "STARTING":
-        return "◐ starting"
-    if status == "RETRYING":
-        retry = getattr(entry, "retry", None)
-        attempt = getattr(retry, "retry_attempt", None)
-        return f"↻{attempt}" if isinstance(attempt, int) else "↻ retrying"
-    if status.startswith("FAILED"):
-        return f"✗ {_format_finished_time(entry)}"
-    if status in {"DONE", "PLAN DONE", "TALE DONE", "STOPPED", "FEEDBACK"}:
-        return f"✓ {_format_finished_time(entry)}"
-    duration = getattr(entry, "duration", None)
-    return f"▶ {duration if isinstance(duration, str) and duration else '?'}"
-
-
-def _entry_micro_badges(entry: Any) -> list[str]:
-    badges: list[str] = []
-    if getattr(entry, "has_file_changes", False):
-        badges.append("✏️")
-    auto_badge = getattr(entry, "auto_badge", None)
-    if isinstance(auto_badge, str) and auto_badge:
-        badges.append(auto_badge)
-    if getattr(entry, "bead_id", None):
-        badges.append("◆")
-    tag = getattr(entry, "tag", None)
-    if isinstance(tag, str) and tag:
-        badges.append(tag if tag.startswith("#") else f"#{tag}")
-    retry = getattr(entry, "retry", None)
-    retry_attempt = getattr(retry, "retry_attempt", None)
-    if isinstance(retry_attempt, int):
-        badges.append(f"↻{retry_attempt}")
-    children = getattr(entry, "children", None)
-    child_badge = getattr(children, "badge", None)
-    if isinstance(child_badge, str) and child_badge:
-        badges.append(child_badge)
-    return badges
-
-
-def _format_agent_list_block(entry: Any) -> str:
-    """Format one rich agent block for the /list overview."""
-    provider_badge = getattr(entry, "provider_badge", None) or "•"
-    name = _html(_entry_display_name(entry))
-    model = _html(_entry_model_label(entry))
-    status_token = _html(_format_status_token(entry))
-    micro_badges = _entry_micro_badges(entry)
-    suffix = (
-        f" {' '.join(_html(badge) for badge in micro_badges)}" if micro_badges else ""
-    )
-
-    lines = [
-        f"{provider_badge} <b>{name}</b> · {model} · {status_token}{suffix}",
-    ]
-    context = _entry_context_parts(entry)
-    if context:
-        lines.append(" · ".join(_html(part) for part in context))
-    activity = getattr(entry, "activity", None)
-    if isinstance(activity, str) and activity:
-        lines.append(f"<i>{_html(activity)}</i>")
-    prompt = _entry_prompt_snippet(entry, limit=160)
-    if prompt:
-        lines.append(f"<blockquote>{_html(prompt)}</blockquote>")
-    return "\n".join(lines)
-
-
-def _entry_context_parts(entry: Any) -> list[str]:
-    parts: list[str] = []
-    project = getattr(entry, "project", None)
-    if isinstance(project, str) and project:
-        parts.append(display_project_name(project))
-    workspace_num = getattr(entry, "workspace_num", None)
-    if isinstance(workspace_num, int):
-        parts.append(f"ws#{workspace_num}")
-    pid = getattr(entry, "pid", None)
-    if isinstance(pid, int):
-        parts.append(f"PID {pid}")
-    vcs_provider = getattr(entry, "vcs_provider_display", None)
-    if isinstance(vcs_provider, str) and vcs_provider:
-        parts.append(vcs_provider)
-    parent_agent_name = getattr(entry, "parent_agent_name", None)
-    if isinstance(parent_agent_name, str) and parent_agent_name:
-        parts.append(f"fork of {display_cl_name(parent_agent_name)}")
-    agent_family = getattr(entry, "agent_family", None)
-    agent_family_role = getattr(entry, "agent_family_role", None)
-    if isinstance(agent_family, str) and agent_family:
-        label = f"family {display_cl_name(agent_family)}"
-        if isinstance(agent_family_role, str) and agent_family_role:
-            label += f"·{agent_family_role}"
-        parts.append(label)
-    retry = getattr(entry, "retry", None)
-    retry_attempt = getattr(retry, "retry_attempt", None)
-    if isinstance(retry_attempt, int):
-        parts.append(f"retry {retry_attempt}")
-    return parts
-
-
-def _entry_prompt_snippet(entry: Any, *, limit: int) -> str | None:
-    prompt = getattr(entry, "prompt", None)
-    if not isinstance(prompt, str) or not prompt.strip():
-        return None
-    snippet = display_cl_names_in_text(prompt.replace("\n", " ").strip())
-    if len(snippet) > limit:
-        return snippet[: max(limit - 1, 1)] + "…"
-    return snippet
-
-
-def _pack_html_blocks(blocks: list[str]) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for block in blocks:
-        separator = "\n\n" if current else ""
-        candidate = f"{current}{separator}{block}" if current else block
-        if current and len(candidate) > _LIST_HTML_CHUNK_LIMIT:
-            chunks.append(current)
-            current = block
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
 
 
 def _send_html_chunks(
@@ -2992,31 +2819,6 @@ def _format_list_header(
     return " · ".join(title_parts)
 
 
-def _format_header_status_counts(active_entries: list[Any]) -> str | None:
-    if not active_entries:
-        return None
-    counts: dict[str, int] = {}
-    glyphs: dict[str, str] = {}
-    for entry in active_entries:
-        bucket = str(getattr(entry, "status_bucket", "") or "")
-        if not bucket:
-            continue
-        counts[bucket] = counts.get(bucket, 0) + 1
-        glyph = getattr(entry, "status_glyph", "")
-        glyphs[bucket] = glyph if isinstance(glyph, str) else ""
-    ordered = [
-        bucket
-        for bucket in ("Stopped", "Failed", "Starting", "Running", "Waiting", "Done")
-        if counts.get(bucket)
-    ]
-    if not ordered:
-        return None
-    return " · ".join(
-        f"{glyphs.get(bucket) or ''} {counts[bucket]} {bucket.lower()}".strip()
-        for bucket in ordered
-    )
-
-
 def _format_list_footer(entries: list[Any], *, include_recent: bool) -> str | None:
     if include_recent:
         return None
@@ -3094,124 +2896,8 @@ def _send_list_detail(chat_id: str, entry: Any) -> None:
 
 
 def _format_list_detail(entry: Any) -> str:
-    provider_badge = getattr(entry, "provider_badge", None) or "•"
-    title = f"{provider_badge} <b>{_html(_entry_display_name(entry))}</b> — details"
-    status = _html(_format_status_token(entry))
-    rows = _detail_rows(entry)
-    grid = _format_detail_grid(rows)
     prompt = _get_detail_prompt(entry)
-
-    parts = [title, status]
-    if grid:
-        parts.append(f"<pre>{_html(grid)}</pre>")
-    if prompt:
-        parts.append(f"<blockquote expandable>{_html(prompt)}</blockquote>")
-    return "\n\n".join(parts)
-
-
-def _detail_rows(entry: Any) -> list[tuple[str, str]]:
-    rows: list[tuple[str, str]] = []
-    _append_row(rows, "Model", _entry_model_label(entry))
-    project = getattr(entry, "project", None)
-    if isinstance(project, str) and project:
-        _append_row(rows, "Project", display_project_name(project))
-    changespec = getattr(entry, "changespec_name", None)
-    if isinstance(changespec, str) and changespec:
-        _append_row(rows, "ChangeSpec", display_cl_name(changespec))
-    workspace_num = getattr(entry, "workspace_num", None)
-    if isinstance(workspace_num, int):
-        _append_row(rows, "Workspace", f"#{workspace_num}")
-    pid = getattr(entry, "pid", None)
-    if isinstance(pid, int):
-        _append_row(rows, "PID", str(pid))
-    _append_optional_row(rows, "VCS", getattr(entry, "vcs_provider_display", None))
-    _append_optional_row(rows, "Workflow", getattr(entry, "workflow_name", None))
-    auto_badge = getattr(entry, "auto_badge", None)
-    if isinstance(auto_badge, str) and auto_badge:
-        action = getattr(entry, "auto_approve_plan_action", None)
-        _append_row(rows, "Auto", f"{auto_badge} {action}" if action else auto_badge)
-    _append_optional_row(rows, "Bead", getattr(entry, "bead_id", None))
-    tag = getattr(entry, "tag", None)
-    if isinstance(tag, str) and tag:
-        _append_row(rows, "Tag", tag if tag.startswith("#") else f"#{tag}")
-    started_at = getattr(entry, "started_at", None)
-    if isinstance(started_at, datetime):
-        _append_row(rows, "Started", started_at.strftime("%Y-%m-%d %H:%M:%S"))
-    finished_at = getattr(entry, "finished_at", None)
-    if isinstance(finished_at, datetime):
-        _append_row(rows, "Finished", finished_at.strftime("%Y-%m-%d %H:%M:%S"))
-    wait_detail = _detail_wait_value(entry)
-    if wait_detail:
-        _append_row(rows, "Wait", wait_detail)
-    retry_detail = _detail_retry_value(entry)
-    if retry_detail:
-        _append_row(rows, "Retries", retry_detail)
-    _append_optional_row(rows, "Activity", getattr(entry, "activity", None))
-    outputs = getattr(entry, "output_variables", None)
-    if isinstance(outputs, dict) and outputs:
-        _append_row(
-            rows,
-            "Outputs",
-            " · ".join(f"{key}={value}" for key, value in sorted(outputs.items())),
-        )
-    artifact_count = getattr(entry, "artifact_count", 0)
-    commit_count = getattr(entry, "commit_count", 0)
-    artifact_parts: list[str] = []
-    if isinstance(artifact_count, int) and artifact_count:
-        artifact_parts.append(f"{artifact_count} files")
-    if isinstance(commit_count, int) and commit_count:
-        artifact_parts.append(f"{commit_count} commits")
-    if artifact_parts:
-        _append_row(rows, "Artifacts", " · ".join(artifact_parts))
-    _append_optional_row(rows, "ERROR", getattr(entry, "error", None))
-    return rows
-
-
-def _append_row(rows: list[tuple[str, str]], key: str, value: object) -> None:
-    text = str(value).strip()
-    if text:
-        rows.append((key, text))
-
-
-def _append_optional_row(
-    rows: list[tuple[str, str]], key: str, value: object | None
-) -> None:
-    if isinstance(value, str) and value:
-        rows.append((key, value))
-
-
-def _format_detail_grid(rows: list[tuple[str, str]]) -> str:
-    if not rows:
-        return ""
-    width = max(len(key) for key, _ in rows)
-    return "\n".join(f"{key:<{width}}  {value}" for key, value in rows)
-
-
-def _detail_wait_value(entry: Any) -> str | None:
-    wait = getattr(entry, "wait", None)
-    if wait is None or not bool(getattr(wait, "has_wait", False)):
-        return None
-    return _format_wait_token(entry).removeprefix("⏳ ").strip()
-
-
-def _detail_retry_value(entry: Any) -> str | None:
-    retry = getattr(entry, "retry", None)
-    if retry is None or not bool(getattr(retry, "has_retry", False)):
-        return None
-    parts: list[str] = []
-    attempt = getattr(retry, "retry_attempt", None)
-    if isinstance(attempt, int):
-        parts.append(f"attempt {attempt}")
-    category = getattr(retry, "retry_error_category", None)
-    if isinstance(category, str) and category:
-        parts.append(category)
-    parent = getattr(retry, "retry_of_timestamp", None)
-    if isinstance(parent, str) and parent:
-        parts.append(f"of {parent}")
-    child = getattr(retry, "retried_as_timestamp", None)
-    if isinstance(child, str) and child:
-        parts.append(f"retried as {child}")
-    return " · ".join(parts) if parts else None
+    return format_agent_detail(entry, prompt=prompt)
 
 
 def _get_detail_prompt(entry: Any) -> str | None:
@@ -3222,6 +2908,161 @@ def _get_detail_prompt(entry: Any) -> str | None:
     if not isinstance(prompt, str) or not prompt.strip():
         return None
     return display_cl_names_in_text(prompt.strip())
+
+
+def _handle_show_command(args: str = "", message: Any | None = None) -> None:
+    """Handle ``/show`` for agents, clans, families, tribes, and the index."""
+    chat_id = _message_chat_id(message) or credentials.get_chat_id()
+    try:
+        entries = _load_list_entries()
+        ref = args.strip()
+        if ref:
+            chunks, keyboard = _render_show_reference(ref, entries)
+        else:
+            view = format_show_index(build_kinship_index(entries))
+            chunks = _pack_html_blocks(list(view.blocks))
+            keyboard = _build_show_keyboard(view)
+    except InvalidShowReference:
+        telegram_client.send_message(
+            chat_id,
+            "Invalid tribe reference. Use <code>/show @name</code>; tribe names "
+            "may contain letters, digits, underscores, dots, and dashes.",
+            parse_mode="HTML",
+        )
+        return
+    except Exception:
+        log.exception("Failed to build /show view")
+        telegram_client.send_message(chat_id, "Failed to build /show view.")
+        return
+    _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
+
+
+def _render_show_reference(
+    ref: str, entries: list[Any] | None = None
+) -> tuple[list[str], InlineKeyboardMarkup | None]:
+    """Resolve and render one show reference from a fresh entry snapshot."""
+    all_entries = entries if entries is not None else _load_list_entries()
+    resolved = resolve_show_reference(ref, all_entries)
+    if isinstance(resolved, ShowNotFound):
+        view = format_show_not_found(resolved)
+        target = None
+        prompt = None
+        action_prompt = None
+    else:
+        target = resolved
+        prompt = None
+        action_prompt = None
+        if target.kind == "agent" and target.entry is not None:
+            action_prompt = _get_agent_retry_prompt(target.name) or getattr(
+                target.entry, "prompt", None
+            )
+            if isinstance(action_prompt, str) and action_prompt.strip():
+                prompt = display_cl_names_in_text(action_prompt.strip())
+        view = format_show_target(target, prompt=prompt)
+    return (
+        _pack_html_blocks(list(view.blocks)),
+        _build_show_keyboard(view, target=target, prompt=action_prompt),
+    )
+
+
+def _build_show_keyboard(
+    view: ShowView,
+    *,
+    target: ShowTarget | None = None,
+    prompt: str | None = None,
+) -> InlineKeyboardMarkup | None:
+    """Convert pure show button specs into persisted Telegram callbacks."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if target is not None and target.kind == "agent":
+        entry = target.entry
+        include_kill = not bool(getattr(entry, "is_terminal", False))
+        if entry is None:
+            include_kill = not bool(getattr(target.named_agent, "is_done", False))
+        base = _build_agent_action_keyboard(
+            target.name,
+            prompt_for_vcs=prompt,
+            retry_source_prompt=prompt,
+            include_kill=include_kill,
+        )
+        rows.extend([list(row) for row in base.inline_keyboard])
+
+    for spec_row in view.button_rows:
+        buttons: list[InlineKeyboardButton] = []
+        for spec in spec_row:
+            button = _show_button(spec)
+            if button is not None:
+                buttons.append(button)
+        if buttons:
+            rows.append(buttons)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def _show_button(spec: ShowButtonSpec) -> InlineKeyboardButton | None:
+    if spec.action == "copy":
+        if len(spec.ref) > _COPY_TEXT_MAX:
+            log.warning("Skipping overlong /show copy-text button: %s", spec.label)
+            return None
+        return InlineKeyboardButton(
+            spec.label,
+            copy_text=CopyTextButton(text=spec.ref),
+        )
+
+    selection_key = generate_key()
+    pending_actions.add(
+        f"show-{selection_key}",
+        {"action": "show", "ref": spec.ref},
+    )
+    return InlineKeyboardButton(
+        spec.label,
+        callback_data=encode("show", selection_key, spec.action),
+    )
+
+
+def _handle_show_callback(callback_query: Any, selection_key: str, choice: str) -> None:
+    """Open or refresh a persisted ``/show`` selection."""
+    action = pending_actions.get(f"show-{selection_key}")
+    if not isinstance(action, dict) or action.get("action") != "show":
+        _answer_callback(callback_query, "Selection expired — run /show again")
+        return
+    ref = action.get("ref")
+    if not isinstance(ref, str) or not ref:
+        _answer_callback(callback_query, "Selection expired — run /show again")
+        return
+    if choice not in {"open", "refresh"}:
+        _answer_callback(callback_query, "Invalid show action")
+        return
+
+    try:
+        chunks, keyboard = _render_show_reference(ref)
+    except InvalidShowReference:
+        _answer_callback(callback_query, "Invalid tribe reference")
+        return
+    except Exception:
+        log.exception("Failed to build /show callback view for %r", ref)
+        _answer_callback(callback_query, "Failed to build /show view")
+        return
+
+    chat_id = _callback_chat_id(callback_query, action)
+    if chat_id is None:
+        _answer_callback(callback_query, "Could not resolve Telegram chat")
+        return
+    if choice == "refresh":
+        message_id = _callback_origin_message_id(callback_query, action)
+        if message_id is not None and len(chunks) == 1:
+            telegram_client.edit_message_text(
+                chat_id,
+                message_id,
+                chunks[0],
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+        else:
+            _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
+        _answer_callback(callback_query, "Refreshed")
+        return
+
+    _send_html_chunks(chat_id, chunks, reply_markup=keyboard)
+    _answer_callback(callback_query, "Opened")
 
 
 def _handle_fork_command() -> None:
@@ -3921,6 +3762,7 @@ def _handle_text_message(
 _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
     ("list", "Show agents; supports all, name, or project"),
+    ("show", "Show an agent, clan, family, or tribe"),
     ("fork", "Copy fork text for an agent"),
     ("changes", "Copy ChangeSpec workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),

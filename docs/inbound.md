@@ -30,7 +30,7 @@ format is:
 {action_type}:{notif_id_prefix}:{choice}
 ```
 
-- **action_type**: `plan`, `hitl`, `question`, `kill`, `retry`, `bead`
+- **action_type**: `plan`, `hitl`, `question`, `kill`, `retry`, `bead`, `list`, `show`
 - **notif_id_prefix**: First N characters of the notification ID (enough to match uniquely)
 - **choice**: `approve`, `run`, `reject`, `epic`, `feedback`, `accept`, `0`/`1`/`2`/... (question options), etc.
 
@@ -67,6 +67,9 @@ Text messages are dispatched in priority order:
    - `/list all` — Includes recently finished and failed agents
    - `/list <name>` — Shows a detail view for one agent with Fork/Wait/Kill/Retry buttons
    - `/list <project>` — Filters the overview to one project (agent names win when a name and project match)
+   - `/show` — Shows a mobile-friendly index of known clans, families, and tribes
+   - `/show <ref>` — Shows a rich detail view for an agent, clan, family, or tribe
+   - `/show @<tribe>` — Forces tribe interpretation when a name is shared with another entity
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
@@ -145,6 +148,26 @@ back to the failure exit code, and includes the same worker log path. Pending co
 
 Command registration is cached in `~/.sase/telegram/commands_registered_ts`; the cache includes a command-list
 fingerprint so deploys with command changes re-register immediately instead of waiting for the hourly refresh.
+
+## Agent Kinship Views
+
+`/show <ref>` resolves references in a deterministic order: an `@name` is always a tribe; otherwise an exact agent
+name wins, followed by a clan, a family, and finally a case-insensitive bare tribe name. Agent members such as
+`review.worker` and family members such as `migrate--planner` are ordinary exact agent names. If a non-tribe target
+shares its name with a tribe, the response includes a `/show @name` hint. Unknown references offer up to six matching
+agent, clan, family, or tribe buttons.
+
+Agent views reuse `/list <name>` details and add Clan, Tribe, Family, Parent, and Children rows when available. Clan
+views show generation progress, an effective tribe and summary, status rollups, and member drill-downs. Family views
+show the sequential launch chain, current phase activity, and the active prompt. Tribe views group effective members by
+clan, family, and standalone agent. Bare `/show` provides an index over every group represented by live or recent
+entries.
+
+Every open or refresh button stores the full reference in `pending_actions.json` and puts only a short generated key in
+Telegram callback data, keeping arbitrary-length names below Telegram's 64-byte callback limit. Selections expire with
+the normal 24-hour pending-action cleanup. Refresh edits a one-message view in place; views that need multiple chunks
+are sent as fresh messages. Text is HTML-escaped, long views use the same chunking as `/list`, and oversized button sets
+are capped with an explicit truncation note.
 
 ## Custom Slash Commands
 

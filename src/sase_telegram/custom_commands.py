@@ -31,6 +31,7 @@ RESERVED_COMMAND_NAMES = frozenset(
         "fork",
         "kill",
         "list",
+        "show",
         "update",
         "xprompts",
     }

@@ -67,6 +67,7 @@ def test_load_custom_commands_skips_invalid_and_reserved_entries(caplog) -> None
             "commands": {
                 "good": {"description": "Good", "run": "true"},
                 "list": {"description": "Shadow", "run": "true"},
+                "show": {"description": "Shadow show", "run": "true"},
                 "Bad": {"description": "Bad name", "run": "true"},
                 "missing": {"description": "No run"},
                 "quote": {"description": "Bad argv", "run": "'"},

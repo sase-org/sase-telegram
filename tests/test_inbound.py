@@ -3311,7 +3311,16 @@ def _list_entry(
     wait: SimpleNamespace | None = None,
     retry: SimpleNamespace | None = None,
     children_badge: str | None = None,
+    children_count: int = 0,
+    children_status_counts: tuple[tuple[str, int], ...] = (),
     is_terminal: bool | None = None,
+    tribe: str | None = None,
+    agent_clan: str | None = None,
+    agent_clan_generation: str | None = None,
+    clan_tribe: str | None = None,
+    agent_family: str | None = None,
+    agent_family_role: str | None = None,
+    parent_agent_name: str | None = None,
 ) -> SimpleNamespace:
     wait_info = wait or SimpleNamespace(
         wait_for=(),
@@ -3352,9 +3361,13 @@ def _list_entry(
         changespec_name=None,
         cl_name=None,
         workflow_name=None,
-        agent_family=None,
-        agent_family_role=None,
-        parent_agent_name=None,
+        tribe=tribe,
+        agent_clan=agent_clan,
+        agent_clan_generation=agent_clan_generation,
+        clan_tribe=clan_tribe,
+        agent_family=agent_family,
+        agent_family_role=agent_family_role,
+        parent_agent_name=parent_agent_name,
         plan=False,
         plan_approved=False,
         plan_action=None,
@@ -3363,7 +3376,11 @@ def _list_entry(
         question_answered=status == "ANSWERED",
         wait=wait_info,
         retry=retry_info,
-        children=SimpleNamespace(badge=children_badge),
+        children=SimpleNamespace(
+            badge=children_badge,
+            count=children_count,
+            status_counts=children_status_counts,
+        ),
         activity=activity,
         output_variables={},
         artifact_count=0,
@@ -3461,7 +3478,7 @@ class TestHandleListCommand:
                 return_value=agents,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                "sase_telegram.agent_format.display_project_name",
                 return_value="SASE & Core",
             ),
         ):
@@ -3488,7 +3505,7 @@ class TestHandleListCommand:
                 return_value=agents,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_names_in_text",
+                "sase_telegram.agent_format.display_cl_names_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
@@ -3635,6 +3652,263 @@ class TestHandleListCommand:
         assert kwargs["parse_mode"] == "HTML"
         assert kwargs["reply_markup"] is not None
         mock_tg.answer_callback_query.assert_called_once_with("cb1", "Refreshed")
+
+
+class TestHandleShowCommand:
+    def test_dispatches_show_with_message_context(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+
+        message = SimpleNamespace(chat=SimpleNamespace(id="12345"))
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_show_command"
+        ) as handler:
+            _handle_command("/show review", message=message)
+
+        handler.assert_called_once_with("review", message=message)
+
+    def test_show_is_registered_as_slash_command(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+
+        assert ("show", "Show an agent, clan, family, or tribe") in _SLASH_COMMANDS
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_bare_show_sends_kinship_index(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=[],
+        ):
+            _handle_show_command()
+
+        args = mock_tg.send_message.call_args.args
+        kwargs = mock_tg.send_message.call_args.kwargs
+        assert args[0] == "12345"
+        assert "🧭 <b>Agents by kinship</b>" in args[1]
+        assert "No grouped agents yet" in args[1]
+        assert kwargs["parse_mode"] == "HTML"
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_agent_show_uses_enriched_detail_and_jump_buttons(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.show_entities import ShowTarget
+
+        mock_creds.get_chat_id.return_value = "12345"
+        entry = _list_entry(
+            "alpha",
+            tribe="perf",
+            agent_clan="review",
+            agent_clan_generation="generation-12345678",
+            agent_family="migrate",
+            agent_family_role="planner",
+            parent_agent_name="parent",
+            children_count=2,
+            children_status_counts=(("Running", 1), ("Done", 1)),
+            prompt="Full prompt",
+        )
+        target = ShowTarget(kind="agent", name="alpha", entry=entry, entries=(entry,))
+        with (
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=[entry],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                return_value=target,
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._get_agent_retry_prompt",
+                return_value="Full prompt",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                side_effect=["clankey", "familykey"],
+            ),
+        ):
+            _handle_show_command("alpha")
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "Clan       ⛺ review · gen 12345678" in text
+        assert "Tribe      @perf" in text
+        assert "Family     migrate · planner" in text
+        assert "Parent     parent" in text
+        assert "Children   2 · 1 running, 1 done" in text
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        assert [button.text for button in keyboard.inline_keyboard[-1]] == [
+            "⛺ Clan",
+            "🧬 Family",
+        ]
+        assert keyboard.inline_keyboard[-1][0].callback_data == "show:clankey:open"
+        assert keyboard.inline_keyboard[-1][1].callback_data == ("show:familykey:open")
+        assert mock_pending.add.call_count == 2
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_clan_show_sends_group_view(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        _mock_pending: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.show_entities import ShowTarget
+
+        mock_creds.get_chat_id.return_value = "12345"
+        member = SimpleNamespace(name="review.a", outcome="completed")
+        clan = SimpleNamespace(
+            name="review",
+            generation="generation-12345678",
+            members=(member,),
+            is_complete=True,
+        )
+        target = ShowTarget(
+            kind="clan",
+            name="review",
+            clan=clan,
+            clan_tribe="perf",
+            clan_summary="Review the hot path",
+        )
+        with (
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=[],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                return_value=target,
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                side_effect=["refreshkey", "memberkey"],
+            ),
+        ):
+            _handle_show_command("review")
+
+        text = mock_tg.send_message.call_args.args[1]
+        assert "⛺ <b>review</b> — clan · @perf · gen 12345678 · ✓ complete" in text
+        assert "<i>Review the hot path</i>" in text
+        keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].callback_data == (
+            "show:refreshkey:refresh"
+        )
+        assert keyboard.inline_keyboard[0][1].copy_text.text == "#fork:review "
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_open_callback_sends_fresh_message(
+        self, mock_tg: MagicMock, mock_pending: MagicMock
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        callback = SimpleNamespace(
+            id="cb1",
+            data="show:selection:open",
+            message=SimpleNamespace(
+                message_id=99,
+                chat=SimpleNamespace(id="12345"),
+            ),
+        )
+        mock_pending.get.return_value = {"action": "show", "ref": "review"}
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._render_show_reference",
+            return_value=(["<b>review</b>"], None),
+        ):
+            _handle_callback(callback, {})
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "<b>review</b>",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+        mock_tg.answer_callback_query.assert_called_once_with("cb1", "Opened")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_refresh_callback_edits_single_chunk(
+        self, mock_tg: MagicMock, mock_pending: MagicMock
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        callback = SimpleNamespace(
+            id="cb1",
+            data="show:selection:refresh",
+            message=SimpleNamespace(
+                message_id=99,
+                chat=SimpleNamespace(id="12345"),
+            ),
+        )
+        mock_pending.get.return_value = {"action": "show", "ref": "review"}
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._render_show_reference",
+            return_value=(["<b>review</b>"], None),
+        ):
+            _handle_callback(callback, {})
+
+        mock_tg.edit_message_text.assert_called_once_with(
+            "12345",
+            99,
+            "<b>review</b>",
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+        mock_tg.answer_callback_query.assert_called_once_with("cb1", "Refreshed")
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_expired_callback_is_answered(
+        self, mock_tg: MagicMock, mock_pending: MagicMock
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+
+        mock_pending.get.return_value = None
+        callback = SimpleNamespace(id="cb1", data="show:expired:open")
+        _handle_callback(callback, {})
+
+        mock_tg.answer_callback_query.assert_called_once_with(
+            "cb1", "Selection expired — run /show again"
+        )
+        mock_tg.send_message.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_error_path_sends_friendly_failure(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        with (
+            patch(
+                "sase.integrations.agent_list_entries.agent_list_entries",
+                return_value=[],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                side_effect=RuntimeError("bad artifact"),
+            ),
+        ):
+            _handle_show_command("review")
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "Failed to build /show view."
+        )
 
 
 class TestHandleKillSelection:
