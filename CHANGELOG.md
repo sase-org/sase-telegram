@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1](https://github.com/sase-org/sase-telegram/compare/v0.4.0...v0.4.1) (2026-07-25)
+
+
+### Features
+
+* add Telegram agent kinship views ([01672dd](https://github.com/sase-org/sase-telegram/commit/01672dd1712d00fc7c85db8b3cdd21ffc8552b27))
+* show phase sizes in Telegram epic reviews (sase-8b.3) ([2fd4daa](https://github.com/sase-org/sase-telegram/commit/2fd4daa5c55b931ad78089abdaf7f1fd10d67ab9))
+
+
+### Bug Fixes
+
+* harden Telegram kill callbacks (sase-7t.4) ([5f76632](https://github.com/sase-org/sase-telegram/commit/5f7663214868fde3f47c82de03a8627633a9bd6c))
+* migrate launch prompts to identity directives ([bfb2a79](https://github.com/sase-org/sase-telegram/commit/bfb2a79b901353670efa16df41e8b82bc3c845da))
+
 ## [0.4.0](https://github.com/sase-org/sase-telegram/compare/v0.3.0...v0.4.0) (2026-07-18)
 
 
