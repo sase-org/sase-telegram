@@ -405,7 +405,7 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
     result = create_launch_approval_request(
         {
             "schema_version": 1,
-            "prompt": "%n(telegram-launch, reviewer)\nReview this change",
+            "prompt": "%i(telegram-launch, reviewer)\nReview this change",
             "reason": "Verify the Telegram launch controls",
             "approval": "required",
             "max_slots": 1,
@@ -675,7 +675,7 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
     assert keyboard is not None
     rows = keyboard.inline_keyboard
     assert [[button.text for button in row] for row in rows] == [
-        ["☑️ ✅ Launch coder agent"],
+        ["☑️ 🚀 Launch coder agent"],
         ["☑️ 💾 Commit plan file to the plans sidecar"],
         ["✅ Tale"],
         ["❌ Reject", "💬 Send Feedback"],

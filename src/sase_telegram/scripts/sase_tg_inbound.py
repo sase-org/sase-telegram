@@ -1618,7 +1618,7 @@ def _build_retry_prompt_for_agent(
         return rewrite_retry_prompt_name(
             source_prompt,
             retry_name,
-            directive_alias="n",
+            directive_alias="i",
         )
     except Exception:
         log.warning(

@@ -246,7 +246,7 @@ class TestHandleTextMessageAgentLaunch:
         )
 
         msg = SimpleNamespace(
-            text="%n:a #gh@sase Fix the bug",
+            text="%i:a #gh@sase Fix the bug",
             entities=None,
             message_id=100,
         )
@@ -257,8 +257,8 @@ class TestHandleTextMessageAgentLaunch:
             patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
         ):
             _handle_text_message(msg)
-            mock_record.assert_called_once_with("%n:a #gh:sase Fix the bug", msg)
-            mock_launch.assert_called_once_with("%n:a #gh:sase Fix the bug")
+            mock_record.assert_called_once_with("%i:a #gh:sase Fix the bug", msg)
+            mock_launch.assert_called_once_with("%i:a #gh:sase Fix the bug")
 
     def test_plain_text_launch_disabled_by_empty_env_value(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -1793,12 +1793,12 @@ class TestLaunchAgent:
             "sase.agent.launcher.launch_agents_from_cwd",
             return_value=[mock_result],
         ) as mock_launch:
-            _launch_agent("%n:foo List all open beads")
+            _launch_agent("%i:foo List all open beads")
 
         # The prompt should pass through unchanged (no auto-name prepended)
         launched_prompt = mock_launch.call_args[0][0]
-        assert not launched_prompt.startswith("%n:foo %n:")
-        assert "%n:foo" in launched_prompt
+        assert not launched_prompt.startswith("%i:foo %i:")
+        assert "%i:foo" in launched_prompt
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -1810,7 +1810,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
     ) -> None:
         # Repeat prompts must flow through to spawn_repeat_batch without
-        # a %n:<auto> prepend — prepending turns the auto-name into an
+        # a %i:<auto> prepend — prepending turns the auto-name into an
         # explicit base and triggers the strict collision check against
         # orphan child-named agents.
         from sase_telegram.scripts.sase_tg_inbound import (
@@ -1835,7 +1835,7 @@ class TestLaunchAgent:
             _launch_agent("%r:3 List all open beads")
 
         launched_prompt = mock_launch.call_args[0][0]
-        assert "%n:" not in launched_prompt
+        assert "%i:" not in launched_prompt
         assert "%r:3" in launched_prompt
         mock_auto.assert_not_called()
 
@@ -1963,7 +1963,7 @@ class TestLaunchAgent:
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
         assert buttons[1][1].text == "🔄 Retry"
-        assert buttons[1][1].copy_text.text == "%n:c.r1\nList all open beads"
+        assert buttons[1][1].copy_text.text == "%i:c.r1\nList all open beads"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -2050,13 +2050,13 @@ class TestLaunchAgent:
             ),
             patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
         ):
-            _launch_agent("%n:foo List all open beads")
+            _launch_agent("%i:foo List all open beads")
 
         keyboard = mock_tg.send_message.call_args.kwargs.get("reply_markup")
         assert keyboard is not None
         retry_button = keyboard.inline_keyboard[1][1]
         assert retry_button.text == "🔄 Retry"
-        assert retry_button.copy_text.text == "%n:c.r1 List all open beads"
+        assert retry_button.copy_text.text == "%i:c.r1 List all open beads"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -2100,7 +2100,7 @@ class TestLaunchAgent:
         assert buttons[1][1].copy_text is None
         mock_pa.add.assert_any_call(
             "retry-c",
-            {"action": "retry", "prompt": f"%n:c.r1\n{long_prompt}"},
+            {"action": "retry", "prompt": f"%i:c.r1\n{long_prompt}"},
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
@@ -2136,7 +2136,7 @@ class TestLaunchAgent:
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
-            _launch_agent("%n:foo #gh:gh_sase-org__sase Fix a bug")
+            _launch_agent("%i:foo #gh:gh_sase-org__sase Fix a bug")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -2147,7 +2147,7 @@ class TestLaunchAgent:
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
         assert buttons[1][1].text == "🔄 Retry"
-        assert buttons[1][1].copy_text.text == "%n:foo.r1 #gh:sase Fix a bug"
+        assert buttons[1][1].copy_text.text == "%i:foo.r1 #gh:sase Fix a bug"
 
     @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -2185,7 +2185,7 @@ class TestLaunchAgent:
                 return_value="#gh:@foo ",
             ),
         ):
-            _launch_agent("%n:foo #gh:sase #pr(fix_bug) Fix a bug")
+            _launch_agent("%i:foo #gh:sase #pr(fix_bug) Fix a bug")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -2228,7 +2228,7 @@ class TestLaunchAgent:
                 return_value=False,
             ),
         ):
-            _launch_agent("%n:foo #gh:sase Fix a bug without pr")
+            _launch_agent("%i:foo #gh:sase Fix a bug without pr")
 
         call_kwargs = mock_tg.send_message.call_args
         keyboard = call_kwargs.kwargs.get("reply_markup")
@@ -2260,8 +2260,8 @@ class TestLaunchAgent:
         result_sonnet.workspace_num = 101
 
         slot_prompts = [
-            "%name:c.cld-opus %model:opus Do work",
-            "%name:c.cld-sonnet %model:sonnet Do work",
+            "%id:c.cld-opus %model:opus Do work",
+            "%id:c.cld-sonnet %model:sonnet Do work",
         ]
 
         with (
@@ -2280,7 +2280,7 @@ class TestLaunchAgent:
         # multi-model prompt — not split per-model upstream.
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
-        assert not launched_prompt.startswith("%n:")
+        assert not launched_prompt.startswith("%i:")
         assert "%{%m:opus | %m:sonnet}" in launched_prompt
         assert "Do work" in launched_prompt
 
@@ -2349,8 +2349,8 @@ class TestLaunchAgent:
             patch(
                 "sase_telegram.scripts.sase_tg_inbound._resolve_slot_prompts",
                 return_value=[
-                    "%name:c.cld-opus %model:opus describe this",
-                    "%name:c.cld-sonnet %model:sonnet describe this",
+                    "%id:c.cld-opus %model:opus describe this",
+                    "%id:c.cld-sonnet %model:sonnet describe this",
                 ],
             ),
         ):
@@ -2363,7 +2363,7 @@ class TestLaunchAgent:
         # Single launch call references the downloaded photo file.
         assert mock_launch.call_count == 1
         launched_prompt = mock_launch.call_args[0][0]
-        assert not launched_prompt.startswith("%n:")
+        assert not launched_prompt.startswith("%i:")
         assert "%{%m:opus | %m:sonnet}" in launched_prompt
         assert "describe this" in launched_prompt
 
@@ -2543,7 +2543,7 @@ class TestBeadProjectContext:
 
         assert _extract_project_from_prompt("#gh:sase Fix the bug") == "sase"
         assert _extract_project_from_prompt("#gh@sase Fix the bug") == "sase"
-        assert _extract_project_from_prompt("%n:foo #gh_sase Fix the bug") == "sase"
+        assert _extract_project_from_prompt("%i:foo #gh_sase Fix the bug") == "sase"
         assert _extract_project_from_prompt("#git(sase-telegram) Fix it") == (
             "sase-telegram"
         )
@@ -2738,7 +2738,7 @@ class TestBeadProjectContext:
                 return_value={
                     "old": {"prompt": "#gh:other Old task", "created_at": 1},
                     "new": {
-                        "action_data": {"prompt": "%n:c #gh_sase Fix the bug"},
+                        "action_data": {"prompt": "%i:c #gh_sase Fix the bug"},
                         "created_at": 2,
                     },
                 },
@@ -2951,8 +2951,8 @@ class TestNormalizeLaunchXpromptAtRefs:
     def test_normalizes_known_workspace_workflow_refs(self) -> None:
         assert normalize_launch_xprompt_at_refs("#gh@sase Fix") == "#gh:sase Fix"
         assert (
-            normalize_launch_xprompt_at_refs("%n:a #git@repo Fix")
-            == "%n:a #git:repo Fix"
+            normalize_launch_xprompt_at_refs("%i:a #git@repo Fix")
+            == "%i:a #git:repo Fix"
         )
         assert normalize_launch_xprompt_at_refs("(#hg@change)") == "(#hg:change)"
         assert (
@@ -3234,7 +3234,7 @@ class TestSendKillResult:
         from sase_telegram.scripts.sase_tg_inbound import _handle_kill_from_callback
 
         (tmp_path / "raw_xprompt.md").write_text(
-            "%n:a #gh:gh_sase-org__sase Do work",
+            "%i:a #gh:gh_sase-org__sase Do work",
             encoding="utf-8",
         )
         mock_creds.get_chat_id.return_value = "12345"
@@ -3260,7 +3260,7 @@ class TestSendKillResult:
         assert keyboard is not None
         assert keyboard.inline_keyboard[0][0].text == "🔄 Redo"
         assert keyboard.inline_keyboard[0][0].copy_text.text == (
-            "%n:a #gh:sase Do work"
+            "%i:a #gh:sase Do work"
         )
 
 
@@ -4113,7 +4113,7 @@ class TestHandleRetryFromCallback:
         from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
 
         mock_creds.get_chat_id.return_value = "12345"
-        prompt = "%n:agent1.r1\n" + ("x" * 500)
+        prompt = "%i:agent1.r1\n" + ("x" * 500)
         mock_pending.get.return_value = {"action": "retry", "prompt": prompt}
 
         cb = SimpleNamespace(id="cb1")
