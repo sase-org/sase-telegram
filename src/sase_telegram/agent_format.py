@@ -6,6 +6,8 @@ from datetime import datetime
 import html
 from typing import Any
 
+from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
+
 from sase_telegram.formatting import (
     display_cl_name,
     display_cl_names_in_text,
@@ -217,11 +219,7 @@ def format_header_status_counts(entries: list[Any]) -> str | None:
         counts[bucket] = counts.get(bucket, 0) + 1
         glyph = getattr(entry, "status_glyph", "")
         glyphs[bucket] = glyph if isinstance(glyph, str) else ""
-    ordered = [
-        bucket
-        for bucket in ("Stopped", "Failed", "Starting", "Running", "Waiting", "Done")
-        if counts.get(bucket)
-    ]
+    ordered = [bucket for bucket in AGENT_STATUS_BUCKETS if counts.get(bucket)]
     if not ordered:
         return None
     return " · ".join(

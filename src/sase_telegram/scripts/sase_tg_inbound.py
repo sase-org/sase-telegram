@@ -48,6 +48,7 @@ from sase_telegram.custom_commands import (
 )
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
+from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
 from sase.user_question_actions import UserQuestionActionError
 from sase.notification_gates.models import GateError
 from sase_telegram.formatting import (
@@ -124,14 +125,6 @@ _UPDATE_COMPLETION_PENDING_DIR = (
 )
 _COMMANDS_REGISTER_INTERVAL = 3600  # re-register once per hour
 _COPY_TEXT_MAX = 256  # Telegram CopyTextButton character limit
-_LIST_STATUS_BUCKET_ORDER = (
-    "Stopped",
-    "Failed",
-    "Starting",
-    "Running",
-    "Waiting",
-    "Done",
-)
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 _BEAD_PROJECT_ENV = "SASE_TELEGRAM_BEAD_PROJECT"
 _ACTIVE_BEAD_LIST_ARGS = (
@@ -2787,13 +2780,13 @@ def _group_list_entries(entries: list[Any]) -> list[tuple[str, list[Any]]]:
 
     ordered: list[tuple[str, list[Any]]] = [
         (bucket, grouped[bucket])
-        for bucket in _LIST_STATUS_BUCKET_ORDER
+        for bucket in AGENT_STATUS_BUCKETS
         if grouped.get(bucket)
     ]
     ordered.extend(
         (bucket, bucket_entries)
         for bucket, bucket_entries in grouped.items()
-        if bucket not in _LIST_STATUS_BUCKET_ORDER
+        if bucket not in AGENT_STATUS_BUCKETS
     )
     return ordered
 

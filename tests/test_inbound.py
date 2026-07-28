@@ -3552,6 +3552,53 @@ class TestHandleListCommand:
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_list_queued_status_counts_and_group_order(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+
+        mock_creds.get_chat_id.return_value = "12345"
+        agents = [
+            _list_entry(
+                "wait-1",
+                status="WAITING",
+                status_bucket="Waiting",
+                status_glyph="⏳",
+            ),
+            _list_entry(
+                "queued-1",
+                status="QUEUED",
+                status_bucket="Queued",
+                status_glyph="…",
+            ),
+            _list_entry("run-1", status="RUNNING", status_bucket="Running"),
+            _list_entry(
+                "queued-2",
+                status="QUEUED",
+                status_bucket="Queued",
+                status_glyph="…",
+            ),
+        ]
+        with patch(
+            "sase.integrations.agent_list_entries.agent_list_entries",
+            return_value=agents,
+        ):
+            _handle_list_command()
+
+        text = mock_tg.send_message.call_args.args[1]
+        lines = text.splitlines()
+        assert lines[0] == "🤖 <b>Agents</b> · 4 active"
+        assert lines[1] == "▶ 1 running · … 2 queued · ⏳ 1 waiting"
+
+        running_idx = text.index("<b>▶ Running (1)</b>")
+        queued_idx = text.index("<b>… Queued (2)</b>")
+        waiting_idx = text.index("<b>⏳ Waiting (1)</b>")
+        assert running_idx < queued_idx < waiting_idx
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     def test_name_arg_renders_detail_with_buttons(
         self,
         mock_creds: MagicMock,
