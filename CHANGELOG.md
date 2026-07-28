@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/sase-org/sase-telegram/compare/v0.4.1...v0.4.2) (2026-07-28)
+
+
+### Bug Fixes
+
+* include queued agents in Telegram list status ([fa52259](https://github.com/sase-org/sase-telegram/commit/fa522590d7999a1c595ad2d26cc713b2db29387a))
+
 ## [0.4.1](https://github.com/sase-org/sase-telegram/compare/v0.4.0...v0.4.1) (2026-07-25)
 
 
