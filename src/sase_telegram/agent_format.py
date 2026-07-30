@@ -7,8 +7,11 @@ import html
 from typing import Any
 
 from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
+from sase.core.output_variable_display import format_var_value_inline
+from sase.core.output_variable_values import coerce_var_map
 
 from sase_telegram.formatting import (
+    OUTPUT_VARIABLE_VALUE_MAX,
     display_cl_name,
     display_cl_names_in_text,
     display_project_name,
@@ -269,10 +272,14 @@ def detail_rows(entry: Any) -> list[tuple[str, str]]:
     _append_optional_row(rows, "Activity", getattr(entry, "activity", None))
     outputs = getattr(entry, "output_variables", None)
     if isinstance(outputs, dict) and outputs:
+        normalized_outputs = coerce_var_map(outputs)
         _append_row(
             rows,
             "Outputs",
-            " · ".join(f"{key}={value}" for key, value in sorted(outputs.items())),
+            " · ".join(
+                f"{key}={format_var_value_inline(value, max_chars=OUTPUT_VARIABLE_VALUE_MAX)}"
+                for key, value in normalized_outputs.items()
+            ),
         )
     artifact_count = getattr(entry, "artifact_count", 0)
     commit_count = getattr(entry, "commit_count", 0)

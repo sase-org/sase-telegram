@@ -35,6 +35,7 @@ def _entry(
     tribe: str | None = None,
     activity: str | None = None,
     prompt: str | None = None,
+    output_variables: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
@@ -71,7 +72,7 @@ def _entry(
             badge="×2",
         ),
         activity=activity,
-        output_variables={},
+        output_variables=output_variables or {},
         artifact_count=0,
         commit_count=0,
         error=None,
@@ -125,6 +126,24 @@ def test_agent_view_escapes_html_and_includes_kinship_rows_and_jumps() -> None:
         "⛺ Clan",
         "🧬 Family",
     ]
+
+
+def test_agent_view_renders_structured_outputs_inline() -> None:
+    entry = _entry(
+        "builder",
+        output_variables={
+            "config": {"enabled": True, "hosts": ["api", "worker"]},
+            "empty": [],
+            "status": "ok",
+        },
+    )
+
+    view = format_agent_show(
+        ShowTarget(kind="agent", name="builder", entry=entry, entries=(entry,))
+    )
+    text = "\n\n".join(view.blocks)
+
+    assert "config={enabled: true, hosts: [api, worker]} · empty=[] · status=ok" in text
 
 
 def test_clan_view_formats_summary_rollup_archived_member_and_complete_fork() -> None:

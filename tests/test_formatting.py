@@ -1433,6 +1433,64 @@ class TestFormatWorkflowComplete:
 
         assert "• *notes:*\n```\nline 1\nline \\`2\\`\\\\end\n```" in text
 
+    def test_renders_structured_output_variables_with_canonical_blocks(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "output_variables": json.dumps(
+                    {
+                        "config": {
+                            "retries": 3,
+                            "targets": [
+                                "unit",
+                                {"name": "smoke", "required": True},
+                            ],
+                        },
+                        "empty_list": [],
+                        "empty_map": {},
+                    }
+                )
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        assert (
+            "• *config:*\n```\n"
+            "retries: 3\n"
+            "targets:\n"
+            "  - unit\n"
+            "  - name: smoke\n"
+            "    required: true\n"
+            "```"
+        ) in text
+        assert "• *empty\\_list:*\n```\n[]\n```" in text
+        assert "• *empty\\_map:*\n```\n{}\n```" in text
+
+    def test_structured_output_variable_truncates_at_line_boundary(self):
+        n = _make_notification(
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "output_variables": json.dumps(
+                    {
+                        "config": {
+                            "a": "a" * 120,
+                            "b": "b" * 120,
+                            "c": "c" * 120,
+                        }
+                    }
+                )
+            },
+        )
+        text, _, _ = format_notification(n)
+
+        section = text[text.index("• *config:*") :]
+        assert f"a: {'a' * 120}" in section
+        assert f"b: {'b' * 120}" in section
+        assert "\nc:" not in section
+        assert f"b: {'b' * 120}\n…\n```" in section
+
     def test_output_variables_appear_after_pr_and_before_prompt(self):
         n = _make_notification(
             sender="user-agent",

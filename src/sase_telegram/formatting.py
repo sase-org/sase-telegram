@@ -12,6 +12,11 @@ from typing import Any
 
 from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
+from sase.core.output_variable_display import (
+    format_var_value_block,
+    var_value_is_container,
+)
+from sase.core.output_variable_values import coerce_var_map
 from sase.notification_gates.models import GateOption
 from sase.notifications.models import Notification
 
@@ -63,7 +68,8 @@ _GATE_DEFAULT_ICONS = {
     "UserQuestion": "❓",
 }
 
-# Max chars of each output-variable value to display in workflow-complete messages
+# Max chars of each output-variable value to display in workflow-complete messages.
+# Structured blocks truncate at a complete-line boundary when possible.
 OUTPUT_VARIABLE_VALUE_MAX = 300
 
 # Max output variables to display in workflow-complete messages
@@ -1450,9 +1456,8 @@ def _format_output_variables_section(action_data: dict[str, str]) -> str:
     if not isinstance(loaded, dict):
         return ""
 
-    variables = {
-        str(key): str(value) for key, value in loaded.items() if str(key) != "STOP"
-    }
+    variables = coerce_var_map(loaded)
+    variables.pop("STOP", None)
     if not variables:
         return ""
 
@@ -1463,26 +1468,61 @@ def _format_output_variables_section(action_data: dict[str, str]) -> str:
     lines = ["📤 *Output Variables:*"]
     for key in displayed_keys:
         value = variables[key]
-        is_multiline = "\n" in value or "\r" in value
-        display_value = (
-            value
-            if len(value) <= OUTPUT_VARIABLE_VALUE_MAX
-            else value[:OUTPUT_VARIABLE_VALUE_MAX] + "…"
-        )
         escaped_key = escape_markdown_v2(key)
-        if display_value == "":
+        if value == "":
             lines.append(f"• *{escaped_key}:* _{escape_markdown_v2('(empty)')}_")
-        elif is_multiline:
+        elif var_value_is_container(value):
+            display_value, _ = format_var_value_block(value)
+            display_value = _truncate_output_variable_block(display_value)
             lines.append(
                 f"• *{escaped_key}:*\n```\n{_escape_code_entity(display_value)}\n```"
             )
         else:
+            if isinstance(value, str):
+                is_multiline = "\n" in value or "\r" in value
+                display_value = (
+                    value
+                    if len(value) <= OUTPUT_VARIABLE_VALUE_MAX
+                    else value[:OUTPUT_VARIABLE_VALUE_MAX] + "…"
+                )
+            else:
+                display_value, _ = format_var_value_block(value)
+                is_multiline = False
+            if is_multiline:
+                lines.append(
+                    f"• *{escaped_key}:*\n"
+                    f"```\n{_escape_code_entity(display_value)}\n```"
+                )
+                continue
             lines.append(f"• *{escaped_key}:* `{_escape_code_entity(display_value)}`")
 
     if remaining_count > 0:
         lines.append(f"• _…and {remaining_count} more_")
 
     return "\n".join(lines)
+
+
+def _truncate_output_variable_block(value: str) -> str:
+    """Bound a structured block while preferring complete rendered lines."""
+    if len(value) <= OUTPUT_VARIABLE_VALUE_MAX:
+        return value
+
+    marker = "…"
+    line_budget = OUTPUT_VARIABLE_VALUE_MAX - len("\n") - len(marker)
+    lines: list[str] = []
+    length = 0
+    for line in value.split("\n"):
+        added = len(line) + (1 if lines else 0)
+        if length + added > line_budget:
+            break
+        lines.append(line)
+        length += added
+
+    if lines:
+        return f"{'\n'.join(lines)}\n{marker}"
+
+    prefix_budget = max(OUTPUT_VARIABLE_VALUE_MAX - len(marker), 0)
+    return value[:prefix_budget].rstrip() + marker
 
 
 def _select_workflow_complete_attachments(attachments: Sequence[str]) -> list[str]:
