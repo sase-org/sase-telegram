@@ -18,6 +18,7 @@ from sase.core.output_variable_display import (
 )
 from sase.core.output_variable_values import coerce_var_map
 from sase.notification_gates.models import GateOption
+from sase.notification_gates.registry import adapter_for_action
 from sase.notifications.models import Notification
 
 from sase_telegram import callback_data
@@ -66,6 +67,10 @@ _GATE_DEFAULT_ICONS = {
     "LaunchApproval": "🚀",
     "PlanApproval": "📋",
     "UserQuestion": "❓",
+}
+
+_GENERIC_GATE_TITLES = {
+    "CustomGate": "Custom Request",
 }
 
 # Max chars of each output-variable value to display in workflow-complete messages.
@@ -959,9 +964,9 @@ def format_notification(
             return _format_hitl(notification)
         case "UserQuestion":
             return _format_user_question(notification)
-        case "CustomGate":
-            return _format_custom_gate(notification)
         case _:
+            if adapter_for_action(notification.action) is not None:
+                return _format_gate(notification)
             # Dispatch by sender for non-action notifications
             if notification.sender == "image":
                 return _format_image_generated(notification)
@@ -989,7 +994,23 @@ def _notif_prefix(n: Notification) -> str:
 
 
 def _notification_gate_icon(n: Notification) -> str:
-    return n.icon or _GATE_DEFAULT_ICONS.get(n.action or "", "🔔")
+    if n.icon:
+        return n.icon
+    if n.action in _GATE_DEFAULT_ICONS:
+        return _GATE_DEFAULT_ICONS[n.action]
+    if adapter_for_action(n.action) is not None:
+        return "🛡️"
+    return "🔔"
+
+
+def _generic_gate_title(action: str) -> str:
+    if action in _GENERIC_GATE_TITLES:
+        return _GENERIC_GATE_TITLES[action]
+    return re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])",
+        " ",
+        action,
+    )
 
 
 def _option_button_text(option: GateOption) -> str:
@@ -1072,24 +1093,63 @@ def render_gate_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _format_custom_gate(
+def _format_gate(
     n: Notification,
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
+    adapter = adapter_for_action(n.action)
+    if adapter is None:
+        return _format_generic(n)
     icon = _notification_gate_icon(n)
     sender = escape_markdown_v2(display_cl_name(n.sender))
-    header = f"{icon} *Custom Request*\n*From:* {sender}"
+    title = escape_markdown_v2(_generic_gate_title(adapter.action))
+    header = f"{icon} *{title}*\n*From:* {sender}"
     notes = _format_notes_text(n.notes)
     text = _join_message_sections(header, notes)
     try:
-        view = load_gate_view(n.action_data, expected_kind="custom")
+        view = load_gate_view(n.action_data, expected_kind=adapter.kind)
     except Exception:
         unavailable = escape_markdown_v2(
             "Controls unavailable: the gate request could not be read."
         )
         return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, list(n.files)
+
+    preview_content = ""
+    preview_path = n.action_data.get("preview_path")
+    if isinstance(preview_path, str) and preview_path:
+        try:
+            preview_content = Path(preview_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            preview_content = ""
+    text = _format_preview_message(text, preview_content)
     progress = load_progress(view)
     keyboard = render_gate_keyboard(_notif_prefix(n), view, progress)
     return text, keyboard, list(n.files)
+
+
+def _format_preview_message(header: str, preview_content: str) -> str:
+    """Render one attached Markdown preview within Telegram's message budget."""
+    if not preview_content:
+        return header
+
+    converted = _code_blocks_to_inline(markdown_to_telegram_v2(preview_content))
+    block = _wrap_expandable_blockquote(converted)
+    text = f"{header}\n\n{block}"
+    if len(text) <= MAX_MESSAGE_LENGTH:
+        return text
+
+    suffix = f"\n\n{escape_markdown_v2('... (truncated, see attached)')}"
+    budget = MAX_MESSAGE_LENGTH - len(header) - len(suffix) - 2
+    target = int(budget * 0.75)
+    while target > 100:
+        trunc_pos = converted.rfind("\n", 0, target)
+        if trunc_pos == -1:
+            trunc_pos = target
+        block = _wrap_expandable_blockquote(converted[:trunc_pos] + suffix)
+        text = f"{header}\n\n{block}"
+        if len(text) <= MAX_MESSAGE_LENGTH:
+            break
+        target = int(target * 0.8)
+    return text
 
 
 def _format_plan_approval(
@@ -1205,25 +1265,7 @@ def _format_launch_approval(
         except OSError:
             preview_content = ""
 
-    if not preview_content:
-        text = header
-    else:
-        converted = _code_blocks_to_inline(markdown_to_telegram_v2(preview_content))
-        block = _wrap_expandable_blockquote(converted)
-        text = f"{header}\n\n{block}"
-        if len(text) > MAX_MESSAGE_LENGTH:
-            suffix = f"\n\n{escape_markdown_v2('... (truncated, see attached)')}"
-            budget = MAX_MESSAGE_LENGTH - len(header) - len(suffix) - 2
-            target = int(budget * 0.75)
-            while target > 100:
-                trunc_pos = converted.rfind("\n", 0, target)
-                if trunc_pos == -1:
-                    trunc_pos = target
-                block = _wrap_expandable_blockquote(converted[:trunc_pos] + suffix)
-                text = f"{header}\n\n{block}"
-                if len(text) <= MAX_MESSAGE_LENGTH:
-                    break
-                target = int(target * 0.8)
+    text = _format_preview_message(header, preview_content)
 
     if not n.action_data.get("bundle_path"):
         return text, None, attachments

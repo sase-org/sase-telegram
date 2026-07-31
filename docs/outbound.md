@@ -26,8 +26,8 @@ sase_chop_tg_outbound --context X  # Pass context string for logging
 3. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
 4. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
    keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send.
-5. **Save pending** — Actionable notifications (plan approval, HITL, user question) are saved to
-   `pending_actions.json` with their Telegram `message_id` so inbound can edit the keyboard later.
+5. **Save pending** — Every action registered in SASE's notification-gate adapter registry is saved to
+   `pending_actions.json` with its Telegram `message_id` so inbound can resolve it and edit the keyboard later.
 6. **Advance HWM** — `mark_sent()` updates the high-water mark after each successfully delivered notification. If
    outbound crashes mid-batch, only notifications after the last successful send are retried.
 7. **Release lock** — `release_outbound_lock()` releases the file lock.
@@ -70,11 +70,17 @@ cannot be parsed.
 
 ### Notification Types
 
+Gate capabilities come from SASE's notification-gate adapter registry. Telegram keeps specialized bodies for plans,
+launch approvals, HITL, and user questions; registry actions without a specialized body use the shared envelope-driven
+gate formatter. Registering a new branch-actionable kind therefore gives it pending tracking, buttons, attachments,
+and callback handling without another Telegram action allowlist.
+
 | Type | Body Content | Buttons |
 |---|---|---|
 | Plan Approval | Ordered Properties card + plan body + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
+| Generic Gate (including Task Triage and Custom Gate) | Notes + inline Markdown preview | One button per declared branch |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |
 | Agent Launched | Provider/model, workspace number, prompt snippet | Fork, Wait, Kill, Retry |
 | Agent Killed | Termination confirmation | Redo |

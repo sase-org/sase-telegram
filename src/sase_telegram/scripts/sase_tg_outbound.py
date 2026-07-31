@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sase.notification_gates.registry import PRIVILEGED_GATE_ACTIONS
+
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import display_safe_stem, format_notification
@@ -27,15 +29,6 @@ log = logging.getLogger(__name__)
 
 _DEBUG_LOG = Path.home() / ".sase" / "telegram" / "outbound_debug.log"
 
-# Actions that should be tracked as pending (user needs to respond)
-_ACTIONABLE_ACTIONS = {
-    "CustomGate",
-    "PlanApproval",
-    "EpicApproval",
-    "HITL",
-    "LaunchApproval",
-    "UserQuestion",
-}
 _SUMMARY_ID_LIMIT = 5
 
 # Lazily resolved path to ~/.sase/chats/
@@ -461,7 +454,7 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
         # this was deferred until after attachment processing, creating
         # a race window where fast button presses arrived before the
         # pending action was persisted — silently losing the callback.
-        if n.action in _ACTIONABLE_ACTIONS:
+        if n.action in PRIVILEGED_GATE_ACTIONS:
             entry: dict[str, object] = {
                 "notification_id": n.id,
                 "action": n.action,

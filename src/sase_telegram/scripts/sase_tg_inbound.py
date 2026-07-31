@@ -51,6 +51,7 @@ from telegram import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
 from sase.user_question_actions import UserQuestionActionError
 from sase.notification_gates.models import GateError
+from sase.notification_gates.registry import adapter_for_action
 from sase_telegram.formatting import (
     build_fork_copy_text,
     display_cl_name,
@@ -1342,15 +1343,6 @@ def _begin_gate_feedback(
         )
 
 
-_GATE_KIND_BY_ACTION = {
-    "CustomGate": "custom",
-    "EpicApproval": "epic_plan",
-    "HITL": "hitl",
-    "LaunchApproval": "launch",
-    "PlanApproval": "plan",
-}
-
-
 def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     """Handle one compact callback for any v2 non-question gate."""
     cb = decode(callback_query.data)
@@ -1358,8 +1350,10 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     if action is None:
         _answer_callback(callback_query, _STALE_AWAITING_FEEDBACK_TEXT)
         return
-    expected_kind = _GATE_KIND_BY_ACTION.get(str(action.get("action")))
-    if expected_kind is None:
+    adapter = adapter_for_action(
+        action.get("action") if isinstance(action.get("action"), str) else None
+    )
+    if adapter is None or not adapter.branch_actionable:
         _answer_callback(callback_query, "This request has expired")
         return
     action_data = action.get("action_data")
@@ -1367,7 +1361,7 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         _answer_callback(callback_query, "This request has expired")
         return
     try:
-        view = load_gate_view(action_data, expected_kind=expected_kind)
+        view = load_gate_view(action_data, expected_kind=adapter.kind)
     except GateError as exc:
         _answer_callback(callback_query, _gate_error_answer_text(exc))
         _dismiss_gate_callback(callback_query, action, cb.notif_id_prefix)

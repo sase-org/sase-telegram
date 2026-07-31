@@ -17,6 +17,7 @@ from sase.notification_gates.models import (
     GateGroup,
     GateOption,
 )
+from sase.notification_gates.registry import adapter_for_kind
 
 PROGRESS_FILENAME = "telegram_gate_progress.json"
 
@@ -52,23 +53,18 @@ def load_gate_view(
         raise GateError(
             "missing_gate", "bundle_path", "notification has no gate bundle"
         )
-    action_by_kind = {
-        "custom": "CustomGate",
-        "epic_plan": "EpicApproval",
-        "hitl": "HITL",
-        "launch": "LaunchApproval",
-        "plan": "PlanApproval",
-        "question": "UserQuestion",
-    }
-    action = action_by_kind.get(expected_kind or str(action_data.get("request_kind")))
-    if action is None:
+    raw_kind = expected_kind or action_data.get("request_kind")
+    if not isinstance(raw_kind, str) or not raw_kind.strip():
+        raise GateError("invalid_request", "kind", "Telegram gate kind is missing")
+    requested_adapter = adapter_for_kind(raw_kind)
+    if not requested_adapter.branch_actionable:
         raise GateError("invalid_request", "kind", "unsupported Telegram gate kind")
     from sase.notification_gates.paths import resolve_action_bundle
 
     normalized_action_data = {
         str(key): str(value) for key, value in action_data.items()
     }
-    bundle = resolve_action_bundle(action, normalized_action_data)
+    bundle = resolve_action_bundle(requested_adapter.action, normalized_action_data)
     if bundle is None or bundle.legacy:
         raise GateError(
             "missing_gate", "bundle_path", "notification has no v2 gate bundle"
@@ -83,11 +79,11 @@ def load_gate_view(
             "notification gate identity does not match its bundle path",
         )
     envelope, adapter = load_and_verify_bundle(bundle_path)
-    if expected_kind is not None and adapter.kind != expected_kind:
+    if adapter.kind != requested_adapter.kind:
         raise GateError(
             "invalid_request",
             "kind",
-            f"expected a {expected_kind} gate, found {adapter.kind}",
+            f"expected a {requested_adapter.kind} gate, found {adapter.kind}",
         )
     raw_options = envelope.get("options")
     raw_groups = envelope.get("groups")
@@ -98,11 +94,12 @@ def load_gate_view(
         raise GateError(
             "invalid_request", "branches", "gate branch metadata is missing"
         )
-    default_feedback: GateFeedbackMode = (
-        "optional" if adapter.kind == "custom" else "disabled"
-    )
     options = tuple(
-        GateOption.from_mapping(raw, index, default_feedback=default_feedback)
+        GateOption.from_mapping(
+            raw,
+            index,
+            default_feedback=adapter.default_feedback,
+        )
         for index, raw in enumerate(raw_options)
     )
     groups = tuple(

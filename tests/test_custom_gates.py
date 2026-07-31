@@ -13,14 +13,23 @@ from unittest.mock import patch
 import pytest
 
 from sase.agent.launch_request import create_launch_approval_request
+from sase.bead.task_gate import create_task_triage_gate
+from sase.notification_gates.models import GateError
+from sase.notification_gates.registry import (
+    adapter_for_kind,
+    registered_gate_kinds,
+)
 from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
+from sase.notifications.store import load_notifications
 from sase.plan_gate import create_plan_approval_gate
 from sase.sdd.plan_validate import validate_plan as validate_sase_plan
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
+from sase_telegram.gate_flow import GateProgress
 from sase_telegram.scripts.sase_tg_inbound import (
     _handle_callback,
+    _handle_gate_callback,
     _handle_text_message,
 )
 from sase_telegram.scripts.sase_tg_outbound import _run_outbound
@@ -234,6 +243,15 @@ def _pending(notification: Notification) -> dict[str, object]:
     }
 
 
+def _stored_notification(notification_id: str | None) -> Notification:
+    assert notification_id is not None
+    return next(
+        notification
+        for notification in load_notifications(include_dismissed=True)
+        if notification.id == notification_id
+    )
+
+
 def _epic_notification(gate_home: Path, request_id: str) -> Notification:
     plan_file = gate_home / f"{request_id}.md"
     plan_file.write_text(_epic_plan_for_installed_sase(), encoding="utf-8")
@@ -288,6 +306,232 @@ def test_custom_gate_renders_expanded_group_with_compact_callbacks_and_fallback(
     notification.action_data["bundle_path"] = str(gate_home / "missing")
     _, fallback_keyboard, _ = format_notification(notification)
     assert fallback_keyboard is None
+
+
+def test_task_triage_outbound_renders_tracks_attaches_and_launches(
+    gate_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = create_task_triage_gate(
+        request_id="telegram-task-launch",
+        bead_id="sase-test",
+        project="sase",
+        title="Investigate the registry",
+        description="Keep every Telegram gate driven by the adapter registry.",
+        notes="Created by the Telegram regression test.",
+    )
+    notification = _stored_notification(gate.notification_id)
+    last_sent_file = gate_home / "last-sent-task-triage"
+    last_sent_file.write_text("0", encoding="utf-8")
+    monkeypatch.setattr(outbound, "LAST_SENT_FILE", last_sent_file)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+            return_value=[notification],
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+            return_value="chat-1",
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+            return_value=True,
+        ),
+        patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+        patch(
+            "sase_telegram.scripts.sase_tg_outbound.send_message",
+            return_value=SimpleNamespace(message_id=42),
+        ) as send_message,
+        patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf", return_value=None),
+        patch("sase_telegram.scripts.sase_tg_outbound.send_document") as send_document,
+        patch("sase_telegram.scripts.sase_tg_outbound._register_shared_transport"),
+    ):
+        assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
+
+    text = send_message.call_args.args[1]
+    keyboard = send_message.call_args.kwargs["reply_markup"]
+    assert text.startswith("✦ *Task Triage*")
+    assert "Keep every Telegram gate driven" in text
+    assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
+        ["🚀 Launch", "✕ Close"]
+    ]
+    prefix = notification.id[:8]
+    assert _button_data(keyboard) == [
+        f"gate:{prefix}:c0",
+        f"gate:{prefix}:c1",
+    ]
+    assert notification.files == [str(gate.preview_path)]
+    send_document.assert_called_once_with("chat-1", str(gate.preview_path))
+    pending = pending_actions.get(prefix)
+    assert pending is not None
+    assert pending["action"] == "TaskTriage"
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch(
+            "sase.bead.task_gate.launch_task_triage",
+            return_value=SimpleNamespace(task_id="task-123"),
+        ) as launch_task,
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: pending})
+
+    launch_task.assert_called_once()
+    response = json.loads(gate.response_path.read_text(encoding="utf-8"))
+    assert response["selected_option_ids"] == ["launch"]
+    assert response["option_results"][0]["result"] == {"action": "launch"}
+    assert response["task_launch_task_id"] == "task-123"
+
+
+def test_task_triage_close_uses_required_feedback_flow(gate_home: Path) -> None:
+    gate = create_task_triage_gate(
+        request_id="telegram-task-close",
+        bead_id="sase-close",
+        project="sase",
+        title="Close this task",
+    )
+    notification = _stored_notification(gate.notification_id)
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            return_value="chat-1",
+        ),
+        patch("sase.bead.task_gate.close_task_triage") as close_task,
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c1", "close"), {prefix: action})
+        answer.assert_any_call("close", "Send the required feedback as a text message")
+        assert not gate.response_path.exists()
+
+        message = SimpleNamespace(
+            text="The task is no longer needed.",
+            entities=[],
+            message_id=78,
+            chat_id="chat-1",
+            reply_to_message=SimpleNamespace(message_id=42),
+        )
+        _handle_text_message(message, {})
+
+    close_task.assert_called_once()
+    response = json.loads(gate.response_path.read_text(encoding="utf-8"))
+    assert response["selected_option_ids"] == ["close"]
+    assert response["feedback"] == "The task is no longer needed."
+
+
+def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> None:
+    custom = create_gate(_custom_spec(request_id="telegram-registry-custom"))
+    task = create_task_triage_gate(
+        request_id="telegram-registry-task",
+        bead_id="sase-registry",
+        project="sase",
+        title="Exercise every generic form",
+    )
+    notifications = {
+        "custom": _notification(custom, action="CustomGate", sender="custom"),
+        "task_triage": _stored_notification(task.notification_id),
+    }
+
+    for kind in registered_gate_kinds():
+        adapter = adapter_for_kind(kind)
+        if not adapter.generic_form:
+            continue
+        _text, keyboard, _attachments = format_notification(notifications[kind])
+        assert keyboard is not None, kind
+
+
+def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
+    gate_home: Path,
+) -> None:
+    request_path = gate_home / "registry-request.json"
+    request_path.write_text("{}", encoding="utf-8")
+    bundle = SimpleNamespace(root=gate_home, request=request_path, legacy=False)
+    response = inbound.ResponseAction(
+        action_type="gate",
+        notif_id_prefix="registry",
+        response_path=gate_home / "response.json",
+        response_data={},
+        answer_text=None,
+        selected_option_ids=("accept",),
+        input_data={},
+    )
+    view = SimpleNamespace(
+        bundle_path=gate_home,
+        branches=(("accept",),),
+    )
+    callback = _callback("gate:registry:c0")
+
+    with (
+        patch(
+            "sase.notification_gates.paths.resolve_action_bundle",
+            return_value=bundle,
+        ),
+        patch(
+            "sase.notification_gates.executor.execute_gate_selection",
+            return_value=SimpleNamespace(already_completed=False),
+        ),
+    ):
+        for kind in registered_gate_kinds():
+            adapter = adapter_for_kind(kind)
+            action = {"action": adapter.action, "action_data": {}}
+            if adapter.branch_actionable:
+                assert inbound.resolve_gate_response(response, action) == (
+                    "Gate answered with accept"
+                )
+            else:
+                with pytest.raises(GateError, match="unsupported gate action"):
+                    inbound.resolve_gate_response(response, action)
+
+    for kind in registered_gate_kinds():
+        adapter = adapter_for_kind(kind)
+        action = {
+            "action": adapter.action,
+            "action_data": {},
+            "message_id": 42,
+            "chat_id": "chat-1",
+        }
+        if not adapter.branch_actionable:
+            with patch(
+                "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            ) as answer:
+                _handle_gate_callback(callback, {"registry": action})
+            answer.assert_called_once_with("callback", "This request has expired")
+            continue
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.load_gate_view",
+                return_value=view,
+            ) as load_view,
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.load_gate_progress",
+                return_value=GateProgress(),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound.feedback_mode",
+                return_value="disabled",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._execute_gate_callback_response"
+            ) as execute_response,
+        ):
+            _handle_gate_callback(callback, {"registry": action})
+        load_view.assert_called_once_with({}, expected_kind=adapter.kind)
+        execute_response.assert_called_once()
 
 
 @pytest.mark.parametrize(

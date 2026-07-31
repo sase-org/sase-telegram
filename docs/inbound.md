@@ -30,17 +30,20 @@ format is:
 {action_type}:{notif_id_prefix}:{choice}
 ```
 
-- **action_type**: `plan`, `hitl`, `question`, `kill`, `retry`, `bead`, `list`, `show`
+- **action_type**: `gate`, `question`, `kill`, `retry`, `bead`, `list`, `show`
 - **notif_id_prefix**: First N characters of the notification ID (enough to match uniquely)
-- **choice**: `approve`, `run`, `reject`, `epic`, `feedback`, `accept`, `0`/`1`/`2`/... (question options), etc.
+- **choice**: For gates, a compact branch/group token derived from the normalized envelope; for questions and agent
+  controls, the selected option or command token.
 
 The 64-byte total limit (Telegram API constraint) is enforced at encoding time.
 
 #### Direct Actions
 
-For most choices (`approve`, `run`, `reject`, `accept`, question option numbers), the callback is matched against
-`pending_actions.json`, the response is written to the notification's response file, and the pending action is removed.
-The inline keyboard is also edited to show the selected action.
+For most choices, the callback is matched against `pending_actions.json`, the response is written to the
+notification's response file, and the pending action is removed. The inline keyboard is also edited to show the
+selected action. Non-question gates resolve their action and kind through SASE's notification-gate adapter registry;
+only adapters marked branch-actionable enter the shared gate executor. A newly registered actionable kind therefore
+uses the same callback path without a Telegram-specific action table.
 
 Plan `run` writes an approval response with `commit_plan: false` and `run_coder: true`.
 

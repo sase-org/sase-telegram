@@ -14,6 +14,11 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 
+from sase.notification_gates.registry import (
+    PRIVILEGED_GATE_ACTIONS,
+    adapter_for_action,
+)
+
 
 _LAUNCH_XPROMPT_AT_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
 _LAUNCH_XPROMPT_AT_REF_RE = re.compile(
@@ -351,15 +356,10 @@ def resolve_gate_response(
     if not isinstance(action_data, dict):
         raise GateError("invalid_request", "action_data", "gate action data is missing")
     action_name = action.get("action")
-    if action_name not in {
-        "CustomGate",
-        "EpicApproval",
-        "HITL",
-        "LaunchApproval",
-        "PlanApproval",
-    }:
+    adapter = adapter_for_action(action_name if isinstance(action_name, str) else None)
+    if adapter is None or not adapter.branch_actionable:
         raise GateError("invalid_request", "action", "unsupported gate action")
-    bundle = resolve_action_bundle(action_name, action_data)
+    bundle = resolve_action_bundle(adapter.action, action_data)
     if bundle is None or bundle.legacy or not bundle.request.is_file():
         raise GateError("invalid_request", "bundle_path", "v2 gate bundle is missing")
     if not response.selected_option_ids:
@@ -447,16 +447,6 @@ def make_image_filename(file_id: str) -> str:
     return f"{ts}_{file_id[:12]}.jpg"
 
 
-_ACTIONABLE_ACTIONS = {
-    "CustomGate",
-    "PlanApproval",
-    "EpicApproval",
-    "HITL",
-    "LaunchApproval",
-    "UserQuestion",
-}
-
-
 def _gate_handled(action_data: dict[str, Any]) -> bool:
     response_value = action_data.get("response_path")
     if isinstance(response_value, str) and response_value:
@@ -495,7 +485,7 @@ def find_externally_handled(
     handled: list[tuple[str, int, str]] = []
     for prefix, entry in pending.items():
         action = entry.get("action")
-        if action not in _ACTIONABLE_ACTIONS:
+        if action not in PRIVILEGED_GATE_ACTIONS:
             continue
         action_data = entry.get("action_data", {})
         if not isinstance(action_data, dict):
