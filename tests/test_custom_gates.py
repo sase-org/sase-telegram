@@ -285,12 +285,12 @@ def test_custom_gate_renders_expanded_group_with_compact_callbacks_and_fallback(
     assert text.startswith("🛡️ *Custom Request*")
     assert "**>" in text
     assert keyboard is not None
-    assert [row[0].text for row in keyboard.inline_keyboard] == [
-        "☑️ ✅ Proceed safely",
-        "☑️ 📝 Write audit record",
-        "⬜ 🩺 Verify health",
-        "✅ Proceed safely",
-        "❌ Cancel",
+    assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
+        ["☑️ ✅ Proceed safely"],
+        ["☑️ 📝 Write audit record"],
+        ["⬜ 🩺 Verify health"],
+        ["✅ Proceed safely", "💬 Proceed safely with feedback"],
+        ["❌ Cancel"],
     ]
     prefix = notification.id[:8]
     assert _button_data(keyboard) == [
@@ -298,6 +298,7 @@ def test_custom_gate_renders_expanded_group_with_compact_callbacks_and_fallback(
         f"gate:{prefix}:x1",
         f"gate:{prefix}:x2",
         f"gate:{prefix}:s0",
+        f"gate:{prefix}:f0",
         f"gate:{prefix}:c1",
     ]
     assert attachments == notification.files
@@ -354,11 +355,14 @@ def test_task_triage_outbound_renders_tracks_attaches_and_launches(
     assert text.startswith("✦ *Task Triage*")
     assert "Keep every Telegram gate driven" in text
     assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
-        ["🚀 Launch", "✕ Close"]
+        ["🚀 Launch"],
+        ["💬 Launch with feedback"],
+        ["✕ Close"],
     ]
     prefix = notification.id[:8]
     assert _button_data(keyboard) == [
         f"gate:{prefix}:c0",
+        f"gate:{prefix}:f0",
         f"gate:{prefix}:c1",
     ]
     assert notification.files == [str(gate.preview_path)]
@@ -431,6 +435,150 @@ def test_task_triage_close_uses_required_feedback_flow(gate_home: Path) -> None:
     response = json.loads(gate.response_path.read_text(encoding="utf-8"))
     assert response["selected_option_ids"] == ["close"]
     assert response["feedback"] == "The task is no longer needed."
+
+
+def test_task_triage_launch_collects_optional_feedback(gate_home: Path) -> None:
+    gate = create_task_triage_gate(
+        request_id="telegram-task-optional",
+        bead_id="sase-optional",
+        project="sase",
+        title="Launch with context",
+    )
+    notification = _stored_notification(gate.notification_id)
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            return_value="chat-1",
+        ),
+        patch(
+            "sase.bead.task_gate.launch_task_triage",
+            return_value=SimpleNamespace(task_id="task-456"),
+        ) as launch_task,
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:f0", "feedback"), {prefix: action})
+        answer.assert_any_call(
+            "feedback", "Send the required feedback as a text message"
+        )
+        assert not gate.response_path.exists()
+
+        message = SimpleNamespace(
+            text="Start from the failing regression test.",
+            entities=[],
+            message_id=79,
+            chat_id="chat-1",
+            reply_to_message=SimpleNamespace(message_id=42),
+        )
+        _handle_text_message(message, {})
+
+    launch_task.assert_called_once()
+    response = json.loads(gate.response_path.read_text(encoding="utf-8"))
+    assert response["selected_option_ids"] == ["launch"]
+    assert response["feedback"] == "Start from the failing regression test."
+
+
+def test_task_triage_launch_tap_still_resolves_without_feedback(
+    gate_home: Path,
+) -> None:
+    gate = create_task_triage_gate(
+        request_id="telegram-task-plain",
+        bead_id="sase-plain",
+        project="sase",
+        title="Launch without context",
+    )
+    notification = _stored_notification(gate.notification_id)
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch(
+            "sase.bead.task_gate.launch_task_triage",
+            return_value=SimpleNamespace(task_id="task-789"),
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+
+    response = json.loads(gate.response_path.read_text(encoding="utf-8"))
+    assert response["selected_option_ids"] == ["launch"]
+    assert not response.get("feedback")
+
+
+def test_optional_feedback_callback_submits_expanded_group_selection(
+    gate_home: Path,
+) -> None:
+    result = create_gate(_custom_spec(request_id="telegram-optional-group"))
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            return_value="chat-1",
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:x2"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:f0", "feedback"), {prefix: action})
+
+        message = SimpleNamespace(
+            text="Audit the restart afterwards.",
+            entities=[],
+            message_id=80,
+            chat_id="chat-1",
+            reply_to_message=SimpleNamespace(message_id=42),
+        )
+        _handle_text_message(message, {})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["selected_option_ids"] == ["proceed", "audit", "verify"]
+    assert response["feedback"] == "Audit the restart afterwards."
+
+
+def test_disabled_feedback_branch_has_no_feedback_button(gate_home: Path) -> None:
+    result = create_gate(_custom_spec(request_id="telegram-disabled-feedback"))
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    _text, keyboard, _attachments = format_notification(notification)
+    assert keyboard is not None
+    assert f"gate:{prefix}:f1" not in _button_data(keyboard)
+
+    with patch(
+        "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+    ) as answer:
+        _handle_callback(_callback(f"gate:{prefix}:f1", "nofeedback"), {prefix: action})
+
+    answer.assert_any_call("nofeedback", "This option does not accept feedback")
+    assert not (Path(result.bundle_path) / "response.json").exists()
 
 
 def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> None:

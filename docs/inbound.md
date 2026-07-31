@@ -49,6 +49,10 @@ Plan `run` writes an approval response with `commit_plan: false` and `run_coder:
 
 #### Two-Step Actions
 
+A gate branch whose selected options declare `feedback: required` always routes through the two-step flow below. A
+branch whose selection declares `feedback: optional` renders an extra `f<branch>` button next to its primary control, so
+the one-tap path stays available and the same two-step flow is entered only when the user asks to attach feedback.
+
 For `feedback` and `custom` choices, the flow is:
 
 1. The callback is saved to `awaiting_feedback.json` with the pending action context

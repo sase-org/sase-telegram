@@ -137,6 +137,67 @@ def test_multiple_groups_render_collapsed_then_expand_only_the_activated_group(
     ]
 
 
+def test_optional_feedback_branches_gain_a_feedback_button(tmp_path: Path) -> None:
+    view = _view(
+        tmp_path,
+        options=(
+            _option("quiet", feedback="disabled"),
+            _option("ask", feedback="optional"),
+            _option("explain", feedback="required"),
+        ),
+        branches=(("quiet",), ("ask",), ("explain",)),
+    )
+
+    keyboard = render_gate_keyboard("gate0001", view, initial_progress(view))
+
+    assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
+        ["• Quiet", "• Ask"],
+        ["💬 Ask with feedback"],
+        ["• Explain"],
+    ]
+    assert [
+        [button.callback_data for button in row] for row in keyboard.inline_keyboard
+    ] == [
+        ["gate:gate0001:c0", "gate:gate0001:c1"],
+        ["gate:gate0001:f1"],
+        ["gate:gate0001:c2"],
+    ]
+
+
+def test_expanded_group_feedback_button_tracks_the_current_selection(
+    tmp_path: Path,
+) -> None:
+    view = _view(
+        tmp_path,
+        options=(
+            _option("approve", feedback="disabled"),
+            _option("annotate", feedback="optional", default_selected=False),
+        ),
+        branches=(("approve", "annotate"),),
+        groups=(_group("approve", "annotate", label="Approve"),),
+    )
+
+    progress = initial_progress(view)
+    without_feedback = render_gate_keyboard("gate0001", view, progress)
+    assert [
+        [button.text for button in row] for row in without_feedback.inline_keyboard
+    ] == [
+        ["☑️ • Approve"],
+        ["⬜ • Annotate"],
+        ["✅ Approve"],
+    ]
+
+    progress, _enabled = toggle_option(view, progress, "x1")
+    with_feedback = render_gate_keyboard("gate0001", view, progress)
+    assert [
+        [button.text for button in row] for row in with_feedback.inline_keyboard
+    ] == [
+        ["☑️ • Approve"],
+        ["☑️ • Annotate"],
+        ["✅ Approve", "💬 Approve with feedback"],
+    ]
+
+
 @pytest.mark.parametrize(
     "contents",
     [

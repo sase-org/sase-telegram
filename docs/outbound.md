@@ -80,7 +80,7 @@ and callback handling without another Telegram action allowlist.
 | Plan Approval | Ordered Properties card + plan body + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
-| Generic Gate (including Task Triage and Custom Gate) | Notes + inline Markdown preview | One button per declared branch |
+| Generic Gate (including Task Triage and Custom Gate) | Notes + inline Markdown preview | One button per declared branch, plus a "with feedback" button for a branch whose selection declares `feedback: optional` |
 | Workflow Complete | Summary, optional PR URL, prompt snippet + attachments | Fork (copy-text) |
 | Agent Launched | Provider/model, workspace number, prompt snippet | Fork, Wait, Kill, Retry |
 | Agent Killed | Termination confirmation | Redo |

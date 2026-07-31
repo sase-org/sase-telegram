@@ -1415,6 +1415,38 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         )
         return
 
+    elif cb.choice.startswith("f"):
+        feedback_result = branch_for_token(view, cb.choice, prefix="f")
+        if feedback_result is None:
+            _answer_callback(callback_query, "Invalid gate callback")
+            return
+        branch_index, branch = feedback_result
+        if len(branch) == 1:
+            selected_option_ids = branch
+        elif progress.expanded_branch_index != branch_index:
+            _answer_callback(callback_query, "Open this gate group before submitting")
+            return
+        else:
+            selected_set = set(progress.selected_option_ids)
+            selected_option_ids = tuple(
+                option_id for option_id in branch if option_id in selected_set
+            )
+        if not selected_option_ids:
+            _answer_callback(callback_query, "Select at least one option")
+            return
+        if feedback_mode(view, selected_option_ids) == "disabled":
+            _answer_callback(callback_query, "This option does not accept feedback")
+            return
+        _begin_gate_feedback(
+            callback_query,
+            action,
+            cb.notif_id_prefix,
+            view,
+            progress,
+            selected_option_ids,
+        )
+        return
+
     else:
         submit_result = branch_for_token(view, cb.choice, prefix="s")
         if submit_result is None:

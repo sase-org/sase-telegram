@@ -25,6 +25,7 @@ from sase_telegram import callback_data
 from sase_telegram.gate_flow import (
     GateProgress,
     GateView,
+    feedback_mode,
     group_for_branch,
     initial_progress,
     load_gate_view,
@@ -1018,6 +1019,10 @@ def _option_button_text(option: GateOption) -> str:
     return f"{icon} {option.label}"
 
 
+def _feedback_button_text(label: str) -> str:
+    return f"💬 {label} with feedback"
+
+
 def render_gate_keyboard(
     prefix: str,
     view: GateView,
@@ -1046,6 +1051,18 @@ def render_gate_keyboard(
                     ),
                 )
             )
+            if feedback_mode(view, branch) == "optional":
+                flush_singletons()
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            _feedback_button_text(option.label),
+                            callback_data=callback_data.encode(
+                                "gate", prefix, f"f{branch_index}"
+                            ),
+                        )
+                    ]
+                )
             continue
 
         flush_singletons()
@@ -1078,16 +1095,25 @@ def render_gate_keyboard(
                     )
                 ]
             )
-        rows.append(
-            [
+        submit_row = [
+            InlineKeyboardButton(
+                group_text,
+                callback_data=callback_data.encode("gate", prefix, f"s{branch_index}"),
+            )
+        ]
+        branch_selection = tuple(
+            option_id for option_id in branch if option_id in selected_ids
+        )
+        if feedback_mode(view, branch_selection) == "optional":
+            submit_row.append(
                 InlineKeyboardButton(
-                    group_text,
+                    _feedback_button_text(group.label or by_id[branch[0]].label),
                     callback_data=callback_data.encode(
-                        "gate", prefix, f"s{branch_index}"
+                        "gate", prefix, f"f{branch_index}"
                     ),
                 )
-            ]
-        )
+            )
+        rows.append(submit_row)
 
     flush_singletons()
     return InlineKeyboardMarkup(rows)
