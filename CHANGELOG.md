@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/sase-org/sase-telegram/compare/v0.4.2...v0.4.3) (2026-07-30)
+
+
+### Features
+
+* render structured output variables ([72114b0](https://github.com/sase-org/sase-telegram/commit/72114b0b213eb8ae7da636601ba35a2d1f4010b7))
+
 ## [0.4.2](https://github.com/sase-org/sase-telegram/compare/v0.4.1...v0.4.2) (2026-07-28)
 
 
