@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/sase-org/sase-telegram/compare/v0.4.3...v0.4.4) (2026-07-31)
+
+
+### Features
+
+* drive Telegram gates from adapter registry ([c3e6d16](https://github.com/sase-org/sase-telegram/commit/c3e6d16ab342de959478f2e894ad105b56ba688e))
+
 ## [0.4.3](https://github.com/sase-org/sase-telegram/compare/v0.4.2...v0.4.3) (2026-07-30)
 
 
