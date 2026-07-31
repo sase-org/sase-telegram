@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.5](https://github.com/sase-org/sase-telegram/compare/v0.4.4...v0.4.5) (2026-07-31)
+
+
+### Features
+
+* add optional-feedback button to Telegram gate keyboards ([0e73e3a](https://github.com/sase-org/sase-telegram/commit/0e73e3a926605a94a60a74b0ed4d1b85dfcee5f1))
+
 ## [0.4.4](https://github.com/sase-org/sase-telegram/compare/v0.4.3...v0.4.4) (2026-07-31)
 
 
