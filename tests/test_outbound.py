@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,10 +47,12 @@ def _make_notification(
     read: bool = False,
     dismissed: bool = False,
     silent: bool = False,
+    muted: bool = False,
+    resurfaced_at: str | None = None,
 ) -> Notification:
     if timestamp is None:
         timestamp = datetime.now(UTC).isoformat()
-    return Notification(
+    notification = Notification(
         id=id,
         timestamp=timestamp,
         sender="test",
@@ -57,20 +60,29 @@ def _make_notification(
         read=read,
         dismissed=dismissed,
         silent=silent,
+        muted=muted,
     )
+    if resurfaced_at is not None:
+        notification.resurfaced_at = resurfaced_at  # type: ignore[attr-defined]
+    return notification
+
+
+def _cursor_payload() -> dict[str, object]:
+    return json.loads(LAST_SENT_TEST_FILE.read_text(encoding="utf-8"))
 
 
 class TestGetUnsentNotifications:
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     def test_no_file_returns_empty_and_initializes(self, mock_load):
         """First run: no last_sent file, returns empty and creates file."""
         assert not LAST_SENT_TEST_FILE.exists()
         result = get_unsent_notifications()
         assert result == []
         assert LAST_SENT_TEST_FILE.exists()
+        assert _cursor_payload()["version"] == 2
         mock_load.assert_not_called()
 
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     def test_filters_correctly(self, mock_load):
         """Returns unread notifications newer than last sent (including dismissed)."""
         old_ts = datetime(2024, 1, 1, tzinfo=UTC).isoformat()
@@ -103,7 +115,7 @@ class TestGetUnsentNotifications:
         assert "new00000-0000-0000-0000-000000000000" in result_ids
         assert "dism0000-0000-0000-0000-000000000000" in result_ids
 
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     def test_filters_silent_notifications(self, mock_load):
         """Silent notifications are excluded even if unread and new."""
         new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
@@ -142,14 +154,49 @@ class TestMarkSent:
 
         mark_sent([n1, n2])
 
-        written = float(LAST_SENT_TEST_FILE.read_text().strip())
+        payload = _cursor_payload()
+        written = datetime.fromisoformat(str(payload["activity_at"])).timestamp()
         expected = datetime.fromisoformat(ts2).timestamp()
         assert written == pytest.approx(expected, abs=1.0)
+        assert payload["id"] == n2.id
 
     def test_empty_list_noop(self):
         """mark_sent with empty list doesn't create the file."""
         mark_sent([])
         assert not LAST_SENT_TEST_FILE.exists()
+
+
+def test_resurfaced_generation_and_equal_timestamp_ids_use_activity_cursor() -> None:
+    original = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
+    activity = datetime(2025, 7, 1, tzinfo=UTC).isoformat()
+    LAST_SENT_TEST_FILE.write_text(
+        str(datetime(2025, 6, 1, tzinfo=UTC).timestamp()),
+        encoding="utf-8",
+    )
+    rows = [
+        _make_notification(id="b-row", timestamp=original, resurfaced_at=activity),
+        _make_notification(id="a-row", timestamp=original, resurfaced_at=activity),
+        _make_notification(id="muted-row", timestamp=activity, muted=True),
+    ]
+
+    with patch(
+        "sase_telegram.outbound._read_current_notification_snapshot",
+        return_value=SimpleNamespace(notifications=rows),
+    ) as read_snapshot:
+        unsent = get_unsent_notifications()
+
+    read_snapshot.assert_called_once_with()
+    assert [notification.id for notification in unsent] == ["a-row", "b-row"]
+    assert _cursor_payload()["version"] == 2
+
+    mark_sent([unsent[0]])
+    with patch(
+        "sase_telegram.outbound._read_current_notification_snapshot",
+        return_value=SimpleNamespace(notifications=rows),
+    ):
+        assert [notification.id for notification in get_unsent_notifications()] == [
+            "b-row"
+        ]
 
 
 class TestIsDiffFile:

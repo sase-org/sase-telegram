@@ -447,7 +447,7 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
             )
 
         if msg is None:
-            continue
+            break
 
         # Save pending action IMMEDIATELY after send so the inbound
         # chop can find it when the user taps a button.  Previously

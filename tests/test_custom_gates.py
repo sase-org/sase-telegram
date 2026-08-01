@@ -948,9 +948,12 @@ def test_epic_approval_outbound_sends_generic_keyboard(
         f"gate:{prefix}:c1",
         f"gate:{prefix}:c2",
     ]
-    assert float(last_sent_file.read_text(encoding="utf-8")) == pytest.approx(
+    cursor = json.loads(last_sent_file.read_text(encoding="utf-8"))
+    assert cursor["version"] == 2
+    assert datetime.fromisoformat(cursor["activity_at"]).timestamp() == pytest.approx(
         datetime.fromisoformat(notification.timestamp).timestamp()
     )
+    assert cursor["id"] == notification.id
     send_document.assert_called_once_with("chat-1", notification.files[0])
 
 

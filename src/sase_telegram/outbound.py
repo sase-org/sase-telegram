@@ -2,22 +2,35 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from sase.notifications import store as notification_store
 from sase.notifications.models import Notification
-from sase.notifications.store import load_notifications
 
 LAST_SENT_FILE = Path.home() / ".sase" / "telegram" / "last_sent_ts"
 OUTBOUND_LOCK_FILE = Path.home() / ".sase" / "telegram" / "outbound.lock"
+_CURSOR_VERSION = 2
+_LEGACY_EQUAL_TIMESTAMP_ID = "\U0010ffff"
+
+
+@dataclass(frozen=True, order=True)
+class _DeliveryCursor:
+    activity_at: datetime
+    notification_id: str
 
 
 def get_unsent_notifications() -> list[Notification]:
     """Return notifications that haven't been sent to Telegram yet.
 
-    Uses a high-water mark timestamp file to track what's already been sent.
+    Uses a versioned ``(activity_at, id)`` high-water cursor to track what's
+    already been sent.
     The high-water mark is only advanced by ``mark_sent()`` after a
     notification is actually delivered to Telegram.  We deliberately do
     NOT advance it based on anything other than successful delivery,
@@ -32,44 +45,103 @@ def get_unsent_notifications() -> list[Notification]:
     """
     if not LAST_SENT_FILE.exists():
         # First run — initialize high-water mark, don't dump backlog
-        _write_high_water_mark(time.time())
+        _write_high_water_mark(
+            _DeliveryCursor(datetime.now(UTC), _LEGACY_EQUAL_TIMESTAMP_ID)
+        )
         return []
 
-    last_sent_ts = float(LAST_SENT_FILE.read_text().strip())
+    last_sent = _read_high_water_mark()
 
-    all_notifs = load_notifications(include_dismissed=True)
+    snapshot = _read_current_notification_snapshot()
+    all_notifs = getattr(snapshot, "notifications", snapshot)
     unsent = []
     for n in all_notifs:
-        if n.read or n.silent:
+        if n.read or n.silent or n.muted:
             continue
-        from datetime import datetime
-
         try:
-            ts = datetime.fromisoformat(n.timestamp).timestamp()
+            cursor = _notification_cursor(n)
         except ValueError:
             continue
-        if ts > last_sent_ts:
+        if cursor > last_sent:
             unsent.append(n)
-    return unsent
+    return sorted(unsent, key=_notification_cursor)
 
 
 def mark_sent(notifications: list[Notification]) -> None:
-    """Update the high-water mark to the latest notification timestamp."""
+    """Update the high-water mark to the latest delivered activity cursor."""
     if not notifications:
         return
-    from datetime import datetime
-
-    latest = max(datetime.fromisoformat(n.timestamp).timestamp() for n in notifications)
+    latest = max(_notification_cursor(notification) for notification in notifications)
     _write_high_water_mark(latest)
 
 
-def _write_high_water_mark(ts: float) -> None:
-    """Atomically write a timestamp to the high-water mark file."""
+def _notification_cursor(notification: Notification) -> _DeliveryCursor:
+    value = getattr(notification, "resurfaced_at", None) or notification.timestamp
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError("notification activity timestamp must include a timezone")
+    return _DeliveryCursor(parsed.astimezone(UTC), notification.id)
+
+
+def _read_current_notification_snapshot() -> Any:
+    current_reader = getattr(
+        notification_store, "read_current_notification_snapshot", None
+    )
+    if current_reader is not None:
+        return current_reader(include_dismissed=True)
+    return notification_store.read_notification_snapshot(
+        include_dismissed=True,
+        expire_due_snoozes=True,
+    )
+
+
+def _read_high_water_mark() -> _DeliveryCursor:
+    raw = LAST_SENT_FILE.read_text(encoding="utf-8").strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+
+    if isinstance(payload, dict):
+        if payload.get("version") != _CURSOR_VERSION:
+            raise ValueError("unsupported Telegram notification cursor version")
+        activity_at = payload.get("activity_at")
+        notification_id = payload.get("id")
+        if not isinstance(activity_at, str) or not isinstance(notification_id, str):
+            raise ValueError("malformed Telegram notification cursor")
+        parsed = datetime.fromisoformat(activity_at)
+        if parsed.tzinfo is None:
+            raise ValueError("Telegram notification cursor must include a timezone")
+        return _DeliveryCursor(parsed.astimezone(UTC), notification_id)
+
+    # Legacy files contain one epoch timestamp. Give them a maximal ID so the
+    # old strict timestamp comparison remains intact, then migrate atomically.
+    legacy = _DeliveryCursor(
+        datetime.fromtimestamp(float(raw), tz=UTC),
+        _LEGACY_EQUAL_TIMESTAMP_ID,
+    )
+    _write_high_water_mark(legacy)
+    return legacy
+
+
+def _write_high_water_mark(cursor: _DeliveryCursor) -> None:
+    """Atomically write a versioned activity cursor to the marker file."""
     LAST_SENT_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=LAST_SENT_FILE.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(str(ts))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "version": _CURSOR_VERSION,
+                    "activity_at": cursor.activity_at.isoformat().replace(
+                        "+00:00", "Z"
+                    ),
+                    "id": cursor.notification_id,
+                },
+                f,
+                separators=(",", ":"),
+            )
+            f.write("\n")
         os.replace(tmp_path, LAST_SENT_FILE)
     except BaseException:
         if os.path.exists(tmp_path):

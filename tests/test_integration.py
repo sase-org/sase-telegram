@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,11 @@ OUTBOUND_LOCK_TEST_FILE = Path("/tmp/test_integration_outbound.lock")
 UPDATE_COMPLETION_TEST_DIR = Path("/tmp/test_integration_update_completions")
 IMAGES_TEST_DIR = Path("/tmp/test_integration_images")
 CORE_PENDING_TEST_FILE = Path("/tmp/test_integration_core_pending.json")
+
+
+def _cursor_epoch() -> float:
+    payload = json.loads(LAST_SENT_TEST_FILE.read_text(encoding="utf-8"))
+    return datetime.fromisoformat(str(payload["activity_at"])).timestamp()
 
 
 def _cleanup_files() -> None:
@@ -110,7 +116,7 @@ def _patch_paths():
 class TestOutboundIntegration:
     """Integration tests for the outbound main() entry point."""
 
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     def test_first_run_initializes_without_sending(
         self,
         mock_load: MagicMock,
@@ -138,7 +144,7 @@ class TestOutboundIntegration:
         assert "reason=lock_held" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_sends_notification(
         self,
@@ -171,7 +177,7 @@ class TestOutboundIntegration:
         assert "Agent Complete" in call_args[0][1]
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_saves_pending_action_for_plan_approval(
         self,
@@ -221,7 +227,7 @@ class TestOutboundIntegration:
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.scripts.sase_tg_outbound.send_document")
     @patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_saves_pending_action_for_launch_approval(
         self,
@@ -276,7 +282,7 @@ class TestOutboundIntegration:
         assert "pending_action_writes=1" in captured.out
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_registers_telegram_transport_in_shared_store(
         self,
@@ -316,7 +322,7 @@ class TestOutboundIntegration:
         assert telegram["record"] == {"chat_id": "12345", "message_id": 99}
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_advances_high_water_mark_per_notification(
         self,
@@ -353,7 +359,7 @@ class TestOutboundIntegration:
         marks_during_send: list[float] = []
 
         def _record_mark(*_a: Any, **_kw: Any) -> MagicMock:
-            marks_during_send.append(float(LAST_SENT_TEST_FILE.read_text().strip()))
+            marks_during_send.append(_cursor_epoch())
             return MagicMock(message_id=42)
 
         mock_send.side_effect = _record_mark
@@ -372,11 +378,11 @@ class TestOutboundIntegration:
         # the advance happened between sends, not after the loop.
         assert marks_during_send[1] == pytest.approx(ts1_epoch, abs=1.0)
         # After the loop the mark is at ts2.
-        final = float(LAST_SENT_TEST_FILE.read_text().strip())
+        final = _cursor_epoch()
         assert final == pytest.approx(ts2_epoch, abs=1.0)
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
-    @patch("sase_telegram.outbound.load_notifications")
+    @patch("sase_telegram.outbound._read_current_notification_snapshot")
     @patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id")
     def test_failed_send_does_not_advance_high_water_mark(
         self,
@@ -384,7 +390,7 @@ class TestOutboundIntegration:
         mock_load: MagicMock,
         mock_send: MagicMock,
     ) -> None:
-        """A send failure on n2 leaves the mark at n1 so n2 retries on next run."""
+        """A send failure on n2 leaves the mark at n1 and blocks later sends."""
         mock_chat_id.return_value = "12345"
 
         LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -400,13 +406,18 @@ class TestOutboundIntegration:
         n2 = _make_notification(
             id="n2000000-0000-0000-0000-000000000000", timestamp=ts2
         )
-        mock_load.return_value = [n1, n2]
+        n3 = _make_notification(
+            id="n3000000-0000-0000-0000-000000000000",
+            timestamp=datetime(2025, 6, 3, tzinfo=UTC).isoformat(),
+        )
+        mock_load.return_value = [n1, n2, n3]
         mock_send.side_effect = [MagicMock(message_id=1), RuntimeError("boom")]
 
         result = outbound_main([])
         assert result == 0
+        assert mock_send.call_count == 2
         # n1 advanced the mark, n2 raised before mark_sent ran for it.
-        final = float(LAST_SENT_TEST_FILE.read_text().strip())
+        final = _cursor_epoch()
         ts1_epoch = datetime.fromisoformat(ts1).timestamp()
         assert final == pytest.approx(ts1_epoch, abs=1.0)
 
@@ -422,7 +433,10 @@ class TestOutboundIntegration:
         n = _make_notification(sender="crs", notes=["Done!"])
 
         with (
-            patch("sase_telegram.outbound.load_notifications", return_value=[n]),
+            patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[n],
+            ),
         ):
             result = outbound_main(["--dry-run"])
 
