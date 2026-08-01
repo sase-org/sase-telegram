@@ -20,17 +20,47 @@ sase_chop_tg_outbound --context X  # Pass context string for logging
 
 1. **Lock acquisition** — `try_acquire_outbound_lock()` takes an exclusive lock on `~/.sase/telegram/outbound.lock`.
    If another outbound process is running, this one exits immediately.
-2. **Load unsent** — `get_unsent_notifications()` loads notifications newer than the high-water mark in `last_sent_ts`,
-   filtered to `read == False` and `silent == False`. Dismissed notifications are **not** filtered out because TUI
-   dismissal is a UI cleanup action, not a notification-read signal.
+2. **Load unsent** — `get_unsent_notifications()` performs a current-state notification read and returns the rows past
+   the high-water cursor in `last_sent_ts`, filtered to `read == False`, `silent == False`, and `muted == False`, sorted
+   oldest-first by activity cursor. Dismissed notifications are **not** filtered out because TUI dismissal is a UI
+   cleanup action, not a notification-read signal. See [Delivery Cursor](#delivery-cursor) below.
 3. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
 4. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
    keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send.
 5. **Save pending** — Every action registered in SASE's notification-gate adapter registry is saved to
    `pending_actions.json` with its Telegram `message_id` so inbound can resolve it and edit the keyboard later.
-6. **Advance HWM** — `mark_sent()` updates the high-water mark after each successfully delivered notification. If
-   outbound crashes mid-batch, only notifications after the last successful send are retried.
+6. **Advance HWM** — `mark_sent()` updates the high-water cursor after each successfully delivered notification. Because
+   the batch is processed oldest-first and the cursor is never advanced past an event that failed to send, a crash or a
+   failed send mid-batch retries exactly the undelivered remainder.
 7. **Release lock** — `release_outbound_lock()` releases the file lock.
+
+## Delivery Cursor
+
+`~/.sase/telegram/last_sent_ts` holds a versioned JSON cursor written atomically through a tempfile and `os.replace`:
+
+```json
+{"version":2,"activity_at":"2026-08-01T13:05:00Z","id":"7f3c…"}
+```
+
+The cursor is an **activity** cursor, not a creation-time cursor. A notification's activity time is `resurfaced_at` when
+a snooze has expired and `timestamp` otherwise, and the `id` component is the tie-breaker that keeps two rows sharing an
+activity instant from hiding one another. This is the same `(activity_at, id)` contract the SASE store, CLI, and mobile
+gateway use.
+
+Consequences for delivery:
+
+- A notification that was snoozed before it was ever delivered stays muted and undelivered until its deadline, then is
+  delivered exactly once when its resurfaced generation crosses the cursor.
+- A notification that was already delivered and is later snoozed becomes eligible **again** exactly once, when its
+  resurface generation appears. Its original `timestamp` is unchanged, so only the activity cursor makes this possible.
+- Explicitly unmuted and dismissed snoozes never create a resurface generation, so they never produce a second delivery.
+- On first run, outbound initializes the cursor to "now" and sends nothing, preserving first-run backlog suppression.
+- A legacy file containing a bare epoch timestamp is read with a maximal ID component — preserving the old strict
+  timestamp comparison so nothing is re-delivered — and is migrated to the versioned form atomically on that read.
+
+The outbound read prefers the host store's current-state API, which atomically expires due snoozes before projecting, so
+an offline-then-online chop catches up on the next run rather than losing the reminder. Older `sase` installs fall back
+to the equivalent expiring snapshot read.
 
 ## Notification Formatting
 

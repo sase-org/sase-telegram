@@ -158,7 +158,8 @@ documentation](docs/inbound.md#custom-slash-commands) for the script-output cont
 ### Outbound
 
 The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), loads unsent
-notifications using a high-water mark timestamp, and formats them as Telegram MarkdownV2 messages with inline
+notifications using a versioned activity cursor (see [docs/outbound.md](docs/outbound.md#delivery-cursor)), and formats
+them as Telegram MarkdownV2 messages with inline
 keyboards. Plan approvals present every parseable top-level frontmatter field in an ordered **Properties** card before
 the Markdown body. Nested lists and mappings use indented multiline rows; long cards become expandable, and unusually
 large values/body previews are truncated with a clear pointer to the complete plan attachment. Epic review headings
@@ -233,7 +234,7 @@ State files are stored under `~/.sase/telegram/`:
 | `update_offset.txt`         | Last processed Telegram update ID             |
 | `awaiting_feedback.json`    | Active two-step feedback flow state, keyed by Telegram message |
 | `media_groups.json`         | Staged Telegram photo/image-document albums waiting for the quiet window |
-| `last_sent_ts`              | High-water mark for outbound notifications    |
+| `last_sent_ts`              | Versioned `(activity_at, id)` high-water cursor for outbound notifications |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
 | `commands_registered_ts`    | Cached timestamp and fingerprint for Telegram slash command registration |
