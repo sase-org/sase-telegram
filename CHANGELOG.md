@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/sase-org/sase-telegram/compare/v0.4.5...v0.4.6) (2026-08-01)
+
+
+### Features
+
+* **notifications:** deliver resurfaced notifications ([c9c9af6](https://github.com/sase-org/sase-telegram/commit/c9c9af6daca4595599635a953be1e200b5cda1b7))
+
 ## [0.4.5](https://github.com/sase-org/sase-telegram/compare/v0.4.4...v0.4.5) (2026-07-31)
 
 
