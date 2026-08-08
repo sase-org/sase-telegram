@@ -13,6 +13,8 @@ from unittest.mock import patch
 import pytest
 
 from sase.agent.launch_request import create_launch_approval_request
+from sase.bead.model import SnoozeRecord
+from sase.bead.snooze_gate import create_bead_snooze_gate
 from sase.bead.task_gate import create_task_triage_gate
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import (
@@ -358,13 +360,16 @@ def test_task_triage_outbound_renders_tracks_attaches_and_launches(
     assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
         ["🚀 Launch"],
         ["💬 Launch with feedback"],
-        ["✕ Close"],
+        ["✕ Close", "◈ Snooze"],
+        ["💬 Snooze with feedback"],
     ]
     prefix = notification.id[:8]
     assert _button_data(keyboard) == [
         f"gate:{prefix}:c0",
         f"gate:{prefix}:f0",
         f"gate:{prefix}:c1",
+        f"gate:{prefix}:c2",
+        f"gate:{prefix}:f2",
     ]
     assert notification.files == [str(gate.preview_path)]
     send_document.assert_called_once_with("chat-1", str(gate.preview_path))
@@ -590,9 +595,22 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         project="sase",
         title="Exercise every generic form",
     )
+    snooze = create_bead_snooze_gate(
+        request_id="telegram-registry-snooze",
+        bead_id="sase-registry-snooze",
+        project="sase",
+        title="Exercise the snooze generic form",
+        snooze=SnoozeRecord(
+            until="2026-08-09T09:00:00-04:00",
+            snoozed_at="2026-08-06T09:00:00-04:00",
+            snoozed_by="bryanbugyi34@gmail.com",
+            reason="waiting on the upstream fix",
+        ),
+    )
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "task_triage": _stored_notification(task.notification_id),
+        "bead_snooze": _stored_notification(snooze.notification_id),
     }
 
     for kind in registered_gate_kinds():
@@ -820,13 +838,14 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
 
     assert keyboard is not None
     assert [[button.text for button in row] for row in keyboard.inline_keyboard] == [
-        ["✅ Approve", "❌ Reject", "💬 Send Feedback"]
+        ["✅ Approve", "❌ Reject"],
+        ["💬 Reject with feedback"],
     ]
     prefix = notification.id[:8]
     assert _button_data(keyboard) == [
         f"gate:{prefix}:c0",
         f"gate:{prefix}:c1",
-        f"gate:{prefix}:c2",
+        f"gate:{prefix}:f1",
     ]
     assert attachments == notification.files
 
@@ -839,8 +858,10 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
         patch(
             "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
         ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c1"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0k"), {prefix: action})
 
     response = json.loads(result.response_path.read_text(encoding="utf-8"))
     assert response["selected_option_ids"] == ["reject"]
