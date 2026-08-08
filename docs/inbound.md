@@ -132,16 +132,21 @@ count. Large result sets are split across multiple Telegram messages without dro
 
 ## Beads
 
-`/bead` runs `sase bead list --status=open --status=in_progress` across known workspaces from
-`~/.sase/projects/*/<project>.sase` (legacy `.gp` files are also read as a fallback), parses the active results, and
-shows up to 80 picker buttons. The explicit filters disable the CLI's interactive closed-bead fallback: a project with
-only closed beads contributes no buttons, and Telegram reports `No active beads.` when no project has active work.
-`/bead <id>` runs `sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram
-MarkdownV2.
+`/bead` enumerates enabled SASE projects with `sase project list --state=enabled --json`, runs
+`sase bead list --status=open --status=in_progress --format=json` in each returned project workspace, parses the active
+results, and shows up to 80 picker buttons. Project discovery failures, including a missing `sase` executable, nonzero
+`sase project list` exit, malformed JSON, or a non-list JSON payload, are reported in chat and do not fall back to an
+unscoped `sase bead` subprocess in the bot's current working directory. If project discovery succeeds but returns no
+projects, the command keeps the legacy single-context fallback.
+
+The explicit active filters disable the CLI's interactive closed-bead fallback: a project with only closed beads
+contributes no buttons, and Telegram reports `No active beads.` when no project has active work. `/bead <id>` runs
+`sase bead show <id>`, converts the plain-text output to Markdown, then escapes it for Telegram MarkdownV2.
 
 If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project workspace. Without the override,
-picker callbacks carry the source project when possible, and manual detail lookup searches known projects after trying
-the remembered Telegram chat context first.
+picker callbacks carry the source project when possible, and manual detail lookup first tries the remembered Telegram
+chat context. If that context does not resolve the bead, lookup searches the enabled projects returned by
+`sase project list`; discovery failures stop the broad lookup instead of falling back to the bot process directory.
 
 ## Update
 

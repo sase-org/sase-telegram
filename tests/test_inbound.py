@@ -4215,6 +4215,8 @@ class TestXpromptsCommand:
                 with_description=5,
                 with_inputs=0,
                 skills=0,
+                memory=0,
+                refs=0,
                 generated_at=datetime(2026, 4, 24),
             ),
         )
@@ -4296,7 +4298,7 @@ class TestIterKnownProjectWorkspaces:
         with patch.object(
             inbound.subprocess, "run", return_value=completed
         ) as run_mock:
-            projects = inbound._iter_known_project_workspaces()
+            discovery = inbound._iter_known_project_workspaces()
 
         assert run_mock.call_args[0][0] == [
             "sase",
@@ -4305,7 +4307,8 @@ class TestIterKnownProjectWorkspaces:
             "--state=enabled",
             "--json",
         ]
-        assert projects == [
+        assert discovery.ok is True
+        assert discovery.projects == [
             inbound._KnownProjectWorkspace(
                 project="gh_sase-org__sase",
                 workspace="/home/bryan/projects/github/sase-org/sase/",
@@ -4316,32 +4319,65 @@ class TestIterKnownProjectWorkspaces:
             ),
         ]
 
-    def test_returns_empty_on_subprocess_failure(self) -> None:
+    def test_returns_failure_on_subprocess_failure(self) -> None:
         from sase_telegram.scripts import sase_tg_inbound as inbound
 
         completed = SimpleNamespace(returncode=1, stdout="", stderr="boom")
         with patch.object(inbound.subprocess, "run", return_value=completed):
-            assert inbound._iter_known_project_workspaces() == []
+            discovery = inbound._iter_known_project_workspaces()
 
-    def test_returns_empty_on_unparseable_json(self) -> None:
+        assert discovery.ok is False
+        assert discovery.projects == []
+        assert "boom" in discovery.error
+
+    def test_returns_failure_on_unparseable_json(self) -> None:
         from sase_telegram.scripts import sase_tg_inbound as inbound
 
         completed = SimpleNamespace(returncode=0, stdout="not json", stderr="")
         with patch.object(inbound.subprocess, "run", return_value=completed):
-            assert inbound._iter_known_project_workspaces() == []
+            discovery = inbound._iter_known_project_workspaces()
+
+        assert discovery.ok is False
+        assert discovery.projects == []
+        assert "unparseable JSON" in discovery.error
+
+    def test_returns_failure_on_missing_executable(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        with patch.object(inbound.subprocess, "run", side_effect=FileNotFoundError):
+            discovery = inbound._iter_known_project_workspaces()
+
+        assert discovery.ok is False
+        assert discovery.projects == []
+        assert "could not be started" in discovery.error
+
+    def test_returns_failure_on_non_list_json(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        completed = SimpleNamespace(
+            returncode=0, stdout='{"project": "sase"}', stderr=""
+        )
+        with patch.object(inbound.subprocess, "run", return_value=completed):
+            discovery = inbound._iter_known_project_workspaces()
+
+        assert discovery.ok is False
+        assert discovery.projects == []
+        assert "non-list" in discovery.error
 
 
 class TestBeadCommand:
     """Tests for _handle_bead_command."""
 
     def setup_method(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
         self._resolve_patcher = patch(
             "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
             return_value=None,
         )
         self._known_projects_patcher = patch(
             "sase_telegram.scripts.sase_tg_inbound._iter_known_project_workspaces",
-            return_value=[],
+            return_value=inbound._ProjectDiscoveryResult(ok=True, projects=[]),
         )
         self._resolve_patcher.start()
         self._known_projects_patcher.start()
@@ -4544,7 +4580,12 @@ class TestBeadCommand:
 
         with (
             patch.object(
-                inbound, "_iter_known_project_workspaces", return_value=projects
+                inbound,
+                "_iter_known_project_workspaces",
+                return_value=inbound._ProjectDiscoveryResult(
+                    ok=True,
+                    projects=projects,
+                ),
             ),
             patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
             patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
@@ -4701,6 +4742,104 @@ class TestBeadCommand:
 
         tc_mock.send_message.assert_called_once_with("12345", "No active beads.")
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "'sase project list' exited 1: boom",
+            "'sase project list' emitted unparseable JSON",
+            "'sase project list' could not be started",
+        ],
+    )
+    def test_missing_arg_project_discovery_failure_does_not_fallback(
+        self, error: str
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        with (
+            patch.object(
+                inbound,
+                "_iter_known_project_workspaces",
+                return_value=inbound._ProjectDiscoveryResult(
+                    ok=False,
+                    projects=[],
+                    error=error,
+                ),
+            ),
+            patch.object(
+                inbound.subprocess,
+                "run",
+                side_effect=AssertionError("unscoped bead list should not run"),
+            ),
+            patch.object(inbound, "telegram_client") as tc_mock,
+            patch.object(inbound, "credentials") as cred_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            inbound._handle_bead_command("")
+
+        tc_mock.send_message.assert_called_once_with(
+            "12345",
+            f"Could not enumerate SASE projects for /bead: {error}",
+        )
+
+    def test_detail_project_discovery_failure_does_not_fallback(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        error = "'sase project list' emitted unparseable JSON"
+        with (
+            patch.object(
+                inbound,
+                "_iter_known_project_workspaces",
+                return_value=inbound._ProjectDiscoveryResult(
+                    ok=False,
+                    projects=[],
+                    error=error,
+                ),
+            ),
+            patch.object(
+                inbound.subprocess,
+                "run",
+                side_effect=AssertionError("unscoped bead show should not run"),
+            ),
+            patch.object(inbound, "telegram_client") as tc_mock,
+            patch.object(inbound, "credentials") as cred_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            inbound._handle_bead_command("sase-1")
+
+        tc_mock.send_message.assert_called_once()
+        body = tc_mock.send_message.call_args.args[1]
+        assert "Could not enumerate SASE projects for /bead" in body
+        assert "unparseable JSON" in body
+
+    def test_detail_uses_context_before_project_discovery(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        workspace = tmp_path / "sase"
+        workspace.mkdir()
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout="○ sase-1 · Context   [OPEN]\nType: task · Owner: x@y\n",
+            stderr="",
+        )
+        with (
+            patch.object(inbound, "_resolve_bead_cwd", return_value=str(workspace)),
+            patch.object(
+                inbound,
+                "_iter_known_project_workspaces",
+                side_effect=AssertionError("context success should stop lookup"),
+            ),
+            patch.object(inbound.subprocess, "run", return_value=completed) as run_mock,
+            patch.object(inbound, "telegram_client") as tc_mock,
+            patch.object(inbound, "credentials") as cred_mock,
+        ):
+            cred_mock.get_chat_id.return_value = "12345"
+            inbound._handle_bead_command("sase-1")
+
+        run_mock.assert_called_once()
+        assert run_mock.call_args.args[0] == ["sase", "bead", "show", "sase-1"]
+        assert run_mock.call_args.kwargs["cwd"] == str(workspace)
+        assert tc_mock.send_message.call_args.kwargs["parse_mode"] == "MarkdownV2"
+
     def test_active_bead_list_args_request_json(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _ACTIVE_BEAD_LIST_ARGS
 
@@ -4745,7 +4884,12 @@ class TestBeadCommand:
 
         with (
             patch.object(
-                inbound, "_iter_known_project_workspaces", return_value=projects
+                inbound,
+                "_iter_known_project_workspaces",
+                return_value=inbound._ProjectDiscoveryResult(
+                    ok=True,
+                    projects=projects,
+                ),
             ),
             patch.object(inbound, "_run_active_bead_list", return_value=failed),
             patch.object(inbound, "telegram_client") as tc_mock,

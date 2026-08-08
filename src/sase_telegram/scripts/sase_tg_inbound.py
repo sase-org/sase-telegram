@@ -178,6 +178,13 @@ class _KnownProjectWorkspace:
 
 
 @dataclass(frozen=True)
+class _ProjectDiscoveryResult:
+    ok: bool
+    projects: list[_KnownProjectWorkspace]
+    error: str = ""
+
+
+@dataclass(frozen=True)
 class _ProjectBeadEntry:
     project: str | None
     workspace: str | None
@@ -718,7 +725,7 @@ def _resolve_workspace_from_project_file(project: str) -> str | None:
     return _workspace_from_project_file(_project_spec_path(project_dir, project))
 
 
-def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
+def _iter_known_project_workspaces() -> _ProjectDiscoveryResult:
     """Return workspaces for enabled projects, via ``sase project list``.
 
     Enumerating enabled projects through the CLI (rather than globbing
@@ -734,23 +741,40 @@ def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
         )
     except OSError:
         log.warning("Failed to run 'sase project list' to enumerate projects")
-        return []
+        return _ProjectDiscoveryResult(
+            ok=False,
+            projects=[],
+            error="'sase project list' could not be started",
+        )
     if result.returncode != 0:
+        err = result.stderr.strip() or "no stderr"
         log.warning(
             "'sase project list' exited %d: %s",
             result.returncode,
-            result.stderr.strip(),
+            err,
         )
-        return []
+        return _ProjectDiscoveryResult(
+            ok=False,
+            projects=[],
+            error=f"'sase project list' exited {result.returncode}: {err}",
+        )
 
     try:
         records = json.loads(result.stdout)
     except json.JSONDecodeError:
         log.warning("'sase project list' emitted unparseable JSON")
-        return []
+        return _ProjectDiscoveryResult(
+            ok=False,
+            projects=[],
+            error="'sase project list' emitted unparseable JSON",
+        )
     if not isinstance(records, list):
         log.warning("'sase project list' emitted a non-list JSON payload")
-        return []
+        return _ProjectDiscoveryResult(
+            ok=False,
+            projects=[],
+            error="'sase project list' emitted a non-list JSON payload",
+        )
 
     projects: list[_KnownProjectWorkspace] = []
     seen_workspaces: set[str] = set()
@@ -767,7 +791,7 @@ def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
             continue
         seen_workspaces.add(workspace)
         projects.append(_KnownProjectWorkspace(project=project, workspace=workspace))
-    return projects
+    return _ProjectDiscoveryResult(ok=True, projects=projects)
 
 
 def _resolve_workspace_for_project(project: str, source: str) -> str | None:
@@ -3602,6 +3626,13 @@ def _send_bead_subprocess_error(chat_id: str, err: str) -> None:
     )
 
 
+def _send_project_discovery_error(chat_id: str, err: str) -> None:
+    telegram_client.send_message(
+        chat_id,
+        f"Could not enumerate SASE projects for /bead: {err}",
+    )
+
+
 _BEAD_LIST_ERROR_SUMMARY_MAX = 200
 
 
@@ -3729,9 +3760,12 @@ def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
             _render_bead_selection(chat_id, _legacy_bead_entries(result))
             return
 
-        projects = _iter_known_project_workspaces()
-        if projects:
-            entries, errors = _project_bead_entries(projects)
+        discovery = _iter_known_project_workspaces()
+        if not discovery.ok:
+            _send_project_discovery_error(chat_id, discovery.error)
+            return
+        if discovery.projects:
+            entries, errors = _project_bead_entries(discovery.projects)
             if errors and not entries:
                 lines = "\n".join(f"- {err}" for err in errors)
                 telegram_client.send_message(
@@ -3778,22 +3812,37 @@ def _bead_show_result(
     if _bead_project_override():
         return bead_id, _run_bead_command(["show", bead_id], message=message)
 
-    candidate_cwds: list[str | None] = []
+    first_result: subprocess.CompletedProcess[str] | None = None
+    seen_cwds: set[str] = set()
     context_cwd = _resolve_bead_cwd(message=message)
     if context_cwd:
-        candidate_cwds.append(context_cwd)
+        result = _run_bead_command(["show", bead_id], cwd=context_cwd)
+        if result.returncode == 0:
+            return bead_id, result
+        first_result = result
+        seen_cwds = {context_cwd}
 
-    seen_cwds = {cwd for cwd in candidate_cwds if cwd}
-    for known_project in _iter_known_project_workspaces():
+    discovery = _iter_known_project_workspaces()
+    if not discovery.ok:
+        if first_result is not None:
+            return bead_id, first_result
+        return bead_id, subprocess.CompletedProcess(
+            ["sase", "bead", "show", bead_id],
+            1,
+            "",
+            f"Could not enumerate SASE projects for /bead: {discovery.error}",
+        )
+
+    candidate_cwds: list[str] = []
+    for known_project in discovery.projects:
         if known_project.workspace in seen_cwds:
             continue
         seen_cwds.add(known_project.workspace)
         candidate_cwds.append(known_project.workspace)
 
-    if not candidate_cwds:
+    if first_result is None and not candidate_cwds:
         return bead_id, _run_bead_command(["show", bead_id], message=message)
 
-    first_result: subprocess.CompletedProcess[str] | None = None
     for cwd in candidate_cwds:
         result = _run_bead_command(["show", bead_id], cwd=cwd)
         if first_result is None:

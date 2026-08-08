@@ -207,13 +207,16 @@ empty value still disables launches; ignored launch messages are logged without 
 `/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
 
-`/bead` lists active beads across all known SASE projects as picker buttons by running
-`sase bead list --status=open --status=in_progress`. The explicit filters prevent the CLI's interactive closed-bead
-fallback, so projects with only closed beads add no picker entries; if every project has only closed beads, Telegram
-reports `No active beads.` `/bead <id>` runs `sase bead show <id>`, converts the output to Telegram MarkdownV2, and
-sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project
-workspace. Without the override, detail lookup searches known projects and prefers the chat-scoped project remembered
-from recent Telegram launch context.
+`/bead` lists active beads across enabled SASE projects as picker buttons by first running
+`sase project list --state=enabled --json`, then running
+`sase bead list --status=open --status=in_progress --format=json` in each discovered project workspace. Project
+discovery failures are reported in chat and do not fall back to the bot process directory; a successful zero-project
+discovery still uses the legacy single-context fallback. The explicit active filters prevent the CLI's interactive
+closed-bead fallback, so projects with only closed beads add no picker entries; if every project has only closed beads,
+Telegram reports `No active beads.` `/bead <id>` runs `sase bead show <id>`, converts the output to Telegram MarkdownV2,
+and sends the bead details in chat. If `SASE_TELEGRAM_BEAD_PROJECT` is set, bead commands are narrowed to that project
+workspace. Without the override, detail lookup tries the remembered chat-scoped project first and then searches enabled
+projects from `sase project list`; discovery failures stop that broad lookup instead of running an unscoped fallback.
 
 `/update` starts the shared SASE chat update worker in a detached process and immediately replies with the worker log
 path. The worker runs the built-in `sase update --json` engine, using SASE's normal managed-vs-dev update routing, then
