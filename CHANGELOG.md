@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.7](https://github.com/sase-org/sase-telegram/compare/v0.4.6...v0.4.7) (2026-08-08)
+
+
+### Features
+
+* add declared-input step flow for gate options ([afa933b](https://github.com/sase-org/sase-telegram/commit/afa933b2ac74aef579de3b1517df005f8a665355))
+* show Patch terminology in Telegram integration ([3c4f20d](https://github.com/sase-org/sase-telegram/commit/3c4f20d7dd1ee333bb5cb2fce4e53802bfb486e5))
+
+
+### Bug Fixes
+
+* **bead:** fail closed on project discovery errors ([89e73d0](https://github.com/sase-org/sase-telegram/commit/89e73d054fddc4776260347e611ebbebff8c425a))
+* **bead:** parse the JSON list contract and enumerate enabled projects only ([19167fb](https://github.com/sase-org/sase-telegram/commit/19167fbd1ed7a678bb5d29dbcce4b3095603069c))
+
 ## [0.4.6](https://github.com/sase-org/sase-telegram/compare/v0.4.5...v0.4.6) (2026-08-01)
 
 
