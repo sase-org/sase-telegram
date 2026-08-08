@@ -620,6 +620,7 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
     view = SimpleNamespace(
         bundle_path=gate_home,
         branches=(("accept",),),
+        options=(),
     )
     callback = _callback("gate:registry:c0")
 
@@ -1097,3 +1098,487 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
 
     response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
     assert response["selected_option_ids"] == ["commit"]
+
+
+# ---------------------------------------------------------------------------
+# Declared-input step flow (sase-h7.8)
+# ---------------------------------------------------------------------------
+
+
+def _input_option(
+    option_id: str,
+    *,
+    inputs: tuple[dict[str, object], ...] = (),
+    feedback: str = "disabled",
+) -> dict[str, object]:
+    return {
+        "id": option_id,
+        "label": option_id.replace("_", " ").title(),
+        "icon": "✅",
+        "feedback": feedback,
+        "command": {"argv": [f"commands/{option_id}"]},
+        "inputs": list(inputs),
+        "result_schema": {"type": "object"},
+    }
+
+
+def _inputs_gate_spec(
+    *,
+    request_id: str,
+    query: str = "proceed",
+    primary_branch: tuple[str, ...] = ("proceed",),
+    options: tuple[dict[str, object], ...] | None = None,
+    groups: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    resolved_options = options or (_input_option("proceed"),)
+    return {
+        "schema_version": 3,
+        "request_id": request_id,
+        "kind": "custom",
+        "producer": {"agent": "telegram-test"},
+        "payload": {"operation": "restart"},
+        "presentation": {
+            "title": "Declared input request",
+            "icon": "🛡️",
+            "sender": "safety-agent",
+            "notes": ["Provide the requested details."],
+        },
+        "query": query,
+        "primary_branch": list(primary_branch),
+        "options": list(resolved_options),
+        "groups": list(groups),
+        "resources": [
+            {
+                "path": f"commands/{option['id']}",
+                "role": "command",
+                "content": _command_script(f"{option['id']}-done"),
+            }
+            for option in resolved_options
+        ],
+        "auto": False,
+    }
+
+
+def _text_message(text: str, *, message_id: int = 100) -> SimpleNamespace:
+    """A text reply with no reply_to_message, relying on the single-entry fallback."""
+    return SimpleNamespace(
+        text=text,
+        entities=[],
+        message_id=message_id,
+        chat_id="chat-1",
+        reply_to_message=None,
+    )
+
+
+_NOTE_FIELD = {"id": "note", "label": "Note", "type": "line", "required": True}
+_COLOR_FIELD = {
+    "id": "color",
+    "label": "Color",
+    "type": "enum",
+    "required": False,
+    "choices": ["red", "green", "blue"],
+}
+_CONFIRM_FIELD = {
+    "id": "confirm",
+    "label": "Confirm",
+    "type": "bool",
+    "required": False,
+}
+
+
+def test_declared_input_step_flow_collects_values_in_order(gate_home: Path) -> None:
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-order",
+            options=(
+                _input_option(
+                    "proceed", inputs=(_NOTE_FIELD, _COLOR_FIELD, _CONFIRM_FIELD)
+                ),
+            ),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    sent: list[SimpleNamespace] = []
+
+    def _fake_send_message(
+        chat_id: str, text: str, **kwargs: object
+    ) -> SimpleNamespace:
+        message = SimpleNamespace(message_id=200 + len(sent), text=text, **kwargs)
+        sent.append(message)
+        return message
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message",
+            side_effect=_fake_send_message,
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        assert sent[-1].text.startswith("📝 *Input 1/3*")
+
+        _handle_text_message(_text_message("hello there"), {})
+        assert sent[-1].text.startswith("📝 *Input 2/3*")
+        keyboard = sent[-1].reply_markup
+        button_texts = [
+            button.text for row in keyboard.inline_keyboard for button in row
+        ]
+        assert button_texts[:3] == ["red", "green", "blue"]
+
+        _handle_callback(_callback(f"gate:{prefix}:i1v1"), {prefix: action})
+        assert sent[-1].text.startswith("📝 *Input 3/3*")
+
+        _handle_text_message(_text_message("yes"), {})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["selected_option_ids"] == ["proceed"]
+    assert response["option_inputs"] == {
+        "proceed": {"note": "hello there", "color": "green", "confirm": True}
+    }
+
+
+def test_and_group_members_receive_only_their_own_declared_inputs(
+    gate_home: Path,
+) -> None:
+    audit_field = {
+        "id": "note_a",
+        "label": "Audit note",
+        "type": "line",
+        "required": True,
+    }
+    verify_field = {
+        "id": "note_b",
+        "label": "Verify note",
+        "type": "line",
+        "required": True,
+    }
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-and-group",
+            query="(audit AND verify)",
+            primary_branch=("audit", "verify"),
+            options=(
+                _input_option("audit", inputs=(audit_field,)),
+                _input_option("verify", inputs=(verify_field,)),
+            ),
+            groups=(
+                {"options": ["audit", "verify"], "label": "Proceed", "icon": "✅"},
+            ),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:s0"), {prefix: action})
+        _handle_text_message(_text_message("audit note"), {})
+        _handle_text_message(_text_message("verify note"), {})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["selected_option_ids"] == ["audit", "verify"]
+    assert response["option_inputs"] == {
+        "audit": {"note_a": "audit note"},
+        "verify": {"note_b": "verify note"},
+    }
+
+
+def test_invalid_answer_reprompts_same_field_and_leaves_gate_pending(
+    gate_home: Path,
+) -> None:
+    count_field = {
+        "id": "count",
+        "label": "Retry count",
+        "type": "int",
+        "required": True,
+    }
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-invalid",
+            options=(_input_option("proceed", inputs=(count_field,)),),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    sent: list[str] = []
+
+    def _fake_send_message(
+        chat_id: str, text: str, **kwargs: object
+    ) -> SimpleNamespace:
+        sent.append(text)
+        return SimpleNamespace(message_id=300 + len(sent))
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message",
+            side_effect=_fake_send_message,
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_text_message(_text_message("not-a-number"), {})
+
+    assert not (Path(result.bundle_path) / "response.json").exists()
+    assert any("expects int" in message for message in sent)
+    assert sent[-1].startswith("📝 *Input 1/1*")
+
+
+def test_skip_omits_optional_field_and_is_refused_on_required_field(
+    gate_home: Path,
+) -> None:
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-skip",
+            options=(
+                _input_option(
+                    "proceed", inputs=(_NOTE_FIELD, _COLOR_FIELD, _CONFIRM_FIELD)
+                ),
+            ),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0k"), {prefix: action})
+        answer.assert_any_call("callback", "This input is required")
+
+        _handle_text_message(_text_message("hello"), {})
+        _handle_callback(_callback(f"gate:{prefix}:i1k"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i2k"), {prefix: action})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["option_inputs"] == {"proceed": {"note": "hello"}}
+
+
+def test_repeatable_enum_accumulates_toggles_and_submits_on_done(
+    gate_home: Path,
+) -> None:
+    colors_field = {
+        "id": "colors",
+        "label": "Colors",
+        "type": "enum",
+        "required": False,
+        "repeatable": True,
+        "choices": ["red", "green", "blue"],
+    }
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-repeatable",
+            options=(_input_option("proceed", inputs=(colors_field,)),),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0v0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0v2"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0d"), {prefix: action})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["option_inputs"] == {"proceed": {"colors": ["red", "blue"]}}
+
+
+def test_cancel_clears_input_block_and_leaves_gate_answerable(gate_home: Path) -> None:
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-cancel",
+            options=(
+                _input_option(
+                    "proceed", inputs=(_NOTE_FIELD, _COLOR_FIELD, _CONFIRM_FIELD)
+                ),
+            ),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i0c"), {prefix: action})
+        answer.assert_any_call(
+            "callback", "Input cancelled — the gate is still answerable"
+        )
+        assert pending_actions.get(prefix) is not None
+        assert not (Path(result.bundle_path) / "response.json").exists()
+
+        # A re-tap of the original keyboard restarts collection from the first field.
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+        _handle_text_message(_text_message("hello"), {})
+        _handle_callback(_callback(f"gate:{prefix}:i1k"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:i2k"), {prefix: action})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["option_inputs"] == {"proceed": {"note": "hello"}}
+
+
+def test_secret_field_is_refused_with_pointed_message(gate_home: Path) -> None:
+    token_field = {
+        "id": "token",
+        "label": "Token",
+        "type": "word",
+        "required": True,
+        "secret": True,
+    }
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-secret",
+            options=(_input_option("proceed", inputs=(token_field,)),),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+
+    answer.assert_any_call("callback", "Telegram cannot collect secret input: token")
+    assert not (Path(result.bundle_path) / "response.json").exists()
+
+
+def test_gate_without_declared_inputs_still_submits_immediately(
+    gate_home: Path,
+) -> None:
+    result = create_gate(_inputs_gate_spec(request_id="telegram-inputs-none"))
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["selected_option_ids"] == ["proceed"]
+    assert response["option_inputs"] == {"proceed": {}}
+
+
+def test_optional_feedback_with_inputs_collects_both_and_submits(
+    gate_home: Path,
+) -> None:
+    result = create_gate(
+        _inputs_gate_spec(
+            request_id="telegram-inputs-feedback",
+            options=(
+                _input_option("proceed", inputs=(_NOTE_FIELD,), feedback="optional"),
+            ),
+        )
+    )
+    notification = _notification(result, action="CustomGate", sender="safety-agent")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
+        ),
+        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            return_value="chat-1",
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:f0", "feedback"), {prefix: action})
+        _handle_text_message(_text_message("audit context"), {})
+        _handle_text_message(_text_message("please double-check first"), {})
+
+    response = json.loads(
+        (Path(result.bundle_path) / "response.json").read_text(encoding="utf-8")
+    )
+    assert response["selected_option_ids"] == ["proceed"]
+    assert response["feedback"] == "please double-check first"
+    assert response["option_inputs"] == {
+        "proceed": {"note": "audit context", "feedback": "please double-check first"}
+    }

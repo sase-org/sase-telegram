@@ -127,6 +127,7 @@ class ResponseAction:
     selected_option_ids: tuple[str, ...] = ()
     feedback: str | None = None
     input_data: object | None = None
+    option_inputs: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +324,12 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
             return None
         raw_input = info.get("input_data", {})
         input_data = dict(raw_input) if isinstance(raw_input, dict) else {}
-        if info.get("feedback_is_command_input") is True:
-            input_data["feedback"] = text
+        raw_option_inputs = info.get("option_inputs")
+        option_inputs = (
+            {str(key): value for key, value in raw_option_inputs.items()}
+            if isinstance(raw_option_inputs, dict)
+            else None
+        )
         return ResponseAction(
             action_type="gate",
             notif_id_prefix=prefix,
@@ -334,6 +339,7 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
             selected_option_ids=option_ids,
             feedback=text,
             input_data=input_data,
+            option_inputs=option_inputs,
         )
 
     return None
@@ -366,13 +372,23 @@ def resolve_gate_response(
         raise GateError(
             "invalid_request", "selected_option_ids", "gate selection is missing"
         )
-    execution = execute_gate_selection(
-        bundle.root,
-        response.selected_option_ids,
-        {} if response.input_data is None else response.input_data,
-        feedback=response.feedback,
-        source="telegram",
-    )
+    if response.option_inputs is not None:
+        execution = execute_gate_selection(
+            bundle.root,
+            response.selected_option_ids,
+            None,
+            feedback=response.feedback,
+            source="telegram",
+            option_inputs=response.option_inputs,
+        )
+    else:
+        execution = execute_gate_selection(
+            bundle.root,
+            response.selected_option_ids,
+            {} if response.input_data is None else response.input_data,
+            feedback=response.feedback,
+            source="telegram",
+        )
     if execution.already_completed:
         raise GateError(
             "already_answered", response.notif_id_prefix, "gate is already answered"

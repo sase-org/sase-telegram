@@ -180,7 +180,6 @@ class TestProcessTextMessage:
                 "bundle_path": str(tmp_path),
                 "selected_option_ids": ["feedback"],
                 "input_data": {},
-                "feedback_is_command_input": True,
             },
         )
         result = process_text_message("Please fix the typo on line 5")
@@ -189,7 +188,10 @@ class TestProcessTextMessage:
         assert result.notif_id_prefix == "gate0001"
         assert result.selected_option_ids == ("feedback",)
         assert result.feedback == "Please fix the typo on line 5"
-        assert result.input_data == {"feedback": "Please fix the typo on line 5"}
+        # The old feedback_is_command_input heuristic is gone; the executor now
+        # injects the note wherever the option's schema declares it.
+        assert result.input_data == {}
+        assert result.option_inputs is None
         assert result.response_path == tmp_path / "response.json"
 
     def test_with_question_awaiting(self, tmp_path: Path) -> None:
@@ -2478,7 +2480,7 @@ class TestAwaitingFeedbackState:
                 "bundle_path": str(gate_bundle),
                 "selected_option_ids": ["feedback"],
                 "input_data": {},
-                "feedback_is_command_input": False,
+                "option_inputs": {"feedback": {"note": "context"}},
             },
         )
         save_awaiting_feedback(
@@ -2497,6 +2499,7 @@ class TestAwaitingFeedbackState:
         assert result.notif_id_prefix == "gate0001"
         assert result.selected_option_ids == ("feedback",)
         assert result.feedback == "fix it"
+        assert result.option_inputs == {"feedback": {"note": "context"}}
 
     def test_process_text_message_ambiguous_returns_none(self, tmp_path: Path) -> None:
         save_awaiting_feedback("42", "a", {"action_type": "gate"})

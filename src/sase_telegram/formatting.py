@@ -20,6 +20,7 @@ from sase.core.output_variable_values import coerce_var_map
 from sase.notification_gates.models import GateOption
 from sase.notification_gates.registry import adapter_for_action
 from sase.notifications.models import Notification
+from sase.xprompt.models import InputType
 
 from sase_telegram import callback_data
 from sase_telegram.gate_flow import (
@@ -33,6 +34,7 @@ from sase_telegram.gate_flow import (
     option_for_id,
     option_index,
 )
+from sase_telegram.gate_inputs import GateInputStep, encode_input_token
 from sase_telegram.question_flow import (
     CUSTOM_SELECTED_LABEL,
     is_multi_select,
@@ -1116,6 +1118,92 @@ def render_gate_keyboard(
         rows.append(submit_row)
 
     flush_singletons()
+    return InlineKeyboardMarkup(rows)
+
+
+def _gate_input_header(step: GateInputStep) -> str:
+    return f"📝 *Input {step.position}/{step.total}*"
+
+
+def format_gate_input_prompt(step: GateInputStep) -> str:
+    """Render one declared-input step prompt for the Telegram step flow."""
+    field = step.field
+    lines = [
+        _gate_input_header(step),
+        "",
+        f"*{escape_markdown_v2(field.label)}*",
+        f"_{escape_markdown_v2(field.type.value)}_",
+    ]
+    if field.help:
+        lines.append(escape_markdown_v2(field.help))
+    if field.placeholder:
+        lines.append(escape_markdown_v2(f"Example: {field.placeholder}"))
+    if not field.required:
+        lines.append(escape_markdown_v2("Optional — use Skip to leave it unset."))
+    if field.repeatable and field.type is not InputType.ENUM:
+        lines.append(escape_markdown_v2("Send one value per line."))
+    return "\n".join(lines)
+
+
+def render_gate_input_keyboard(
+    prefix: str, step: GateInputStep, values: Mapping[str, Any]
+) -> InlineKeyboardMarkup:
+    """Render the keyboard for one declared-input step."""
+    field = step.field
+    rows: list[list[InlineKeyboardButton]] = []
+
+    if field.type is InputType.ENUM:
+        selected = set(
+            values.get(field.id, []) if field.repeatable else [values.get(field.id)]
+        )
+        for choice_index, choice in enumerate(field.choices):
+            text = choice.label or choice.value
+            if field.repeatable:
+                checked = "☑️" if choice.value in selected else "⬜"
+                text = f"{checked} {text}"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text,
+                        callback_data=callback_data.encode(
+                            "gate",
+                            prefix,
+                            encode_input_token(step.index, f"v{choice_index}"),
+                        ),
+                    )
+                ]
+            )
+        if field.repeatable:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        "✅ Done",
+                        callback_data=callback_data.encode(
+                            "gate", prefix, encode_input_token(step.index, "d")
+                        ),
+                    )
+                ]
+            )
+
+    control_row: list[InlineKeyboardButton] = []
+    if not field.required:
+        control_row.append(
+            InlineKeyboardButton(
+                "⏭️ Skip",
+                callback_data=callback_data.encode(
+                    "gate", prefix, encode_input_token(step.index, "k")
+                ),
+            )
+        )
+    control_row.append(
+        InlineKeyboardButton(
+            "✖️ Cancel",
+            callback_data=callback_data.encode(
+                "gate", prefix, encode_input_token(step.index, "c")
+            ),
+        )
+    )
+    rows.append(control_row)
     return InlineKeyboardMarkup(rows)
 
 

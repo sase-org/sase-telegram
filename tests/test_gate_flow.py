@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -12,11 +13,11 @@ from sase_telegram.gate_flow import (
     GateProgress,
     GateView,
     expand_branch,
-    feedback_is_command_input,
     feedback_mode,
     initial_progress,
     load_progress,
     progress_path,
+    save_progress,
     toggle_option,
 )
 from sase_telegram.formatting import render_gate_keyboard
@@ -299,4 +300,68 @@ def test_selection_feedback_contract_uses_strongest_mode(tmp_path: Path) -> None
     )
 
     assert feedback_mode(view, ("approve", "feedback")) == "required"
-    assert feedback_is_command_input(view, ("feedback",)) is True
+
+
+def test_input_block_round_trips_through_save_and_load(tmp_path: Path) -> None:
+    view = _view(
+        tmp_path,
+        options=(_option("approve"), _option("commit")),
+        branches=(("approve", "commit"),),
+        groups=(_group("approve", "commit"),),
+    )
+    progress = replace(
+        initial_progress(view, active_message_id=42, chat_id="chat-1"),
+        input_option_ids=("approve",),
+        input_field_index=1,
+        input_values={"note": "hello"},
+        input_feedback_requested=True,
+    )
+
+    save_progress(view, progress)
+    loaded = load_progress(view, active_message_id=42, chat_id="chat-1")
+
+    assert loaded.input_option_ids == ("approve",)
+    assert loaded.input_field_index == 1
+    assert loaded.input_values == {"note": "hello"}
+    assert loaded.input_feedback_requested is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"input_field_index": -1}, id="bad-index"),
+        pytest.param({"input_option_ids": "approve"}, id="non-list-option-ids"),
+        pytest.param({"input_option_ids": ["missing"]}, id="undeclared-option-id"),
+    ],
+)
+def test_malformed_input_block_resets_while_leaving_branch_selection_intact(
+    tmp_path: Path,
+    overrides: dict[str, object],
+) -> None:
+    view = _view(
+        tmp_path,
+        options=(_option("approve"), _option("commit")),
+        branches=(("approve", "commit"),),
+        groups=(_group("approve", "commit"),),
+    )
+    payload = {
+        "selected_option_ids": ["approve", "commit"],
+        "expanded_branch_index": 0,
+        "active_message_id": 42,
+        "chat_id": "chat-1",
+        "input_option_ids": ["approve"],
+        "input_field_index": 0,
+        "input_values": {},
+        "input_feedback_requested": False,
+    }
+    payload.update(overrides)
+    progress_path(view).write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_progress(view, active_message_id=42, chat_id="chat-1")
+
+    assert loaded.input_option_ids == ()
+    assert loaded.input_field_index is None
+    assert loaded.input_values is None
+    assert loaded.input_feedback_requested is False
+    assert loaded.selected_option_ids == ("approve", "commit")
+    assert loaded.expanded_branch_index == 0

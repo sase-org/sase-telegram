@@ -42,6 +42,10 @@ class GateProgress:
     expanded_branch_index: int | None = None
     active_message_id: int | None = None
     chat_id: str | None = None
+    input_option_ids: tuple[str, ...] = ()
+    input_field_index: int | None = None
+    input_values: dict[str, Any] | None = None
+    input_feedback_requested: bool = False
 
 
 def load_gate_view(
@@ -191,11 +195,54 @@ def load_progress(
                 for option_id in view.branches[expanded]
                 if option_id in selected_set
             )
+    input_option_ids, input_field_index, input_values, input_feedback_requested = (
+        _load_input_block(view, raw)
+    )
     return GateProgress(
         selected_option_ids=selected_ids,
         expanded_branch_index=expanded,
         active_message_id=saved_message_id,
         chat_id=saved_chat_id,
+        input_option_ids=input_option_ids,
+        input_field_index=input_field_index,
+        input_values=input_values,
+        input_feedback_requested=input_feedback_requested,
+    )
+
+
+def _load_input_block(
+    view: GateView, raw: Mapping[str, Any]
+) -> tuple[tuple[str, ...], int | None, dict[str, Any] | None, bool]:
+    """Recover the declared-input block, resetting to empty on any corruption."""
+    empty: tuple[tuple[str, ...], int | None, dict[str, Any] | None, bool] = (
+        (),
+        None,
+        None,
+        False,
+    )
+    raw_option_ids = raw.get("input_option_ids")
+    if not (
+        isinstance(raw_option_ids, list)
+        and raw_option_ids
+        and all(isinstance(item, str) for item in raw_option_ids)
+    ):
+        return empty
+    declared_ids = {option.id for option in view.options}
+    if not all(option_id in declared_ids for option_id in raw_option_ids):
+        return empty
+    raw_index = raw.get("input_field_index")
+    if not isinstance(raw_index, int) or isinstance(raw_index, bool) or raw_index < 0:
+        return empty
+    raw_values = raw.get("input_values")
+    if raw_values is not None and not (
+        isinstance(raw_values, dict) and all(isinstance(key, str) for key in raw_values)
+    ):
+        return empty
+    return (
+        tuple(raw_option_ids),
+        raw_index,
+        dict(raw_values) if isinstance(raw_values, dict) else None,
+        raw.get("input_feedback_requested") is True,
     )
 
 
@@ -208,6 +255,10 @@ def save_progress(view: GateView, progress: GateProgress) -> None:
         "expanded_branch_index": progress.expanded_branch_index,
         "active_message_id": progress.active_message_id,
         "chat_id": progress.chat_id,
+        "input_option_ids": list(progress.input_option_ids),
+        "input_field_index": progress.input_field_index,
+        "input_values": progress.input_values,
+        "input_feedback_requested": progress.input_feedback_requested,
     }
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
@@ -321,20 +372,6 @@ def feedback_mode(
     options = [option_for_id(view, option_id) for option_id in selected_option_ids]
     available = [option.feedback for option in options if option is not None]
     return max(available, key=ranks.__getitem__) if available else "disabled"
-
-
-def feedback_is_command_input(
-    view: GateView, selected_option_ids: Sequence[str]
-) -> bool:
-    """Return whether a selected option requires feedback in its command input."""
-    for option_id in selected_option_ids:
-        option = option_for_id(view, option_id)
-        if option is None:
-            continue
-        required = option.input_schema.get("required")
-        if isinstance(required, list) and "feedback" in required:
-            return True
-    return False
 
 
 def _token_index(token: str, prefix: str) -> int | None:

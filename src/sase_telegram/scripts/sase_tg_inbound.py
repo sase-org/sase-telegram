@@ -52,6 +52,7 @@ from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
 from sase.user_question_actions import UserQuestionActionError
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import adapter_for_action
+from sase.xprompt.models import InputType, XPromptValidationError
 from sase_telegram.formatting import (
     build_fork_copy_text,
     display_cl_name,
@@ -60,8 +61,10 @@ from sase_telegram.formatting import (
     display_vcs_refs_in_text,
     escape_markdown_v2,
     format_answered_question,
+    format_gate_input_prompt,
     format_questions_complete,
     markdown_to_telegram_v2,
+    render_gate_input_keyboard,
     render_gate_keyboard,
     render_question_message,
 )
@@ -71,13 +74,25 @@ from sase_telegram.gate_flow import (
     branch_for_token,
     clear_progress as clear_gate_progress,
     expand_branch,
-    feedback_is_command_input,
     feedback_mode,
     load_gate_view,
     load_progress as load_gate_progress,
     option_for_id,
     save_progress as save_gate_progress,
     toggle_option,
+)
+from sase_telegram.gate_inputs import (
+    advance,
+    apply_choice,
+    apply_text_answer,
+    begin_input,
+    clear_input,
+    current_step,
+    decode_input_token,
+    pending_fields,
+    skip_step,
+    submitted_option_inputs,
+    unsupported_fields,
 )
 from sase_telegram.inbound import (
     IMAGES_DIR,
@@ -1289,16 +1304,28 @@ def _execute_gate_callback_response(
     action: dict[str, Any],
     response: ResponseAction,
     view: GateView,
+    *,
+    message: Any | None = None,
 ) -> None:
     try:
-        message = _resolve_response(response, action)
+        result_message = _resolve_response(response, action)
     except GateError as exc:
         _answer_callback(callback_query, _gate_error_answer_text(exc))
+        if message is not None:
+            chat_id = _message_chat_id(message) or _configured_chat_id()
+            if chat_id is not None:
+                telegram_client.send_message(
+                    chat_id,
+                    _gate_error_answer_text(exc),
+                    reply_to_message_id=message.message_id,
+                )
         if exc.code in {"already_answered", "gate_cancelled", "not_found"}:
             _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
             clear_gate_progress(view)
         return
-    _answer_callback(callback_query, message or "Gate answered")
+    _answer_callback(callback_query, result_message or "Gate answered")
+    if message is not None:
+        _send_confirmation(response, message.message_id)
     _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
     clear_gate_progress(view)
 
@@ -1310,6 +1337,8 @@ def _begin_gate_feedback(
     view: GateView,
     progress: GateProgress,
     selected_option_ids: tuple[str, ...],
+    *,
+    option_inputs: dict[str, dict[str, Any]],
 ) -> None:
     if not selected_option_ids:
         _answer_callback(callback_query, "Select at least one option")
@@ -1328,10 +1357,7 @@ def _begin_gate_feedback(
             "action_type": "gate",
             "bundle_path": str(view.bundle_path),
             "selected_option_ids": list(selected_option_ids),
-            "input_data": {},
-            "feedback_is_command_input": feedback_is_command_input(
-                view, selected_option_ids
-            ),
+            "option_inputs": option_inputs,
         },
     )
     _answer_callback(callback_query, "Send the required feedback as a text message")
@@ -1341,6 +1367,237 @@ def _begin_gate_feedback(
         telegram_client.edit_message_reply_markup(
             chat_id, message_id, reply_markup=None
         )
+
+
+def _start_or_submit_gate_selection(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+    selected_option_ids: tuple[str, ...],
+    *,
+    feedback_requested: bool,
+) -> None:
+    """Open declared-input collection for a committed selection, or submit it."""
+    try:
+        fields = pending_fields(view, selected_option_ids)
+    except GateError as exc:
+        _answer_callback(callback_query, str(exc))
+        return
+    secret_fields = unsupported_fields(fields)
+    if secret_fields:
+        ids = ", ".join(field.id for field in secret_fields)
+        _answer_callback(callback_query, f"Telegram cannot collect secret input: {ids}")
+        return
+
+    if not fields:
+        option_inputs: dict[str, dict[str, Any]] = {
+            option_id: {} for option_id in selected_option_ids
+        }
+        if feedback_requested:
+            _begin_gate_feedback(
+                callback_query,
+                action,
+                prefix,
+                view,
+                progress,
+                selected_option_ids,
+                option_inputs=option_inputs,
+            )
+            return
+        response = ResponseAction(
+            action_type="gate",
+            notif_id_prefix=prefix,
+            response_path=view.bundle_path / "response.json",
+            response_data={},
+            answer_text=None,
+            selected_option_ids=selected_option_ids,
+            option_inputs=option_inputs,
+        )
+        _execute_gate_callback_response(callback_query, action, response, view)
+        return
+
+    progress = replace(progress, selected_option_ids=selected_option_ids)
+    progress = begin_input(
+        progress, selected_option_ids, feedback_requested=feedback_requested
+    )
+    save_gate_progress(view, progress)
+    chat_id = _callback_chat_id(callback_query, action)
+    if chat_id is None:
+        _answer_callback(callback_query, "This request has expired")
+        return
+    _send_gate_input_prompt(prefix, view, progress, chat_id=chat_id)
+    _answer_callback(callback_query, "Answer the input prompt below")
+
+
+def _send_gate_input_prompt(
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+    *,
+    chat_id: str,
+) -> None:
+    """Send the current input step as a new message and re-point the awaiting entry."""
+    step = current_step(view, progress)
+    if step is None:
+        return
+    text = format_gate_input_prompt(step)
+    keyboard = render_gate_input_keyboard(prefix, step, progress.input_values or {})
+    sent = telegram_client.send_message(
+        chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
+    )
+    clear_awaiting_feedback_by_prefix(prefix)
+    save_awaiting_feedback(
+        str(sent.message_id),
+        prefix,
+        {
+            "action_type": "gate_input",
+            "bundle_path": str(view.bundle_path),
+        },
+    )
+
+
+def _handle_gate_input_callback(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+) -> None:
+    """Handle one compact ``i<index><verb>`` callback for the input step flow."""
+    cb = decode(callback_query.data)
+    decoded = decode_input_token(cb.choice)
+    if decoded is None:
+        _answer_callback(callback_query, "Invalid gate callback")
+        return
+    token_index, verb = decoded
+
+    prompt_message = getattr(callback_query, "message", None)
+    prompt_chat_id = _message_chat_id(prompt_message)
+    prompt_message_id = _message_id(prompt_message)
+
+    if verb == "c":
+        progress = clear_input(progress)
+        save_gate_progress(view, progress)
+        _clear_awaiting_feedback_entry(None, prefix)
+        if prompt_chat_id is not None and prompt_message_id:
+            telegram_client.edit_message_reply_markup(
+                prompt_chat_id, prompt_message_id, reply_markup=None
+            )
+        _answer_callback(
+            callback_query, "Input cancelled — the gate is still answerable"
+        )
+        return
+
+    step = current_step(view, progress)
+    if step is None or step.index != token_index:
+        _answer_callback(callback_query, "This input step is no longer active")
+        return
+
+    field = step.field
+    values = progress.input_values or {}
+
+    if verb == "k":
+        if field.required:
+            _answer_callback(callback_query, "This input is required")
+            return
+        progress = replace(progress, input_values=skip_step(values, field))
+        _advance_gate_input(callback_query, action, prefix, view, progress)
+        return
+
+    if verb == "d":
+        if not (field.repeatable and field.type is InputType.ENUM):
+            _answer_callback(callback_query, "Invalid gate callback")
+            return
+        if field.required and not values.get(field.id):
+            _answer_callback(callback_query, "Select at least one option")
+            return
+        _advance_gate_input(callback_query, action, prefix, view, progress)
+        return
+
+    choice_index = int(verb[1:])
+    if field.type is not InputType.ENUM or not (0 <= choice_index < len(field.choices)):
+        _answer_callback(callback_query, "Invalid gate callback")
+        return
+    value = field.choices[choice_index].value
+    new_values, selected_now = apply_choice(values, field, value)
+    progress = replace(progress, input_values=new_values)
+    if field.repeatable:
+        save_gate_progress(view, progress)
+        if prompt_chat_id is not None and prompt_message_id:
+            telegram_client.edit_message_reply_markup(
+                prompt_chat_id,
+                prompt_message_id,
+                reply_markup=render_gate_input_keyboard(
+                    prefix, step, progress.input_values or {}
+                ),
+            )
+        _answer_callback(callback_query, "Selected" if selected_now else "Removed")
+        return
+    if prompt_chat_id is not None and prompt_message_id:
+        telegram_client.edit_message_reply_markup(
+            prompt_chat_id, prompt_message_id, reply_markup=None
+        )
+    _advance_gate_input(callback_query, action, prefix, view, progress)
+
+
+def _advance_gate_input(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+    *,
+    message: Any | None = None,
+) -> None:
+    """Move past the current input step, sending the next prompt or submitting."""
+    progress = advance(progress)
+    save_gate_progress(view, progress)
+    step = current_step(view, progress)
+    if step is not None:
+        chat_id = (
+            _callback_chat_id(callback_query, action)
+            if callback_query is not None
+            else (_message_chat_id(message) or _configured_chat_id())
+        )
+        if chat_id is None:
+            return
+        _send_gate_input_prompt(prefix, view, progress, chat_id=chat_id)
+        _answer_callback(callback_query, "Answer the input prompt below")
+        return
+
+    option_inputs = submitted_option_inputs(view, progress)
+    selected_option_ids = progress.input_option_ids
+    feedback_requested = progress.input_feedback_requested
+    progress = clear_input(progress)
+    save_gate_progress(view, progress)
+    _clear_awaiting_feedback_entry(None, prefix)
+
+    if feedback_requested:
+        _begin_gate_feedback(
+            callback_query,
+            action,
+            prefix,
+            view,
+            progress,
+            selected_option_ids,
+            option_inputs=option_inputs,
+        )
+        return
+
+    response = ResponseAction(
+        action_type="gate",
+        notif_id_prefix=prefix,
+        response_path=view.bundle_path / "response.json",
+        response_data={},
+        answer_text=None,
+        selected_option_ids=selected_option_ids,
+        option_inputs=option_inputs,
+    )
+    _execute_gate_callback_response(
+        callback_query, action, response, view, message=message
+    )
 
 
 def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
@@ -1374,6 +1631,13 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         active_message_id=message_id,
         chat_id=chat_id,
     )
+
+    if cb.choice.startswith("i"):
+        _handle_gate_input_callback(
+            callback_query, action, cb.notif_id_prefix, view, progress
+        )
+        return
+
     selected_option_ids: tuple[str, ...] | None = None
     branch_result = branch_for_token(view, cb.choice, prefix="c")
     if branch_result is not None:
@@ -1437,13 +1701,14 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         if feedback_mode(view, selected_option_ids) == "disabled":
             _answer_callback(callback_query, "This option does not accept feedback")
             return
-        _begin_gate_feedback(
+        _start_or_submit_gate_selection(
             callback_query,
             action,
             cb.notif_id_prefix,
             view,
             progress,
             selected_option_ids,
+            feedback_requested=True,
         )
         return
 
@@ -1464,26 +1729,15 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
     if not selected_option_ids:
         _answer_callback(callback_query, "Select at least one option")
         return
-    if feedback_mode(view, selected_option_ids) == "required":
-        _begin_gate_feedback(
-            callback_query,
-            action,
-            cb.notif_id_prefix,
-            view,
-            progress,
-            selected_option_ids,
-        )
-        return
-    response = ResponseAction(
-        action_type="gate",
-        notif_id_prefix=cb.notif_id_prefix,
-        response_path=view.bundle_path / "response.json",
-        response_data={},
-        answer_text=None,
-        selected_option_ids=selected_option_ids,
-        input_data={},
+    _start_or_submit_gate_selection(
+        callback_query,
+        action,
+        cb.notif_id_prefix,
+        view,
+        progress,
+        selected_option_ids,
+        feedback_requested=(feedback_mode(view, selected_option_ids) == "required"),
     )
-    _execute_gate_callback_response(callback_query, action, response, view)
 
 
 def _resolve_callback_already_handled(
@@ -3703,6 +3957,78 @@ def _send_stale_awaiting_feedback_reply(message: Any) -> None:
         log.warning("Failed to send stale feedback reply", exc_info=True)
 
 
+def _handle_gate_input_text_message(
+    message: Any,
+    text: str,
+    *,
+    reply_key: str | None,
+) -> bool:
+    """Complete one declared-input step when the user sends a text reply."""
+    awaiting = load_awaiting_feedback(reply_key)
+    if not awaiting:
+        return False
+    info = awaiting.get("action_info")
+    if not isinstance(info, dict) or info.get("action_type") != "gate_input":
+        return False
+
+    prefix = awaiting.get("prefix")
+    bundle_path = info.get("bundle_path")
+    if not isinstance(prefix, str) or not isinstance(bundle_path, str):
+        return False
+
+    action = pending_actions.get(prefix)
+    chat_id = _message_chat_id(message)
+    if chat_id is None and action and action.get("chat_id") is not None:
+        chat_id = str(action["chat_id"])
+    if chat_id is None:
+        chat_id = _configured_chat_id()
+    if chat_id is None:
+        return True
+
+    def _reply(reply_text: str) -> None:
+        telegram_client.send_message(
+            chat_id, reply_text, reply_to_message_id=message.message_id
+        )
+
+    action_data = action.get("action_data") if isinstance(action, dict) else None
+    response_path = Path(bundle_path) / "response.json"
+    if action is None or not isinstance(action_data, dict) or response_path.exists():
+        _clear_awaiting_feedback_entry(reply_key, prefix)
+        pending_actions.remove(prefix)
+        _reply(_STALE_AWAITING_FEEDBACK_TEXT)
+        return True
+
+    try:
+        view = load_gate_view(action_data)
+    except GateError as exc:
+        _clear_awaiting_feedback_entry(reply_key, prefix)
+        pending_actions.remove(prefix)
+        _reply(_gate_error_answer_text(exc))
+        return True
+
+    progress = load_gate_progress(view)
+    step = current_step(view, progress)
+    if step is None:
+        _clear_awaiting_feedback_entry(reply_key, prefix)
+        _reply("This input step is no longer active")
+        return True
+
+    if step.field.type is InputType.ENUM:
+        _reply("Choose one of the buttons above")
+        return True
+
+    try:
+        new_values = apply_text_answer(progress.input_values or {}, step.field, text)
+    except XPromptValidationError as exc:
+        _reply(str(exc))
+        _send_gate_input_prompt(prefix, view, progress, chat_id=chat_id)
+        return True
+
+    progress = replace(progress, input_values=new_values)
+    _advance_gate_input(None, action, prefix, view, progress, message=message)
+    return True
+
+
 def _handle_text_message(
     message: Any,
     custom_commands: dict[str, CustomCommand] | None = None,
@@ -3732,6 +4058,9 @@ def _handle_text_message(
         return
 
     if _handle_question_text_message(message, text, reply_key=reply_key):
+        return
+
+    if _handle_gate_input_text_message(message, text, reply_key=reply_key):
         return
 
     response = process_text_message(text, key=reply_key)
