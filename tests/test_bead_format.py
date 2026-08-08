@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from textwrap import dedent
 
 from sase_telegram.bead_format import (
     BeadListEntry,
     bead_show_to_markdown,
-    parse_bead_list_output,
+    parse_bead_list_json,
 )
 
 
@@ -158,18 +159,39 @@ def test_description_multiline_reflow() -> None:
     assert "first line\nsecond line" in md
 
 
-class TestParseBeadListOutput:
-    """Tests for parse_bead_list_output."""
+def _envelope(results: list[dict[str, object]]) -> str:
+    return json.dumps(
+        {"count": len(results), "total": len(results), "results": results}
+    )
 
-    def test_typical_list(self) -> None:
-        raw = dedent(
-            """\
-            ○ sase-13 · DELTAS ChangeSpec Field
-            ◐ sase-13.5 · Phase 5: Lifecycle Wiring ← sase-13
-            ✓ sase-13.1 · Phase 1: Data Model ← sase-13
-            """
+
+class TestParseBeadListJson:
+    """Tests for parse_bead_list_json."""
+
+    def test_typical_envelope(self) -> None:
+        raw = _envelope(
+            [
+                {
+                    "id": "sase-13",
+                    "title": "DELTAS ChangeSpec Field",
+                    "status": "open",
+                    "parent_id": None,
+                },
+                {
+                    "id": "sase-13.5",
+                    "title": "Phase 5: Lifecycle Wiring",
+                    "status": "in_progress",
+                    "parent_id": "sase-13",
+                },
+                {
+                    "id": "sase-13.1",
+                    "title": "Phase 1: Data Model",
+                    "status": "closed",
+                    "parent_id": "sase-13",
+                },
+            ]
         )
-        entries = parse_bead_list_output(raw)
+        entries = parse_bead_list_json(raw)
         assert entries == [
             BeadListEntry(
                 icon="○",
@@ -191,35 +213,31 @@ class TestParseBeadListOutput:
             ),
         ]
 
-    def test_empty_no_issues_found(self) -> None:
-        assert parse_bead_list_output("No issues found.\n") == []
+    def test_empty_results(self) -> None:
+        assert parse_bead_list_json(_envelope([])) == []
 
-    def test_blank_input(self) -> None:
-        assert parse_bead_list_output("") == []
-        assert parse_bead_list_output("\n\n") == []
+    def test_malformed_non_dict_payload(self) -> None:
+        assert parse_bead_list_json("[]") == []
+        assert parse_bead_list_json("not json") == []
+        assert parse_bead_list_json("") == []
+        assert parse_bead_list_json(json.dumps({"no_results_key": True})) == []
+        assert parse_bead_list_json(json.dumps({"results": "not-a-list"})) == []
 
-    def test_unicode_icons_preserved(self) -> None:
-        raw = "⊘ sase-9 · Cancelled\n"
-        entries = parse_bead_list_output(raw)
+    def test_record_missing_optional_keys(self) -> None:
+        raw = _envelope([{"id": "sase-9", "status": "snoozed"}])
+        entries = parse_bead_list_json(raw)
         assert len(entries) == 1
-        assert entries[0].icon == "⊘"
+        assert entries[0].icon == "◈"
         assert entries[0].bead_id == "sase-9"
-        assert entries[0].title == "Cancelled"
+        assert entries[0].title == ""
         assert entries[0].parent_id is None
 
-    def test_malformed_lines_skipped(self) -> None:
-        raw = dedent(
-            """\
-            this line has no separator
-            ○ sase-1 · Real Bead
-            another bogus line
-            """
-        )
-        entries = parse_bead_list_output(raw)
-        assert len(entries) == 1
-        assert entries[0].bead_id == "sase-1"
+    def test_unknown_status_falls_back_to_default_icon(self) -> None:
+        raw = _envelope([{"id": "sase-1", "title": "Odd", "status": "bogus-status"}])
+        entries = parse_bead_list_json(raw)
+        assert entries[0].icon == "•"
 
-    def test_id_with_colon_skipped(self) -> None:
-        raw = "○ bad:id · Title\n○ sase-2 · Good\n"
-        entries = parse_bead_list_output(raw)
+    def test_record_missing_id_skipped(self) -> None:
+        raw = _envelope([{"title": "No id"}, {"id": "sase-2", "title": "Good"}])
+        entries = parse_bead_list_json(raw)
         assert [e.bead_id for e in entries] == ["sase-2"]

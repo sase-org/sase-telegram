@@ -7,8 +7,10 @@ MarkdownV2 escaping before being sent to Telegram.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
 # Header line: "<icon> <id> · <title>   [STATUS]"
 _HEADER_RE = re.compile(
@@ -256,35 +258,56 @@ class BeadListEntry:
     parent_id: str | None
 
 
-_BEAD_LIST_LINE_RE = re.compile(
-    r"^(?P<icon>\S+)\s+(?P<id>\S+)\s+·\s+(?P<title>.+?)"
-    r"(?:\s+←\s+(?P<parent>\S+))?$"
-)
+def _status_icon(status: str) -> str:
+    try:
+        from sase.bead_status_presentation import bead_status_presentation
+    except ImportError:
+        return "•"
+    try:
+        return bead_status_presentation(status).glyph
+    except Exception:
+        return "•"
 
 
-def parse_bead_list_output(raw: str) -> list[BeadListEntry]:
-    """Parse the plain-text output of ``sase bead list`` into entries.
+def parse_bead_list_json(raw: str) -> list[BeadListEntry]:
+    """Parse the ``sase bead list --format=json`` envelope into entries.
 
-    Skips blank lines, the literal ``No issues found.`` sentinel, and any
-    unparseable lines (forward-compat with future format additions).
+    Degrades to an empty list for a malformed payload (non-JSON, a non-dict
+    envelope, or a missing ``results`` key) rather than raising, so a
+    contract drift shows up as "no beads for this project" instead of a
+    crash.
     """
+    try:
+        envelope: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(envelope, dict):
+        return []
+    results = envelope.get("results")
+    if not isinstance(results, list):
+        return []
+
     entries: list[BeadListEntry] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped == "No issues found.":
+    for record in results:
+        if not isinstance(record, dict):
             continue
-        m = _BEAD_LIST_LINE_RE.match(stripped)
-        if not m:
+        bead_id = record.get("id")
+        if not isinstance(bead_id, str) or not bead_id:
             continue
-        bead_id = m.group("id")
-        if ":" in bead_id:
-            continue
+        title = record.get("title")
+        if not isinstance(title, str):
+            title = ""
+        parent_id = record.get("parent_id")
+        if not isinstance(parent_id, str):
+            parent_id = None
+        status = record.get("status")
+        icon = _status_icon(status) if isinstance(status, str) else "•"
         entries.append(
             BeadListEntry(
-                icon=m.group("icon"),
+                icon=icon,
                 bead_id=bead_id,
-                title=m.group("title").strip(),
-                parent_id=m.group("parent"),
+                title=title,
+                parent_id=parent_id,
             )
         )
     return entries

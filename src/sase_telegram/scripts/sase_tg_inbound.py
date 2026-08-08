@@ -25,7 +25,7 @@ from sase_telegram import (
     question_flow,
     telegram_client,
 )
-from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_output
+from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_json
 from sase_telegram.agent_format import (
     _detail_rows,
     _entry_display_name,
@@ -147,6 +147,7 @@ _ACTIVE_BEAD_LIST_ARGS = (
     "list",
     "--status=open",
     "--status=in_progress",
+    "--format=json",
 )
 _PROJECT_CONTEXT_PATH = Path.home() / ".sase" / "telegram" / "project_context.json"
 _MEDIA_GROUPS_PATH = Path.home() / ".sase" / "telegram" / "media_groups.json"
@@ -718,25 +719,51 @@ def _resolve_workspace_from_project_file(project: str) -> str | None:
 
 
 def _iter_known_project_workspaces() -> list[_KnownProjectWorkspace]:
-    """Return valid workspaces from ``~/.sase/projects/*/<project>.sase``.
+    """Return workspaces for enabled projects, via ``sase project list``.
 
-    Legacy ``.gp`` files are honored as a fallback for projects that have
-    not yet been migrated to the canonical extension.
+    Enumerating enabled projects through the CLI (rather than globbing
+    ``~/.sase/projects/*``) excludes sibling/linked-repo and stale legacy
+    project directories that are not bead-bearing projects.
     """
-    projects_root = Path.home() / ".sase" / "projects"
     try:
-        project_dirs = sorted(item for item in projects_root.iterdir() if item.is_dir())
+        result = subprocess.run(
+            ["sase", "project", "list", "--state=enabled", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except OSError:
+        log.warning("Failed to run 'sase project list' to enumerate projects")
+        return []
+    if result.returncode != 0:
+        log.warning(
+            "'sase project list' exited %d: %s",
+            result.returncode,
+            result.stderr.strip(),
+        )
+        return []
+
+    try:
+        records = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        log.warning("'sase project list' emitted unparseable JSON")
+        return []
+    if not isinstance(records, list):
+        log.warning("'sase project list' emitted a non-list JSON payload")
         return []
 
     projects: list[_KnownProjectWorkspace] = []
     seen_workspaces: set[str] = set()
-    for project_dir in project_dirs:
-        project = project_dir.name
-        workspace = _workspace_from_project_file(
-            _project_spec_path(project_dir, project)
-        )
-        if not workspace or workspace in seen_workspaces:
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        project = record.get("project_name")
+        workspace = record.get("workspace_dir")
+        if not isinstance(project, str) or not project:
+            continue
+        if not isinstance(workspace, str) or not workspace:
+            continue
+        if workspace in seen_workspaces:
             continue
         seen_workspaces.add(workspace)
         projects.append(_KnownProjectWorkspace(project=project, workspace=workspace))
@@ -3575,6 +3602,24 @@ def _send_bead_subprocess_error(chat_id: str, err: str) -> None:
     )
 
 
+_BEAD_LIST_ERROR_SUMMARY_MAX = 200
+
+
+def _summarize_bead_list_error(project: str, stderr: str) -> str:
+    """Collapse a failing ``sase bead list`` run's stderr to one bounded line.
+
+    The full stderr (which may be a multi-line traceback) is logged at
+    warning level by the caller; only the last non-empty line — the
+    ``SomeError: message`` summary for an uncaught exception — is sent to
+    the chat.
+    """
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    summary = lines[-1] if lines else "sase bead list failed"
+    if len(summary) > _BEAD_LIST_ERROR_SUMMARY_MAX:
+        summary = summary[: _BEAD_LIST_ERROR_SUMMARY_MAX - 1] + "…"
+    return f"{display_project_name(project)}: {summary}"
+
+
 def _project_bead_entries(
     projects: list[_KnownProjectWorkspace],
 ) -> tuple[list[_ProjectBeadEntry], list[str]]:
@@ -3583,10 +3628,14 @@ def _project_bead_entries(
     for project in projects:
         result = _run_active_bead_list(cwd=project.workspace)
         if result.returncode != 0:
-            err = result.stderr.strip() or "sase bead list failed"
-            errors.append(f"{display_project_name(project.project)}: {err}")
+            log.warning(
+                "sase bead list failed for project %r: %s",
+                project.project,
+                result.stderr,
+            )
+            errors.append(_summarize_bead_list_error(project.project, result.stderr))
             continue
-        for entry in parse_bead_list_output(result.stdout):
+        for entry in parse_bead_list_json(result.stdout):
             entries.append(
                 _ProjectBeadEntry(
                     project=project.project,
@@ -3610,7 +3659,7 @@ def _legacy_bead_entries(
             bead_id=entry.bead_id,
             title=entry.title,
         )
-        for entry in parse_bead_list_output(result.stdout)
+        for entry in parse_bead_list_json(result.stdout)
     ]
 
 
@@ -3684,7 +3733,12 @@ def _show_bead_selection(chat_id: str, message: Any | None = None) -> None:
         if projects:
             entries, errors = _project_bead_entries(projects)
             if errors and not entries:
-                _send_bead_subprocess_error(chat_id, "\n".join(errors))
+                lines = "\n".join(f"- {err}" for err in errors)
+                telegram_client.send_message(
+                    chat_id,
+                    f"No active beads. {len(errors)} project(s) could not be "
+                    f"listed:\n{lines}",
+                )
                 return
             _render_bead_selection(
                 chat_id,

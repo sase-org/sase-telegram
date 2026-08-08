@@ -4264,6 +4264,73 @@ class TestXpromptsCommand:
         tc_mock.send_document.assert_not_called()
 
 
+class TestIterKnownProjectWorkspaces:
+    """Tests for _iter_known_project_workspaces (no ambient mocking)."""
+
+    def test_builds_from_project_list_json_and_excludes_sibling(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        payload = json.dumps(
+            [
+                {
+                    "project_name": "gh_sase-org__sase",
+                    "display_name": "sase",
+                    "state": "enabled",
+                    "workspace_dir": "/home/bryan/projects/github/sase-org/sase/",
+                },
+                {
+                    "project_name": "sase-github",
+                    "display_name": "sase-github",
+                    "state": "sibling",
+                    "workspace_dir": "",
+                },
+                {
+                    "project_name": "gh_bobs-org__bob-cli",
+                    "display_name": "bob-cli",
+                    "state": "enabled",
+                    "workspace_dir": "/home/bryan/projects/github/bobs-org/bob-cli/",
+                },
+            ]
+        )
+        completed = SimpleNamespace(returncode=0, stdout=payload, stderr="")
+        with patch.object(
+            inbound.subprocess, "run", return_value=completed
+        ) as run_mock:
+            projects = inbound._iter_known_project_workspaces()
+
+        assert run_mock.call_args[0][0] == [
+            "sase",
+            "project",
+            "list",
+            "--state=enabled",
+            "--json",
+        ]
+        assert projects == [
+            inbound._KnownProjectWorkspace(
+                project="gh_sase-org__sase",
+                workspace="/home/bryan/projects/github/sase-org/sase/",
+            ),
+            inbound._KnownProjectWorkspace(
+                project="gh_bobs-org__bob-cli",
+                workspace="/home/bryan/projects/github/bobs-org/bob-cli/",
+            ),
+        ]
+
+    def test_returns_empty_on_subprocess_failure(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        completed = SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        with patch.object(inbound.subprocess, "run", return_value=completed):
+            assert inbound._iter_known_project_workspaces() == []
+
+    def test_returns_empty_on_unparseable_json(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        completed = SimpleNamespace(returncode=0, stdout="not json", stderr="")
+        with patch.object(inbound.subprocess, "run", return_value=completed):
+            assert inbound._iter_known_project_workspaces() == []
+
+
 class TestBeadCommand:
     """Tests for _handle_bead_command."""
 
@@ -4284,9 +4351,25 @@ class TestBeadCommand:
         self._resolve_patcher.stop()
 
     def test_missing_arg_shows_picker(self) -> None:
-        stdout = (
-            "○ sase-13 · DELTAS ChangeSpec Field\n"
-            "◐ sase-13.5 · Phase 5: Lifecycle Wiring ← sase-13\n"
+        stdout = json.dumps(
+            {
+                "count": 2,
+                "total": 2,
+                "results": [
+                    {
+                        "id": "sase-13",
+                        "title": "DELTAS ChangeSpec Field",
+                        "status": "open",
+                        "parent_id": None,
+                    },
+                    {
+                        "id": "sase-13.5",
+                        "title": "Phase 5: Lifecycle Wiring",
+                        "status": "in_progress",
+                        "parent_id": "sase-13",
+                    },
+                ],
+            }
         )
         completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         with (
@@ -4309,6 +4392,7 @@ class TestBeadCommand:
             "list",
             "--status=open",
             "--status=in_progress",
+            "--format=json",
         ]
         tc_mock.send_message.assert_called_once()
         args, kwargs = tc_mock.send_message.call_args
@@ -4338,7 +4422,9 @@ class TestBeadCommand:
         workspace = tmp_path / "override"
         workspace.mkdir()
         completed = SimpleNamespace(
-            returncode=0, stdout="No issues found.\n", stderr=""
+            returncode=0,
+            stdout=json.dumps({"count": 0, "total": 0, "results": []}),
+            stderr="",
         )
         with (
             patch.object(inbound, "_resolve_bead_cwd", return_value=str(workspace)),
@@ -4362,6 +4448,7 @@ class TestBeadCommand:
             "list",
             "--status=open",
             "--status=in_progress",
+            "--format=json",
         ]
         assert run_mock.call_args.kwargs["cwd"] == str(workspace)
         tc_mock.send_message.assert_called_once_with("12345", "No active beads.")
@@ -4403,6 +4490,7 @@ class TestBeadCommand:
                 "list",
                 "--status=open",
                 "--status=in_progress",
+                "--format=json",
             ]
             assert capture_output is True
             assert text is True
@@ -4410,18 +4498,46 @@ class TestBeadCommand:
             if cwd == str(closed_workspace):
                 # Explicit active filters suppress the CLI's closed fallback.
                 return SimpleNamespace(
-                    returncode=0, stdout="No issues found.\n", stderr=""
+                    returncode=0,
+                    stdout=json.dumps({"count": 0, "total": 0, "results": []}),
+                    stderr="",
                 )
             if cwd == str(sase_workspace):
                 return SimpleNamespace(
                     returncode=0,
-                    stdout="○ sase-1 · Build all-project bead picker\n",
+                    stdout=json.dumps(
+                        {
+                            "count": 1,
+                            "total": 1,
+                            "results": [
+                                {
+                                    "id": "sase-1",
+                                    "title": "Build all-project bead picker",
+                                    "status": "open",
+                                    "parent_id": None,
+                                }
+                            ],
+                        }
+                    ),
                     stderr="",
                 )
             if cwd == str(zorg_workspace):
                 return SimpleNamespace(
                     returncode=0,
-                    stdout="◐ zorg-2 · Follow-up routing\n",
+                    stdout=json.dumps(
+                        {
+                            "count": 1,
+                            "total": 1,
+                            "results": [
+                                {
+                                    "id": "zorg-2",
+                                    "title": "Follow-up routing",
+                                    "status": "in_progress",
+                                    "parent_id": None,
+                                }
+                            ],
+                        }
+                    ),
                     stderr="",
                 )
             raise AssertionError(f"unexpected cwd: {cwd}")
@@ -4521,7 +4637,20 @@ class TestBeadCommand:
         workspace.mkdir()
         completed = SimpleNamespace(
             returncode=0,
-            stdout="○ sase-13 · DELTAS ChangeSpec Field\n",
+            stdout=json.dumps(
+                {
+                    "count": 1,
+                    "total": 1,
+                    "results": [
+                        {
+                            "id": "sase-13",
+                            "title": "DELTAS ChangeSpec Field",
+                            "status": "open",
+                            "parent_id": None,
+                        }
+                    ],
+                }
+            ),
             stderr="",
         )
         with (
@@ -4547,12 +4676,15 @@ class TestBeadCommand:
             "list",
             "--status=open",
             "--status=in_progress",
+            "--format=json",
         ]
         assert run_mock.call_args.kwargs["cwd"] == str(workspace)
 
     def test_missing_arg_empty_list(self) -> None:
         completed = SimpleNamespace(
-            returncode=0, stdout="No issues found.\n", stderr=""
+            returncode=0,
+            stdout=json.dumps({"count": 0, "total": 0, "results": []}),
+            stderr="",
         )
         with (
             patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
@@ -4568,6 +4700,64 @@ class TestBeadCommand:
             _handle_bead_command("")
 
         tc_mock.send_message.assert_called_once_with("12345", "No active beads.")
+
+    def test_active_bead_list_args_request_json(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _ACTIVE_BEAD_LIST_ARGS
+
+        assert "--format=json" in _ACTIVE_BEAD_LIST_ARGS
+
+    def test_project_bead_entries_collapses_traceback_to_one_line(self) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
+        traceback_stderr = (
+            "Traceback (most recent call last):\n"
+            '  File "sase", line 10, in <module>\n'
+            "    sys.exit(main())\n"
+            "sase.sdd._store_types.SddMaterializationError: SDD materialization "
+            "refused: repository is not SASE-managed\n"
+        )
+        failed = SimpleNamespace(returncode=1, stdout="", stderr=traceback_stderr)
+
+        with (
+            patch.object(inbound, "_run_bead_command", return_value=failed),
+            patch.object(
+                inbound, "display_project_name", side_effect=lambda project: project
+            ),
+        ):
+            entries, errors = inbound._project_bead_entries(projects)
+
+        assert entries == []
+        assert len(errors) == 1
+        assert "Traceback" not in errors[0]
+        assert errors[0] == (
+            "sase: sase.sdd._store_types.SddMaterializationError: SDD "
+            "materialization refused: repository is not SASE-managed"
+        )
+
+    def test_show_bead_selection_zero_entries_one_error_sends_plain_message(
+        self,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
+        failed = SimpleNamespace(returncode=1, stdout="", stderr="db locked")
+
+        with (
+            patch.object(
+                inbound, "_iter_known_project_workspaces", return_value=projects
+            ),
+            patch.object(inbound, "_run_active_bead_list", return_value=failed),
+            patch.object(inbound, "telegram_client") as tc_mock,
+        ):
+            inbound._show_bead_selection("12345")
+
+        tc_mock.send_message.assert_called_once()
+        args, kwargs = tc_mock.send_message.call_args
+        text = args[1]
+        assert "Traceback" not in text
+        assert "```" not in text
+        assert kwargs.get("parse_mode") is None
 
     def test_missing_arg_subprocess_error(self) -> None:
         completed = SimpleNamespace(
