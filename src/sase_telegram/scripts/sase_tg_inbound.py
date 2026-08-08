@@ -708,15 +708,20 @@ def _project_spec_path(project_dir: Path, project: str) -> Path:
     gracefully if the older `sase` install lacks it.
     """
     try:
-        from sase.ace.changespec.project_spec_path import preferred_project_spec_path
+        from sase.ace.patch.project_spec_path import preferred_project_spec_path
     except ImportError:
-        sase_path = project_dir / f"{project}.sase"
-        if sase_path.exists():
+        try:
+            from sase.ace.changespec.project_spec_path import (
+                preferred_project_spec_path,
+            )
+        except ImportError:
+            sase_path = project_dir / f"{project}.sase"
+            if sase_path.exists():
+                return sase_path
+            legacy_path = project_dir / f"{project}.gp"
+            if legacy_path.exists():
+                return legacy_path
             return sase_path
-        legacy_path = project_dir / f"{project}.gp"
-        if legacy_path.exists():
-            return legacy_path
-        return sase_path
     return Path(preferred_project_spec_path(str(project_dir), project))
 
 
@@ -879,10 +884,19 @@ def _run_active_bead_list(
     return _run_bead_command(_ACTIVE_BEAD_LIST_ARGS, message=message, cwd=cwd)
 
 
-def _list_changespec_xprompt_tags(project: str | None = None) -> Any:
-    from sase.integrations.changespec_tags import list_changespec_xprompt_tags
+def _list_patch_xprompt_tags(project: str | None = None) -> Any:
+    try:
+        from sase.integrations.patch_tags import list_patch_xprompt_tags
+    except ImportError:
+        from sase.integrations.changespec_tags import list_changespec_xprompt_tags
 
-    return list_changespec_xprompt_tags(project)
+        return list_changespec_xprompt_tags(project)
+    return list_patch_xprompt_tags(project)
+
+
+def _list_changespec_xprompt_tags(project: str | None = None) -> Any:
+    """Legacy helper name retained for callers/tests spanning older releases."""
+    return _list_patch_xprompt_tags(project)
 
 
 def _write_response(response: ResponseAction) -> None:
@@ -3435,7 +3449,7 @@ def _handle_fork_command() -> None:
 
 
 def _handle_changes_command(args: str) -> None:
-    """Handle /changes [project] — show copy buttons for ChangeSpec tags."""
+    """Handle /changes [project] — show copy buttons for Patch tags."""
     chat_id = credentials.get_chat_id()
     project_parts = args.split()
     if len(project_parts) > 1:
@@ -3443,18 +3457,18 @@ def _handle_changes_command(args: str) -> None:
         return
 
     project = project_parts[0] if project_parts else None
-    listing = _list_changespec_xprompt_tags(project)
+    listing = _list_patch_xprompt_tags(project)
     entries = list(listing.entries)
     skipped = list(listing.skipped)
 
     if not entries:
         message = (
-            "No active ChangeSpecs."
+            "No active Patches."
             if project is None
-            else f"No active ChangeSpecs for {display_project_name(project)}."
+            else f"No active Patches for {display_project_name(project)}."
         )
         if skipped:
-            message += f"\n{_format_changespec_skipped_note(len(skipped))}"
+            message += f"\n{_format_patch_skipped_note(len(skipped))}"
         telegram_client.send_message(chat_id, message)
         return
 
@@ -3462,15 +3476,15 @@ def _handle_changes_command(args: str) -> None:
     for start in range(0, total, _CHANGES_BUTTON_CHUNK_SIZE):
         chunk = entries[start : start + _CHANGES_BUTTON_CHUNK_SIZE]
         header = (
-            f"Active ChangeSpecs for {display_project_name(project)} ({total})"
+            f"Active Patches for {display_project_name(project)} ({total})"
             if project is not None
-            else f"Active ChangeSpecs ({total})"
+            else f"Active Patches ({total})"
         )
         if total > _CHANGES_BUTTON_CHUNK_SIZE:
             end = start + len(chunk)
             header += f"\nShowing {start + 1}-{end} of {total}"
         if skipped and start == 0:
-            header += f"\n{_format_changespec_skipped_note(len(skipped))}"
+            header += f"\n{_format_patch_skipped_note(len(skipped))}"
 
         buttons = [
             [
@@ -3488,12 +3502,17 @@ def _handle_changes_command(args: str) -> None:
         )
 
 
-def _format_changespec_skipped_note(skipped_count: int) -> str:
+def _format_patch_skipped_note(skipped_count: int) -> str:
     plural = "" if skipped_count == 1 else "s"
     return (
-        f"Skipped {skipped_count} active ChangeSpec{plural} "
+        f"Skipped {skipped_count} active Patch{plural} "
         "with unavailable workflow metadata."
     )
+
+
+def _format_changespec_skipped_note(skipped_count: int) -> str:
+    """Legacy helper name retained for callers spanning older releases."""
+    return _format_patch_skipped_note(skipped_count)
 
 
 def _changes_button_label(entry: Any, *, filtered: bool) -> str:
@@ -4215,7 +4234,7 @@ _SLASH_COMMANDS = [
     ("list", "Show agents; supports all, name, or project"),
     ("show", "Show an agent, clan, family, or tribe"),
     ("fork", "Copy fork text for an agent"),
-    ("changes", "Copy ChangeSpec workflow tags"),
+    ("changes", "Copy Patch workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
     ("update", "Update SASE and restart axe"),

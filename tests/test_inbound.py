@@ -906,7 +906,7 @@ class TestChangesCommandDispatch:
     def test_changes_registered_as_slash_command(self) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
 
-        assert ("changes", "Copy ChangeSpec workflow tags") in _SLASH_COMMANDS
+        assert ("changes", "Copy Patch workflow tags") in _SLASH_COMMANDS
 
 
 class TestForkCommandDispatch:
@@ -1347,7 +1347,7 @@ class TestChangesCommand:
         mock_creds.get_chat_id.return_value = "12345"
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags"
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags"
         ) as mock_list:
             _handle_changes_command("one two")
 
@@ -1369,13 +1369,13 @@ class TestChangesCommand:
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("")
 
         mock_list.assert_called_once_with(None)
-        mock_tg.send_message.assert_called_once_with("12345", "No active ChangeSpecs.")
+        mock_tg.send_message.assert_called_once_with("12345", "No active Patches.")
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
@@ -1390,14 +1390,14 @@ class TestChangesCommand:
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("sase")
 
         mock_list.assert_called_once_with("sase")
         mock_tg.send_message.assert_called_once_with(
-            "12345", "No active ChangeSpecs for sase."
+            "12345", "No active Patches for sase."
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -1419,7 +1419,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -1427,8 +1427,8 @@ class TestChangesCommand:
         call_args = mock_tg.send_message.call_args
         assert call_args.args[:2] == (
             "12345",
-            "Active ChangeSpecs (2)\n"
-            "Skipped 1 active ChangeSpec with unavailable workflow metadata.",
+            "Active Patches (2)\n"
+            "Skipped 1 active Patch with unavailable workflow metadata.",
         )
         keyboard = call_args.kwargs["reply_markup"]
         buttons = keyboard.inline_keyboard
@@ -1460,7 +1460,7 @@ class TestChangesCommand:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+                "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
@@ -1504,14 +1504,14 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("sase")
 
         assert mock_tg.send_message.call_args.args[:2] == (
             "12345",
-            "Active ChangeSpecs for sase (1)",
+            "Active Patches for sase (1)",
         )
         keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
         buttons = keyboard.inline_keyboard
@@ -1535,7 +1535,7 @@ class TestChangesCommand:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+                "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
@@ -1552,7 +1552,7 @@ class TestChangesCommand:
         mock_list.assert_called_once_with("sase")
         assert mock_tg.send_message.call_args.args[:2] == (
             "12345",
-            "Active ChangeSpecs for SASE Core (1)",
+            "Active Patches for SASE Core (1)",
         )
         keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
         button = keyboard.inline_keyboard[0][0]
@@ -1578,7 +1578,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_changespec_xprompt_tags",
+            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -1588,11 +1588,11 @@ class TestChangesCommand:
         second = mock_tg.send_message.call_args_list[1]
         assert first.args[:2] == (
             "12345",
-            "Active ChangeSpecs (51)\nShowing 1-50 of 51",
+            "Active Patches (51)\nShowing 1-50 of 51",
         )
         assert second.args[:2] == (
             "12345",
-            "Active ChangeSpecs (51)\nShowing 51-51 of 51",
+            "Active Patches (51)\nShowing 51-51 of 51",
         )
         assert len(first.kwargs["reply_markup"].inline_keyboard) == 50
         assert len(second.kwargs["reply_markup"].inline_keyboard) == 1

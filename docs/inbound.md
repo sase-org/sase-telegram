@@ -80,7 +80,7 @@ Text messages are dispatched in priority order:
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
-   - `/changes [project]` — Shows copy buttons for active ChangeSpec workflow tags, optionally filtered by exact project name
+   - `/changes [project]` — Shows copy buttons for active Patch workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
    - `/update` — Starts the detached SASE update worker and replies with its log path
@@ -121,10 +121,10 @@ When a text message or photo triggers an agent launch:
   chat-scoped project in `~/.sase/telegram/project_context.json` for later `/bead` commands
 - **Launch confirmation**: A message is sent back with Fork and Wait copy-text buttons, plus Kill and Retry controls
 
-## ChangeSpec Tags
+## Patch Tags
 
-`/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. `/changes <project>` filters by
-exact project name. Each listed ChangeSpec gets a copy-text button containing only the workflow tag, for example
+`/changes` lists active Patches, excluding Submitted, Archived, and Reverted entries. `/changes <project>` filters by
+exact project name. Each listed Patch gets a copy-text button containing only the workflow tag, for example
 `#hg:foobar`.
 
 If workflow detection fails for some entries, the command still shows the entries it can resolve and includes a skipped

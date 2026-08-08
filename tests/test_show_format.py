@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from sase_telegram.agent_format import pack_html_blocks
+from sase_telegram.agent_format import detail_rows, pack_html_blocks
 from sase_telegram.show_entities import (
     KinshipIndex,
     KinshipIndexItem,
@@ -93,6 +93,21 @@ def _member(
         generation="generation-12345678",
         artifacts_dir=Path(f"/tmp/{name}"),
     )
+
+
+def test_detail_rows_prefers_patch_name_and_labels_patch() -> None:
+    entry = _entry("alpha")
+    entry.patch_name = "feature"
+    entry.changespec_name = "legacy-feature"
+
+    assert ("Patch", "feature") in detail_rows(entry)
+
+
+def test_detail_rows_accepts_legacy_changespec_name() -> None:
+    entry = _entry("alpha")
+    entry.changespec_name = "legacy-feature"
+
+    assert ("Patch", "legacy-feature") in detail_rows(entry)
 
 
 def test_agent_view_escapes_html_and_includes_kinship_rows_and_jumps() -> None:

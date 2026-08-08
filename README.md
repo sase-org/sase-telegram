@@ -81,7 +81,7 @@ Installing sase-telegram adds the following commands:
 - **Auto-naming** — agents launched from Telegram automatically get assigned names
 - **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
 - **Multi-model directives** — use `%{%m:opus | %m:sonnet}` to launch the same prompt across multiple models
-- **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and ChangeSpec buttons copy pre-filled text to your clipboard
+- **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and Patch buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — built-in agent-management commands plus user-defined commands from `telegram.commands`, all registered with `set_my_commands` so they show up in the chat input UI
 - **Kinship views** — `/show` indexes clans, families, and tribes; `/show <ref>` opens rich agent or group status with mobile drill-down and refresh buttons
@@ -183,7 +183,7 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|family|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent and kinship status, management, ChangeSpec workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|family|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
 - **Configured slash commands** — execute the matching `telegram.commands` entry and deliver its Markdown stdout as a message or PDF
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
@@ -204,7 +204,7 @@ Set `SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED` on hosts that should process Telegram
 without launching new agents from free-form text, photos, image documents, or albums. The check is presence-based, so an
 empty value still disables launches; ignored launch messages are logged without a Telegram acknowledgement.
 
-`/changes` lists active ChangeSpecs, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
+`/changes` lists active Patches, excluding Submitted, Archived, and Reverted entries. Use `/changes <project>` to
 filter by exact project name. Each result has a copy-text button for the bare workflow tag, such as `#hg:foobar`.
 
 `/bead` lists active beads across enabled SASE projects as picker buttons by first running

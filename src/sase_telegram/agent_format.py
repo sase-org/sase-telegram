@@ -237,9 +237,11 @@ def detail_rows(entry: Any) -> list[tuple[str, str]]:
     project = getattr(entry, "project", None)
     if isinstance(project, str) and project:
         _append_row(rows, "Project", display_project_name(project))
-    changespec = getattr(entry, "changespec_name", None)
-    if isinstance(changespec, str) and changespec:
-        _append_row(rows, "ChangeSpec", display_cl_name(changespec))
+    patch_name = getattr(entry, "patch_name", None)
+    if not isinstance(patch_name, str) or not patch_name:
+        patch_name = getattr(entry, "changespec_name", None)
+    if isinstance(patch_name, str) and patch_name:
+        _append_row(rows, "Patch", display_cl_name(patch_name))
     workspace_num = getattr(entry, "workspace_num", None)
     if isinstance(workspace_num, int):
         _append_row(rows, "Workspace", f"#{workspace_num}")
