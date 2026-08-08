@@ -120,6 +120,7 @@ def _custom_spec(
         "producer": {"agent": "telegram-test"},
         "payload": {"operation": "restart"},
         "presentation": {
+            "title": "Restart the guarded service?",
             "icon": "🛡️",
             "sender": "safety-agent",
             "notes": ["Restart the guarded service?"],
