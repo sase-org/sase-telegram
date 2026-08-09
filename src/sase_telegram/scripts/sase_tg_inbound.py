@@ -890,7 +890,7 @@ def _list_patch_xprompt_tags(project: str | None = None) -> Any:
     except ImportError:
         from sase.integrations.changespec_tags import list_changespec_xprompt_tags
 
-        return list_changespec_xprompt_tags(project)
+        return list_changespec_xprompt_tags(project)  # legacy fallback helper
     return list_patch_xprompt_tags(project)
 
 

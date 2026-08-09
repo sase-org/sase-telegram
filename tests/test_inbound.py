@@ -4394,7 +4394,7 @@ class TestBeadCommand:
                 "results": [
                     {
                         "id": "sase-13",
-                        "title": "DELTAS ChangeSpec Field",
+                        "title": "DELTAS Patch Field",
                         "status": "open",
                         "parent_id": None,
                     },
@@ -4685,7 +4685,7 @@ class TestBeadCommand:
                     "results": [
                         {
                             "id": "sase-13",
-                            "title": "DELTAS ChangeSpec Field",
+                            "title": "DELTAS Patch Field",
                             "status": "open",
                             "parent_id": None,
                         }
@@ -4988,7 +4988,7 @@ class TestBeadCommand:
 
     def test_success_renders_markdown(self) -> None:
         stdout = (
-            "○ sase-13 · DELTAS ChangeSpec Field   [OPEN]\n"
+            "○ sase-13 · DELTAS Patch Field   [OPEN]\n"
             "Type: plan · Owner: bryanbugyi34@gmail.com\n"
             "\n"
             "CHILDREN\n"

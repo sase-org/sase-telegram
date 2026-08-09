@@ -15,7 +15,7 @@ from sase_telegram.bead_format import (
 def test_plan_bead_with_children_and_plan() -> None:
     raw = dedent(
         """\
-        ○ sase-13 · DELTAS ChangeSpec Field   [OPEN]
+        ○ sase-13 · DELTAS Patch Field   [OPEN]
         Type: plan · Owner: bryanbugyi34@gmail.com
 
         CHILDREN
@@ -27,7 +27,7 @@ def test_plan_bead_with_children_and_plan() -> None:
         """
     )
     md = bead_show_to_markdown(raw)
-    assert md.startswith("# ○ sase-13 — DELTAS ChangeSpec Field")
+    assert md.startswith("# ○ sase-13 — DELTAS Patch Field")
     assert "**Status:** OPEN" in md
     assert "**Type:** plan  •  **Owner:** bryanbugyi34@gmail.com" in md
     assert "## Children" in md
@@ -45,13 +45,13 @@ def test_phase_bead_with_parent_blocks_description_notes() -> None:
         Assignee: sase-13.1
 
         PARENT
-          ↑ sase-13 · DELTAS ChangeSpec Field   [OPEN]
+          ↑ sase-13 · DELTAS Patch Field   [OPEN]
 
         BLOCKS
           ← ✓ sase-13.2: Phase 2: Atomic Update Helper   [CLOSED]
 
         DESCRIPTION
-          Round-trip a ChangeSpec with a DELTAS section through the parser.
+          Round-trip a Patch with a DELTAS section through the parser.
 
         NOTES
           COMMIT: 616a50ea
@@ -62,11 +62,11 @@ def test_phase_bead_with_parent_blocks_description_notes() -> None:
     assert "**Status:** CLOSED" in md
     assert "**Assignee:** sase-13.1" in md
     assert "## Parent" in md
-    assert "- ↑ `sase-13` — DELTAS ChangeSpec Field _(OPEN)_" in md
+    assert "- ↑ `sase-13` — DELTAS Patch Field _(OPEN)_" in md
     assert "## Blocks" in md
     assert "- ← ✓ `sase-13.2` — Phase 2: Atomic Update Helper _(CLOSED)_" in md
     assert "## Description" in md
-    assert "Round-trip a ChangeSpec with a DELTAS section through the parser." in md
+    assert "Round-trip a Patch with a DELTAS section through the parser." in md
     assert "## Notes" in md
     # Notes section is fenced as a code block.
     assert "```\nCOMMIT: 616a50ea\n```" in md
@@ -173,7 +173,7 @@ class TestParseBeadListJson:
             [
                 {
                     "id": "sase-13",
-                    "title": "DELTAS ChangeSpec Field",
+                    "title": "DELTAS Patch Field",
                     "status": "open",
                     "parent_id": None,
                 },
@@ -196,7 +196,7 @@ class TestParseBeadListJson:
             BeadListEntry(
                 icon="○",
                 bead_id="sase-13",
-                title="DELTAS ChangeSpec Field",
+                title="DELTAS Patch Field",
                 parent_id=None,
             ),
             BeadListEntry(
