@@ -4216,7 +4216,6 @@ class TestXpromptsCommand:
                 with_inputs=0,
                 skills=0,
                 memory=0,
-                refs=0,
                 generated_at=datetime(2026, 4, 24),
             ),
         )

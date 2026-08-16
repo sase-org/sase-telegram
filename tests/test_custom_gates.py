@@ -386,7 +386,7 @@ def test_task_triage_outbound_renders_tracks_attaches_and_launches(
         ),
         patch(
             "sase.bead.task_gate.launch_task_triage",
-            return_value=SimpleNamespace(task_id="task-123"),
+            return_value=SimpleNamespace(proc_id="task-123"),
         ) as launch_task,
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: pending})
@@ -607,10 +607,14 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
             reason="waiting on the upstream fix",
         ),
     )
+    flag_spec = _custom_spec(request_id="telegram-registry-flag")
+    flag_spec["kind"] = "flag_triage"
+    flag = create_gate(flag_spec)
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "task_triage": _stored_notification(task.notification_id),
         "bead_snooze": _stored_notification(snooze.notification_id),
+        "flag_triage": _stored_notification(flag.notification_id),
     }
 
     for kind in registered_gate_kinds():

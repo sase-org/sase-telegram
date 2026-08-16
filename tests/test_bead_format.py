@@ -89,6 +89,28 @@ def test_depends_on_section() -> None:
     assert "- → `bogus-id` _(not found)_" in md
 
 
+def test_flag_section_formats_key_thresholds_and_due_state() -> None:
+    raw = dedent(
+        """\
+        ○ sase-flag · Remove plugin switch   [OPEN]
+        Type: flag · Owner: (none)
+
+        FLAG
+          Key: plugins_enabled
+          Remove by: 2026-12-01 · 0.19.0
+          Due state: due
+        """
+    )
+    md = bead_show_to_markdown(raw)
+
+    assert "# ○ sase-flag — Remove plugin switch" in md
+    assert "**Type:** flag  •  **Owner:** (none)" in md
+    assert "## Flag" in md
+    assert "- **Key:** `plugins_enabled`" in md
+    assert "- **Remove by:** `2026-12-01` · `0.19.0`" in md
+    assert "- **Due state:** due" in md
+
+
 def test_minimal_bead() -> None:
     raw = dedent(
         """\

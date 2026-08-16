@@ -34,11 +34,14 @@ _DEP_LINE_RE = re.compile(
     r"(?:\s+\[(?P<status>[^\]]+)\])?|(?P<missing_id>\S+)\s*\(not found\))\s*$"
 )
 
+_FLAG_LINE_RE = re.compile(r"^(?P<label>Key|Remove by|Due state):\s+(?P<value>.+)$")
+
 _KNOWN_SECTIONS = {
     "PARENT": "Parent",
     "CHILDREN": "Children",
     "DEPENDS ON": "Depends On",
     "BLOCKS": "Blocks",
+    "FLAG": "Flag",
     "DESCRIPTION": "Description",
     "NOTES": "Notes",
     "PLAN": "Plan",
@@ -97,6 +100,20 @@ def _format_dep_line(line: str) -> str:
     status = m.group("status")
     suffix = f" _({status})_" if status else ""
     return f"- {arrow} {icon} `{bid}` — {title}{suffix}"
+
+
+def _format_flag_line(line: str) -> str:
+    m = _FLAG_LINE_RE.match(line.strip())
+    if not m:
+        return f"- {line.strip()}"
+    label = m.group("label")
+    value = m.group("value").strip()
+    if label == "Remove by" and " · " in value:
+        date, release = value.split(" · ", 1)
+        value = f"`{date}` · `{release}`"
+    elif label == "Key":
+        value = f"`{value}`"
+    return f"- **{label}:** {value}"
 
 
 def _section_title(section: str) -> str:
@@ -224,6 +241,8 @@ def bead_show_to_markdown(raw: str) -> str:
             out.append(_format_child_line(line))
         elif current_section in {"DEPENDS ON", "BLOCKS"}:
             out.append(_format_dep_line(line))
+        elif current_section == "FLAG":
+            out.append(_format_flag_line(line))
         elif current_section in {"DESCRIPTION", "NOTES", "PLAN"}:
             text_buf.append(line)
         else:
