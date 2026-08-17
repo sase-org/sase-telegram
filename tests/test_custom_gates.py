@@ -13,7 +13,8 @@ from unittest.mock import patch
 import pytest
 
 from sase.agent.launch_request import create_launch_approval_request
-from sase.bead.model import SnoozeRecord
+from sase.bead.flag_gate import create_flag_triage_gate
+from sase.bead.model import FlagRecord, SnoozeRecord
 from sase.bead.snooze_gate import create_bead_snooze_gate
 from sase.bead.task_gate import create_task_triage_gate
 from sase.notification_gates.models import GateError
@@ -607,9 +608,20 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
             reason="waiting on the upstream fix",
         ),
     )
-    flag_spec = _custom_spec(request_id="telegram-registry-flag")
-    flag_spec["kind"] = "flag_triage"
-    flag = create_gate(flag_spec)
+    flag = create_flag_triage_gate(
+        request_id="telegram-registry-flag",
+        bead_id="sase-registry-flag",
+        project="sase",
+        title="Exercise the flag triage generic form",
+        flag=FlagRecord(
+            key="prettier_enabled",
+            remove_by_date="2026-08-01",
+            remove_by_release="0.16.0",
+        ),
+        due_state="due",
+        due_as_of="2026-08-09",
+        release="0.16.0",
+    )
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "task_triage": _stored_notification(task.notification_id),
