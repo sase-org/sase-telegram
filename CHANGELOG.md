@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.8](https://github.com/sase-org/sase-telegram/compare/v0.4.7...v0.4.8) (2026-08-21)
+
+
+### Features
+
+* **beads:** render flag sections in Telegram ([0bda964](https://github.com/sase-org/sase-telegram/commit/0bda96492d6efec470a5ac76f3f03cf302e89805))
+
+
+### Bug Fixes
+
+* **tests:** build the flag_triage test gate through its real factory ([62ddbda](https://github.com/sase-org/sase-telegram/commit/62ddbdad1297a0036ed43f46e7f56ce37c1c9acf))
+
 ## [0.4.7](https://github.com/sase-org/sase-telegram/compare/v0.4.6...v0.4.7) (2026-08-08)
 
 
