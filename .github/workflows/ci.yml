@@ -32,6 +32,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "**/pyproject.toml"
       - uses: extractions/setup-just@v2
+        with:
+          just-version: "1.58.0"
+          github-token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Set up Python ${{ matrix.python-version }}
         run: |

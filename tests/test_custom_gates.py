@@ -13,9 +13,12 @@ from unittest.mock import patch
 import pytest
 
 from sase.agent.launch_request import create_launch_approval_request
+from sase.bead.epic_resume_gate import create_epic_resume_gate
+from sase.bead.flag_fields import FlagFields
 from sase.bead.flag_gate import create_flag_triage_gate
-from sase.bead.model import FlagRecord, SnoozeRecord
+from sase.bead.model import SnoozeRecord
 from sase.bead.snooze_gate import create_bead_snooze_gate
+from sase.bead.stale_cleanup_gate import create_bead_stale_cleanup_gate
 from sase.bead.task_gate import create_task_triage_gate
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import (
@@ -26,6 +29,7 @@ from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
 from sase.notifications.store import load_notifications
 from sase.plan_gate import create_plan_approval_gate
+from sase.plugins.required_gate import create_plugins_required_gate
 from sase.sdd.plan_validate import validate_plan as validate_sase_plan
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
@@ -205,6 +209,43 @@ def _hitl_spec() -> dict[str, object]:
             }
         ],
         "auto": False,
+    }
+
+
+def _stale_cleanup_bead() -> dict[str, object]:
+    return {
+        "project": "sase",
+        "bead_id": "sase-task.1",
+        "title": "Follow up on cache invalidation",
+        "created_at": "2026-08-01T09:14:02-04:00",
+        "plus_one_count": 0,
+        "size": "small",
+    }
+
+
+def _epic_resume_member(
+    *,
+    agent_name: str = "sase-p4.1",
+    bead_id: str = "sase-p4.1",
+    finished_at: str | None = "2026-08-17T11:45:00-04:00",
+) -> dict[str, object]:
+    return {
+        "agent_name": agent_name,
+        "bead_id": bead_id,
+        "finished_at": finished_at,
+    }
+
+
+def _missing_plugin_entry() -> dict[str, str]:
+    return {
+        "requirement": "sase-github",
+        "name": "sase-github",
+        "kind": "missing",
+        "install_command": "sase plugin install sase-github",
+        "message": (
+            "required plugin `sase-github` is not installed; "
+            "run `sase plugin install sase-github`"
+        ),
     }
 
 
@@ -613,8 +654,9 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         bead_id="sase-registry-flag",
         project="sase",
         title="Exercise the flag triage generic form",
-        flag=FlagRecord(
+        flag=FlagFields(
             key="prettier_enabled",
+            kind="beta",
             remove_by_date="2026-08-01",
             remove_by_release="0.16.0",
         ),
@@ -622,11 +664,48 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         due_as_of="2026-08-09",
         release="0.16.0",
     )
+    stale_cleanup = create_bead_stale_cleanup_gate(
+        request_id="telegram-registry-stale-cleanup",
+        beads=[_stale_cleanup_bead()],
+        min_plus_ones=1,
+        stale_after_days=7,
+        stale_cleanup_min_beads=10,
+        stale_as_of="2026-08-17T11:00:00-04:00",
+        producer={"chop": "bead_stale_cleanup"},
+    )
+    plugins_required = create_plugins_required_gate(
+        request_id="telegram-registry-plugins-required",
+        project="sase",
+        project_label="sase",
+        missing=[_missing_plugin_entry()],
+        producer={"chop": "plugins_required"},
+    )
+    epic_resume = create_epic_resume_gate(
+        request_id="telegram-registry-epic-resume",
+        project="sase",
+        epic_id="sase-p4",
+        epic_title="Exercise the epic resume generic form",
+        clan_generation=1,
+        failed_members=[_epic_resume_member()],
+        waiting_members=[
+            _epic_resume_member(
+                agent_name="sase-p4.3",
+                bead_id="sase-p4.3",
+                finished_at=None,
+            )
+        ],
+        remaining_phase_count=2,
+        stalled_since="2026-08-17T12:00:00-04:00",
+        producer={"chop": "epic_resume"},
+    )
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "task_triage": _stored_notification(task.notification_id),
         "bead_snooze": _stored_notification(snooze.notification_id),
         "flag_triage": _stored_notification(flag.notification_id),
+        "bead_stale_cleanup": _stored_notification(stale_cleanup.notification_id),
+        "plugins_required": _stored_notification(plugins_required.notification_id),
+        "epic_resume": _stored_notification(epic_resume.notification_id),
     }
 
     for kind in registered_gate_kinds():

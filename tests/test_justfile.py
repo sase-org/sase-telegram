@@ -5,9 +5,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = ROOT / "Justfile"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_SASE_ENV = "SASE_TELEGRAM_SASE_SOURCE_DIR"
 LOCAL_SASE_CORE_ENV = "SASE_TELEGRAM_SASE_CORE_SOURCE_DIR"
 
@@ -221,3 +224,16 @@ def test_setup_dry_run_overlays_local_sase(tmp_path: Path) -> None:
     assert (
         f"uv pip install --python '.venv/bin/python' --no-deps -e '{source}'"
     ) in output
+
+
+def test_ci_pins_authenticated_just_setup() -> None:
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text())
+    steps = workflow["jobs"]["check"]["steps"]
+    setup_just = next(
+        step for step in steps if step.get("uses") == "extractions/setup-just@v2"
+    )
+
+    assert setup_just["with"] == {
+        "just-version": "1.58.0",
+        "github-token": "${{ secrets.SASE_RELEASE_TOKEN || github.token }}",
+    }
