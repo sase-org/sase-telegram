@@ -13,7 +13,6 @@ from unittest.mock import patch
 import pytest
 
 from sase.agent.launch_request import create_launch_approval_request
-from sase.bead.epic_resume_gate import create_epic_resume_gate
 from sase.bead.flag_fields import FlagFields
 from sase.bead.flag_gate import create_flag_triage_gate
 from sase.bead.model import SnoozeRecord
@@ -220,19 +219,6 @@ def _stale_cleanup_bead() -> dict[str, object]:
         "created_at": "2026-08-01T09:14:02-04:00",
         "plus_one_count": 0,
         "size": "small",
-    }
-
-
-def _epic_resume_member(
-    *,
-    agent_name: str = "sase-p4.1",
-    bead_id: str = "sase-p4.1",
-    finished_at: str | None = "2026-08-17T11:45:00-04:00",
-) -> dict[str, object]:
-    return {
-        "agent_name": agent_name,
-        "bead_id": bead_id,
-        "finished_at": finished_at,
     }
 
 
@@ -680,24 +666,6 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         missing=[_missing_plugin_entry()],
         producer={"chop": "plugins_required"},
     )
-    epic_resume = create_epic_resume_gate(
-        request_id="telegram-registry-epic-resume",
-        project="sase",
-        epic_id="sase-p4",
-        epic_title="Exercise the epic resume generic form",
-        clan_generation=1,
-        failed_members=[_epic_resume_member()],
-        waiting_members=[
-            _epic_resume_member(
-                agent_name="sase-p4.3",
-                bead_id="sase-p4.3",
-                finished_at=None,
-            )
-        ],
-        remaining_phase_count=2,
-        stalled_since="2026-08-17T12:00:00-04:00",
-        producer={"chop": "epic_resume"},
-    )
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "task_triage": _stored_notification(task.notification_id),
@@ -705,7 +673,6 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         "flag_triage": _stored_notification(flag.notification_id),
         "bead_stale_cleanup": _stored_notification(stale_cleanup.notification_id),
         "plugins_required": _stored_notification(plugins_required.notification_id),
-        "epic_resume": _stored_notification(epic_resume.notification_id),
     }
 
     for kind in registered_gate_kinds():
