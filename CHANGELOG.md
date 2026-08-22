@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/sase-org/sase-telegram/compare/v0.4.8...v0.4.9) (2026-08-22)
+
+
+### Bug Fixes
+
+* **tests:** drop EpicResume generic-form coverage after gate removal ([77be34d](https://github.com/sase-org/sase-telegram/commit/77be34d83a5c745a7d054c81569e9df22a15abfe))
+
 ## [0.4.8](https://github.com/sase-org/sase-telegram/compare/v0.4.7...v0.4.8) (2026-08-21)
 
 
