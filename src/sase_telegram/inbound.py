@@ -349,7 +349,19 @@ def resolve_gate_response(
     response: ResponseAction,
     action: dict[str, Any] | None,
 ) -> str:
-    """Resolve any v2 gate through the shared host executor."""
+    """Resolve any v2 gate through the shared host executor.
+
+    A shell-backed gate (``sase gate create --shell``) is a family-attached
+    gate shell that owns its own settlement and follow-up launch; the same
+    ``shell_backed`` -> ``bind_gate_shell_execution_callbacks`` ->
+    ``settle_gate_shell`` sequence ``sase gate answer`` and the mobile bridge
+    run must run here too, or a shell gate answered from Telegram is answered
+    but never settles: its family member stays pending forever and its
+    follow-up never launches.
+    """
+    from sase.gate_shell.log import bind_gate_shell_execution_callbacks
+    from sase.gate_shell.settlement import settle_gate_shell
+    from sase.gate_shell.store import find_gate_shell_by_gate_id
     from sase.notification_gates.executor import execute_gate_selection
     from sase.notification_gates.models import GateError
     from sase.notification_gates.paths import resolve_action_bundle
@@ -372,6 +384,20 @@ def resolve_gate_response(
         raise GateError(
             "invalid_request", "selected_option_ids", "gate selection is missing"
         )
+
+    # A gate-shell family member is looked up by the same request id every
+    # other surface resolves the bundle from; when one exists, this gate is
+    # shell-backed and its execution must stream to the same gate.log and
+    # settle through the same path ``sase gate answer`` uses.
+    request_id = action_data.get("request_id")
+    gate_shell = (
+        find_gate_shell_by_gate_id(None, str(request_id)) if request_id else None
+    )
+    execution_kwargs: dict[str, Any] = (
+        {}
+        if gate_shell is None
+        else bind_gate_shell_execution_callbacks(gate_shell.artifacts_dir).as_kwargs()
+    )
     if response.option_inputs is not None:
         execution = execute_gate_selection(
             bundle.root,
@@ -380,6 +406,7 @@ def resolve_gate_response(
             feedback=response.feedback,
             source="telegram",
             option_inputs=response.option_inputs,
+            **execution_kwargs,
         )
     else:
         execution = execute_gate_selection(
@@ -388,11 +415,14 @@ def resolve_gate_response(
             {} if response.input_data is None else response.input_data,
             feedback=response.feedback,
             source="telegram",
+            **execution_kwargs,
         )
     if execution.already_completed:
         raise GateError(
             "already_answered", response.notif_id_prefix, "gate is already answered"
         )
+    if gate_shell is not None:
+        settle_gate_shell(gate_shell, gate_state="answered", reason="gate answered")
     return f"Gate answered with {', '.join(response.selected_option_ids)}"
 
 
