@@ -879,7 +879,7 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
     result = create_launch_approval_request(
         {
             "schema_version": 1,
-            "prompt": "%i(telegram-launch, reviewer)\nReview this change",
+            "prompt": "%i(telegram_launch, family=reviewer)\nReview this change",
             "reason": "Verify the Telegram launch controls",
             "approval": "required",
             "max_slots": 1,
@@ -1175,7 +1175,12 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
         patch(
             "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
         ),
-        patch("sase.plan_approval_actions.run_plan_side_effects"),
+        # This fixture names no project, so the required host plan archive cannot run;
+        # this test pins Telegram layout and submitted option ids, not archiving.
+        patch(
+            "sase.plan_approval_actions._archive_plan_for_approval",
+            return_value=str(gate_home / "archived-plan.md"),
+        ),
     ):
         _handle_callback(_callback(f"gate:{prefix}:x0"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:s0"), {prefix: action})
