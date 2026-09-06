@@ -1332,6 +1332,43 @@ class TestUpdateCommand:
         assert "will retry later" in caplog.text
 
 
+class TestProjectSpecPath:
+    """``_project_spec_path`` resolves through the canonical ``sase.ace.patch`` API."""
+
+    def test_prefers_canonical_sase_extension(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _project_spec_path
+
+        project_dir = tmp_path / "myproj"
+        project_dir.mkdir()
+        sase_path = project_dir / "myproj.sase"
+        sase_path.write_text("")
+
+        assert _project_spec_path(project_dir, "myproj") == sase_path
+
+    def test_falls_back_to_legacy_gp_extension(self, tmp_path: Path) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _project_spec_path
+
+        project_dir = tmp_path / "myproj"
+        project_dir.mkdir()
+        legacy_path = project_dir / "myproj.gp"
+        legacy_path.write_text("")
+
+        assert _project_spec_path(project_dir, "myproj") == legacy_path
+
+
+class TestListPatchXpromptTagsImport:
+    """``_list_patch_xprompt_tags`` delegates to the canonical patch_tags API."""
+
+    def test_delegates_to_canonical_patch_tags_module(self) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _list_patch_xprompt_tags
+
+        with patch("sase.integrations.patch_tags.find_all_patches", return_value=[]):
+            listing = _list_patch_xprompt_tags()
+
+        assert listing.entries == []
+        assert listing.skipped == []
+
+
 class TestChangesCommand:
     """Tests for the /changes slash command."""
 

@@ -704,24 +704,10 @@ def _project_spec_path(project_dir: Path, project: str) -> Path:
     """Resolve the project spec path, preferring canonical ``.sase``.
 
     Falls back to legacy ``.gp`` when only that exists, and defaults to the
-    canonical name otherwise. Mirrors the main-repo helper but degrades
-    gracefully if the older `sase` install lacks it.
+    canonical name otherwise.
     """
-    try:
-        from sase.ace.patch.project_spec_path import preferred_project_spec_path
-    except ImportError:
-        try:
-            from sase.ace.changespec.project_spec_path import (
-                preferred_project_spec_path,
-            )
-        except ImportError:
-            sase_path = project_dir / f"{project}.sase"
-            if sase_path.exists():
-                return sase_path
-            legacy_path = project_dir / f"{project}.gp"
-            if legacy_path.exists():
-                return legacy_path
-            return sase_path
+    from sase.ace.patch.project_spec_path import preferred_project_spec_path
+
     return Path(preferred_project_spec_path(str(project_dir), project))
 
 
@@ -885,18 +871,9 @@ def _run_active_bead_list(
 
 
 def _list_patch_xprompt_tags(project: str | None = None) -> Any:
-    try:
-        from sase.integrations.patch_tags import list_patch_xprompt_tags
-    except ImportError:
-        from sase.integrations.changespec_tags import list_changespec_xprompt_tags
+    from sase.integrations.patch_tags import list_patch_xprompt_tags
 
-        return list_changespec_xprompt_tags(project)  # legacy fallback helper
     return list_patch_xprompt_tags(project)
-
-
-def _list_changespec_xprompt_tags(project: str | None = None) -> Any:
-    """Legacy helper name retained for callers/tests spanning older releases."""
-    return _list_patch_xprompt_tags(project)
 
 
 def _write_response(response: ResponseAction) -> None:
@@ -3508,11 +3485,6 @@ def _format_patch_skipped_note(skipped_count: int) -> str:
         f"Skipped {skipped_count} active Patch{plural} "
         "with unavailable workflow metadata."
     )
-
-
-def _format_changespec_skipped_note(skipped_count: int) -> str:
-    """Legacy helper name retained for callers spanning older releases."""
-    return _format_patch_skipped_note(skipped_count)
 
 
 def _changes_button_label(entry: Any, *, filtered: bool) -> str:
