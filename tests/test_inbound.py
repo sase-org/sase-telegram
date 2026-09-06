@@ -498,10 +498,11 @@ class TestHandleQuestionFlow:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from sase.notification_gates import paths
+        from sase.notification_gates.service import create_gate
         from sase.notifications import pending_actions as sase_pending_actions
         from sase.notifications import store
         from sase.notifications.store import load_notifications
-        from sase.user_question_actions import create_user_question_gate
+        from sase.user_question_actions import user_question_gate_spec
         from sase_telegram.scripts.sase_tg_inbound import _handle_callback
 
         monkeypatch.setattr(paths, "INTERACTION_REQUESTS_DIR", tmp_path / "requests")
@@ -522,14 +523,16 @@ class TestHandleQuestionFlow:
             tmp_path / "legacy-pending.json",
         )
         store._LOAD_CACHE.clear()
-        gate = create_user_question_gate(
-            [
-                {
-                    "question": "Which path?",
-                    "options": [{"label": "Fast"}, {"label": "Safe"}],
-                }
-            ],
-            session_id="telegram-question",
+        gate = create_gate(
+            user_question_gate_spec(
+                [
+                    {
+                        "question": "Which path?",
+                        "options": [{"label": "Fast"}, {"label": "Safe"}],
+                    }
+                ],
+                session_id="telegram-question",
+            )
         )
         notification = load_notifications()[0]
         pending = {

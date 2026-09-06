@@ -27,7 +27,7 @@ from sase.notification_gates.registry import (
 from sase.notification_gates.service import create_gate
 from sase.notifications.models import Notification
 from sase.notifications.store import load_notifications
-from sase.plan_gate import create_plan_approval_gate
+from sase.plan_gate import build_plan_approval_gate_spec
 from sase.plugins.required_gate import create_plugins_required_gate
 from sase.sdd.plan_validate import validate_plan as validate_sase_plan
 from sase_telegram import inbound, outbound, pending_actions
@@ -286,7 +286,7 @@ def _stored_notification(notification_id: str | None) -> Notification:
 def _epic_notification(gate_home: Path, request_id: str) -> Notification:
     plan_file = gate_home / f"{request_id}.md"
     plan_file.write_text(_epic_plan_for_installed_sase(), encoding="utf-8")
-    result = create_plan_approval_gate(plan_file, request_id)
+    result = create_gate(build_plan_approval_gate_spec(plan_file, request_id))
     notification = _notification(result, action="EpicApproval", sender="epic")
     notification.files = [str(Path(result.bundle_path) / "plan.md")]
     notification.dismissed = True
@@ -1073,7 +1073,9 @@ def test_plan_approval_outbound_names_rendered_pdf_after_durable_proposal(
     durable_dir.mkdir(parents=True)
     plan_file = durable_dir / proposal_name
     plan_file.write_text(plan_content, encoding="utf-8")
-    result = create_plan_approval_gate(plan_file, f"telegram-{action.lower()}")
+    result = create_gate(
+        build_plan_approval_gate_spec(plan_file, f"telegram-{action.lower()}")
+    )
     notification = _notification(result, action=action, sender="plan")
     bundle_plan = Path(result.bundle_path) / "plan.md"
     notification.files = [str(bundle_plan)]
@@ -1143,7 +1145,7 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
 ) -> None:
     plan_file = gate_home / "plan.md"
     plan_file.write_text(VALID_TALE_PLAN, encoding="utf-8")
-    result = create_plan_approval_gate(plan_file, "telegram-plan")
+    result = create_gate(build_plan_approval_gate_spec(plan_file, "telegram-plan"))
     notification = _notification(result, action="PlanApproval", sender="plan")
     bundle = Path(notification.action_data["bundle_path"])
     notification.files = [str(bundle / "plan.md")]
