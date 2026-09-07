@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.10](https://github.com/sase-org/sase-telegram/compare/v0.4.9...v0.4.10) (2026-09-07)
+
+
+### Features
+
+* move Telegram to the shared pending-action API (sase-x7.4) ([072f998](https://github.com/sase-org/sase-telegram/commit/072f99841701e6fdf3ad7654656fe43244d7cb65))
+
+
+### Bug Fixes
+
+* **gates:** settle gate shells answered from Telegram ([b37eb45](https://github.com/sase-org/sase-telegram/commit/b37eb45a8c2cb5829f54c05812e896b24266e4c5))
+
 ## [0.4.9](https://github.com/sase-org/sase-telegram/compare/v0.4.8...v0.4.9) (2026-08-22)
 
 
