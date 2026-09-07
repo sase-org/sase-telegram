@@ -93,9 +93,7 @@ def gate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "LEGACY_TELEGRAM_PENDING_ACTIONS_PATH",
         tmp_path / "telegram.json",
     )
-    monkeypatch.setattr(
-        pending_actions, "PENDING_ACTIONS_PATH", tmp_path / "telegram.json"
-    )
+    monkeypatch.setattr(pending_actions, "PENDING_ACTIONS_PATH", tmp_path / "core.json")
     monkeypatch.setattr(inbound, "AWAITING_FEEDBACK_PATH", tmp_path / "awaiting.json")
     store._LOAD_CACHE.clear()
     return tmp_path

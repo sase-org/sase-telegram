@@ -78,7 +78,10 @@ def _patch_paths():
     patchers = [
         patch("sase_telegram.outbound.LAST_SENT_FILE", LAST_SENT_TEST_FILE),
         patch("sase_telegram.outbound.OUTBOUND_LOCK_FILE", OUTBOUND_LOCK_TEST_FILE),
-        patch("sase_telegram.pending_actions.PENDING_ACTIONS_PATH", PENDING_TEST_FILE),
+        patch(
+            "sase_telegram.pending_actions.PENDING_ACTIONS_PATH",
+            CORE_PENDING_TEST_FILE,
+        ),
         patch("sase_telegram.rate_limit.RATE_LIMIT_PATH", RATE_LIMIT_TEST_FILE),
         patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
         patch("sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
@@ -319,7 +322,11 @@ class TestOutboundIntegration:
         store = core_pending.read_pending_action_store()
         entry = store["actions"][n.id[:8]]
         telegram = next(t for t in entry["transports"] if t["transport"] == "telegram")
-        assert telegram["record"] == {"chat_id": "12345", "message_id": 99}
+        assert telegram["record"]["chat_id"] == "12345"
+        assert telegram["record"]["message_id"] == 99
+        assert telegram["record"]["action"] == "PlanApproval"
+        assert telegram["record"]["action_data"] == n.action_data
+        assert telegram["record"]["files"] == [str(tmp_path / "plan.md")]
 
     @patch("sase_telegram.scripts.sase_tg_outbound.send_message")
     @patch("sase_telegram.outbound._read_current_notification_snapshot")
@@ -746,10 +753,12 @@ class TestInboundIntegration:
         with (
             patch.object(inbound, "IMAGES_DIR", IMAGES_TEST_DIR),
             patch.object(inbound, "_register_commands_if_needed"),
+            # Control this poll's album clock without replacing the process-wide
+            # clock used by pending-action cleanup and other dependencies.
             patch.object(
-                inbound.time,
+                inbound,
                 "time",
-                side_effect=[100.0, 100.5, 100.5, 100.5, 100.5],
+                SimpleNamespace(time=lambda: 100.5),
             ),
         ):
             assert inbound_main(["--once"]) == 0
@@ -762,7 +771,7 @@ class TestInboundIntegration:
         with (
             patch.object(inbound, "IMAGES_DIR", IMAGES_TEST_DIR),
             patch.object(inbound, "_register_commands_if_needed"),
-            patch.object(inbound.time, "time", return_value=103.0),
+            patch.object(inbound, "time", SimpleNamespace(time=lambda: 103.0)),
         ):
             assert inbound_main(["--once"]) == 0
 

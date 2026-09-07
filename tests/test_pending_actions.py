@@ -4,21 +4,32 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+from sase.notifications import pending_actions as core_pending_actions
 from sase_telegram import pending_actions
 
 
 class TestPendingActions:
     def setup_method(self) -> None:
         self.tmp_path = Path("/tmp/test_pending_actions.json")
+        self.legacy_path = Path("/tmp/test_pending_actions_legacy.json")
         self.tmp_path.unlink(missing_ok=True)
-        self._patcher = patch.object(
+        self.legacy_path.unlink(missing_ok=True)
+        self._path_patcher = patch.object(
             pending_actions, "PENDING_ACTIONS_PATH", self.tmp_path
         )
-        self._patcher.start()
+        self._legacy_path_patcher = patch.object(
+            core_pending_actions,
+            "LEGACY_TELEGRAM_PENDING_ACTIONS_PATH",
+            self.legacy_path,
+        )
+        self._path_patcher.start()
+        self._legacy_path_patcher.start()
 
     def teardown_method(self) -> None:
-        self._patcher.stop()
+        self._legacy_path_patcher.stop()
+        self._path_patcher.stop()
         self.tmp_path.unlink(missing_ok=True)
+        self.legacy_path.unlink(missing_ok=True)
 
     def test_add_and_get(self) -> None:
         pending_actions.add("action1", {"type": "snooze", "target": "notif-abc"})
@@ -48,12 +59,11 @@ class TestPendingActions:
 
     def test_cleanup_stale(self) -> None:
         # Add an action with a timestamp from 25 hours ago
-        pending_actions.add("old", {"type": "snooze"})
+        with patch.object(
+            pending_actions.time, "time", return_value=time.time() - 25 * 60 * 60
+        ):
+            pending_actions.add("old", {"type": "snooze"})
         pending_actions.add("new", {"type": "dismiss"})
-
-        data = pending_actions._load()
-        data["old"]["created_at"] = time.time() - (25 * 60 * 60)
-        pending_actions._save(data)
 
         removed = pending_actions.cleanup_stale()
         assert "old" in removed

@@ -1,80 +1,68 @@
-"""Persist and manage pending actions awaiting user response via Telegram."""
+"""Manage Telegram pending actions through the shared host store."""
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
-PENDING_ACTIONS_PATH = Path.home() / ".sase" / "telegram" / "pending_actions.json"
-STALE_THRESHOLD_SECONDS = 24 * 60 * 60  # 24 hours
+from sase.notifications.pending_actions import cleanup_transport_actions
+from sase.notifications.pending_actions import get_transport_action
+from sase.notifications.pending_actions import list_transport_actions
+from sase.notifications.pending_actions import remove_transport_action
+from sase.notifications.pending_actions import upsert_transport_action
 
-
-def _load() -> dict[str, Any]:
-    """Load pending actions from disk."""
-    if not PENDING_ACTIONS_PATH.exists():
-        return {}
-    with open(PENDING_ACTIONS_PATH) as f:
-        return json.load(f)
-
-
-def _save(data: dict[str, Any]) -> None:
-    """Atomically write pending actions to disk."""
-    PENDING_ACTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=PENDING_ACTIONS_PATH.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, PENDING_ACTIONS_PATH)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+PENDING_ACTIONS_PATH: Path | str | None = None
+STALE_THRESHOLD_SECONDS = 24 * 60 * 60
+_TRANSPORT = "telegram"
 
 
 def add(action_id: str, action_data: dict[str, Any]) -> None:
-    """Add a pending action."""
-    data = _load()
-    action_data["created_at"] = time.time()
-    data[action_id] = action_data
-    _save(data)
+    """Add or replace a pending Telegram action."""
+    created_at = time.time()
+    action_data.setdefault("created_at", created_at)
+    upsert_transport_action(
+        action_id,
+        action_data,
+        transport=_TRANSPORT,
+        path=PENDING_ACTIONS_PATH,
+        now=created_at,
+    )
 
 
 def get(action_id: str) -> dict[str, Any] | None:
-    """Get a pending action by ID, or None if not found."""
-    data = _load()
-    return data.get(action_id)
+    """Get a pending Telegram action by ID, or None if not found."""
+    return get_transport_action(
+        action_id,
+        transport=_TRANSPORT,
+        path=PENDING_ACTIONS_PATH,
+        include_legacy=True,
+    )
 
 
 def remove(action_id: str) -> bool:
-    """Remove a pending action. Returns True if it existed."""
-    data = _load()
-    if action_id not in data:
-        return False
-    del data[action_id]
-    _save(data)
-    return True
+    """Remove a pending Telegram action. Returns True if it existed."""
+    return bool(
+        remove_transport_action(
+            action_id,
+            transport=_TRANSPORT,
+            path=PENDING_ACTIONS_PATH,
+        )
+    )
 
 
 def list_all() -> dict[str, Any]:
-    """Return all pending actions."""
-    return _load()
+    """Return all pending Telegram actions."""
+    return list_transport_actions(
+        transport=_TRANSPORT,
+        path=PENDING_ACTIONS_PATH,
+        include_legacy=True,
+    )
 
 
 def cleanup_stale() -> list[str]:
-    """Remove pending actions older than 24 hours. Returns removed IDs."""
-    data = _load()
-    now = time.time()
-    stale_ids = [
-        aid
-        for aid, adata in data.items()
-        if now - adata.get("created_at", 0) > STALE_THRESHOLD_SECONDS
-    ]
-    for aid in stale_ids:
-        del data[aid]
-    if stale_ids:
-        _save(data)
-    return stale_ids
+    """Remove Telegram actions older than 24 hours. Returns removed IDs."""
+    return cleanup_transport_actions(
+        transport=_TRANSPORT,
+        path=PENDING_ACTIONS_PATH,
+    )
