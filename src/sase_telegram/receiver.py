@@ -14,8 +14,12 @@ restart resilience.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
+
+from sase_telegram.executables import resolve_console_script
 
 if TYPE_CHECKING:
     from sase.procs import Proc
@@ -23,8 +27,11 @@ if TYPE_CHECKING:
 #: Console-script entry point (see pyproject.toml ``[project.scripts]``),
 #: re-invoked with ``--receiver`` so the spawned proc runs the persistent
 #: long-poll loop instead of one local-cleanup tick.
-_RECEIVER_ARGV = ["sase_chop_tg_inbound", "--receiver"]
+_RECEIVER_SCRIPT = "sase_chop_tg_inbound"
 _RECEIVER_ORIGIN = "telegram-receiver"
+_RECEIVER_LAUNCH_FAILURE_BACKOFF = timedelta(seconds=300)
+_RECEIVER_LAUNCH_FAILURE_DEDUP_KEY = "telegram-receiver-launch-failure"
+_RECEIVER_LAUNCH_FAILURE_SENDER = "telegram"
 
 
 def receiver_identity() -> str:
@@ -61,9 +68,18 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
     from sase.procs import ProcSubmitRequest, submit_proc_request
 
     identity = receiver_identity()
+    if argv is None:
+        failed = _newest_launch_failed_receiver(identity)
+        if failed is not None:
+            _notify_receiver_launch_failure(failed)
+            if _in_launch_failure_backoff(failed):
+                return failed
+        request_argv = _receiver_argv()
+    else:
+        request_argv = list(argv)
     return submit_proc_request(
         ProcSubmitRequest(
-            argv=list(argv) if argv is not None else _RECEIVER_ARGV,
+            argv=request_argv,
             label="Telegram inbound long-poll receiver",
             cwd=str(Path.home()),
             origin=_RECEIVER_ORIGIN,
@@ -76,6 +92,106 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
             idle_timeout_seconds=None,
         )
     )
+
+
+def _receiver_argv() -> list[str]:
+    return [resolve_console_script(_RECEIVER_SCRIPT), "--receiver"]
+
+
+def _newest_launch_failed_receiver(fingerprint: str) -> Proc | None:
+    from sase.procs import TERMINAL_PROC_STATUSES
+    from sase.procs.store import read_proc_snapshot
+
+    snapshot = read_proc_snapshot()
+    proc = next(
+        (row for row in snapshot.procs if row.request_fingerprint == fingerprint),
+        None,
+    )
+    if proc is None or proc.status not in TERMINAL_PROC_STATUSES:
+        return None
+    if _termination_reason(proc) != "launch-failure":
+        return None
+    return proc
+
+
+def _termination_reason(proc: Proc) -> str | None:
+    result = proc.result
+    if isinstance(result, dict):
+        reason = result.get("termination_reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return proc.stop_reason
+
+
+def _in_launch_failure_backoff(proc: Proc, *, now: datetime | None = None) -> bool:
+    occurred_at = _proc_failure_time(proc)
+    if occurred_at is None:
+        return True
+    current = now or datetime.now(UTC)
+    return current - occurred_at < _RECEIVER_LAUNCH_FAILURE_BACKOFF
+
+
+def _proc_failure_time(proc: Proc) -> datetime | None:
+    for value in (proc.finished_at, proc.created_at):
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def _notify_receiver_launch_failure(proc: Proc) -> None:
+    from sase.notifications.models import Notification, normalize_notification_tags
+    from sase.notifications.store import (
+        read_current_notification_snapshot,
+        upsert_notification,
+    )
+
+    snapshot = read_current_notification_snapshot(include_dismissed=True)
+    notifications = getattr(snapshot, "notifications", snapshot)
+    if any(
+        notification.sender == _RECEIVER_LAUNCH_FAILURE_SENDER
+        and notification.dedup_key == _RECEIVER_LAUNCH_FAILURE_DEDUP_KEY
+        for notification in notifications
+    ):
+        return
+
+    timestamp = datetime.now(UTC).isoformat()
+    message = _one_line(proc.message or _result_message(proc) or "unknown launch error")
+    log_path = proc.log_path
+    upsert_notification(
+        Notification(
+            id=str(uuid4()),
+            timestamp=timestamp,
+            sender=_RECEIVER_LAUNCH_FAILURE_SENDER,
+            notes=[
+                "Telegram inbound receiver cannot start.",
+                f"Proc {proc.proc_id}: {message}",
+                f"Log: {log_path}",
+            ],
+            files=[log_path] if log_path else [],
+            tags=normalize_notification_tags(["telegram", "receiver", "error"]),
+            dedup_key=_RECEIVER_LAUNCH_FAILURE_DEDUP_KEY,
+        )
+    )
+
+
+def _result_message(proc: Proc) -> str | None:
+    result = proc.result
+    if isinstance(result, dict):
+        message = result.get("message")
+        if isinstance(message, str) and message:
+            return message
+    return None
+
+
+def _one_line(value: str) -> str:
+    return " ".join(value.split())
 
 
 __all__ = ["ensure_receiver_running", "receiver_identity"]

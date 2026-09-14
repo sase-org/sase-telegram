@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sase_telegram import receiver
+
+
+def _proc(
+    *,
+    proc_id: str = "proc-1",
+    request_fingerprint: str = "telegram-receiver:12345",
+    status: str = "error",
+    termination_reason: str | None = "launch-failure",
+    message: str = "could not start command",
+    finished_at: str | None = None,
+) -> SimpleNamespace:
+    result = {"message": message}
+    if termination_reason is not None:
+        result["termination_reason"] = termination_reason
+    return SimpleNamespace(
+        proc_id=proc_id,
+        request_fingerprint=request_fingerprint,
+        status=status,
+        result=result,
+        stop_reason=None,
+        message=message,
+        log_path=f"/tmp/{proc_id}.log",
+        created_at=datetime.now(UTC).isoformat(),
+        finished_at=finished_at or datetime.now(UTC).isoformat(),
+    )
 
 
 class TestReceiverIdentity:
@@ -26,14 +53,24 @@ class TestReceiverIdentity:
 class TestEnsureReceiverRunning:
     @patch("sase.procs.submit_proc_request")
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_chop_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
     def test_submits_a_deterministic_request(
-        self, _mock_chat_id: MagicMock, mock_submit: MagicMock
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
     ) -> None:
+        mock_snapshot.return_value = SimpleNamespace(procs=[])
         receiver.ensure_receiver_running()
 
         assert mock_submit.call_count == 1
         request = mock_submit.call_args.args[0]
-        assert request.argv == ["sase_chop_tg_inbound", "--receiver"]
+        assert request.argv == ["/venv/bin/sase_chop_tg_inbound", "--receiver"]
         assert request.origin == "telegram-receiver"
         assert request.concurrency_keys == ["telegram-receiver:12345"]
         assert request.request_fingerprint == "telegram-receiver:12345"
@@ -43,8 +80,17 @@ class TestEnsureReceiverRunning:
 
     @patch("sase.procs.submit_proc_request")
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_chop_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
     def test_two_calls_carry_the_same_fingerprint_and_concurrency_key(
-        self, _mock_chat_id: MagicMock, mock_submit: MagicMock
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
     ) -> None:
         """Same identity every call -- the mechanism a competing tick relies on.
 
@@ -54,12 +100,123 @@ class TestEnsureReceiverRunning:
         that *this* call site always asks for the same identity, since that
         determinism is what makes replay possible.
         """
+        mock_snapshot.return_value = SimpleNamespace(procs=[])
         receiver.ensure_receiver_running()
         receiver.ensure_receiver_running()
 
         first, second = (call.args[0] for call in mock_submit.call_args_list)
         assert first.request_fingerprint == second.request_fingerprint
         assert first.concurrency_keys == second.concurrency_keys
+
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_recent_launch_failure_notifies_once_and_suppresses_rearm(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        failed = _proc()
+        mock_snapshot.return_value = SimpleNamespace(procs=[failed])
+        notifications: list[object] = []
+        read_notifications = MagicMock(
+            side_effect=lambda **_kwargs: SimpleNamespace(
+                notifications=list(notifications)
+            )
+        )
+        upsert_notification = MagicMock(
+            side_effect=lambda notification: notifications.append(notification)
+        )
+        monkeypatch.setattr(
+            "sase.notifications.store.read_current_notification_snapshot",
+            read_notifications,
+        )
+        monkeypatch.setattr(
+            "sase.notifications.store.upsert_notification",
+            upsert_notification,
+        )
+
+        first = receiver.ensure_receiver_running()
+        second = receiver.ensure_receiver_running()
+
+        assert first is failed
+        assert second is failed
+        mock_submit.assert_not_called()
+        assert upsert_notification.call_count == 1
+        notification = upsert_notification.call_args.args[0]
+        assert notification.sender == "telegram"
+        assert notification.dedup_key == "telegram-receiver-launch-failure"
+        assert "could not start command" in "\n".join(notification.notes)
+        assert "/tmp/proc-1.log" in "\n".join(notification.notes)
+        assert notification.files == ["/tmp/proc-1.log"]
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            None,
+            _proc(status="running", termination_reason=None),
+            _proc(status="success", termination_reason="success"),
+            _proc(status="error", termination_reason="error"),
+        ],
+    )
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_chop_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_absent_or_healthy_newest_row_rearms(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        row: object | None,
+    ) -> None:
+        mock_snapshot.return_value = SimpleNamespace(procs=[] if row is None else [row])
+        launched = MagicMock(proc_id="fresh")
+        mock_submit.return_value = launched
+
+        assert receiver.ensure_receiver_running() is launched
+
+        mock_submit.assert_called_once()
+
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_chop_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_old_launch_failure_rearms_after_backoff(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        failed_at = datetime.now(UTC) - timedelta(seconds=301)
+        mock_snapshot.return_value = SimpleNamespace(
+            procs=[_proc(finished_at=failed_at.isoformat())]
+        )
+        monkeypatch.setattr(
+            "sase.notifications.store.read_current_notification_snapshot",
+            lambda **_kwargs: SimpleNamespace(notifications=[]),
+        )
+        monkeypatch.setattr(
+            "sase.notifications.store.upsert_notification",
+            lambda _notification: None,
+        )
+        launched = MagicMock(proc_id="fresh")
+        mock_submit.return_value = launched
+
+        assert receiver.ensure_receiver_running() is launched
+
+        mock_submit.assert_called_once()
 
 
 class TestSingleOwnerReplay:

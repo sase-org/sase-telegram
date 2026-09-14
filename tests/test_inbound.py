@@ -1105,7 +1105,7 @@ class TestUpdateCommand:
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            f"Already up to date; log: {log_path}",
+            f"Already up to date; log: {inbound._shorten_home(str(log_path))}",
         )
         assert not (pending_dir / "job-1.json").exists()
 
@@ -1146,7 +1146,8 @@ class TestUpdateCommand:
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            f"Update failed: could not detect uv-tool install; log: {log_path}",
+            "Update failed: could not detect uv-tool install; log: "
+            f"{inbound._shorten_home(str(log_path))}",
         )
         assert not (pending_dir / "job-2.json").exists()
 
@@ -1186,7 +1187,8 @@ class TestUpdateCommand:
 
         mock_tg.send_message.assert_called_once_with(
             "12345",
-            f"Update failed with exit code 17; log: {log_path}",
+            f"Update failed with exit code 17; log: "
+            f"{inbound._shorten_home(str(log_path))}",
         )
         assert not (pending_dir / "job-2.json").exists()
 

@@ -98,6 +98,14 @@ def _mock_submit(monkeypatch: pytest.MonkeyPatch, proc_id: str = "proc-1") -> Ma
     return mock
 
 
+def _mock_sase_cli(monkeypatch: pytest.MonkeyPatch) -> str:
+    path = "/venv/bin/sase"
+    monkeypatch.setattr(
+        "sase_telegram.inbound.resolve_console_script", lambda _name: path
+    )
+    return path
+
+
 def _action(request_id: str, bundle_path: Path) -> dict[str, Any]:
     return {
         "action": "CustomGate",
@@ -116,6 +124,7 @@ def test_telegram_submits_a_shell_backed_gate(
 ) -> None:
     """Telegram submits the shared proc; it never touches the gate shell."""
     del gate_home
+    sase_cli = _mock_sase_cli(monkeypatch)
     mock = _mock_submit(monkeypatch)
     gate = create_gate(_spec("tg-shell-1", shell=True))
     _make_gate_shell_member("tg-shell-1", gate.bundle_path)
@@ -137,7 +146,7 @@ def test_telegram_submits_a_shell_backed_gate(
     mock.assert_called_once()
     submitted = mock.call_args.args[0]
     assert submitted.argv == [
-        "sase",
+        sase_cli,
         "gate",
         "answer",
         "--id",
@@ -158,6 +167,7 @@ def test_telegram_submits_an_ordinary_gate_identically(
 ) -> None:
     """A non-shell gate submits through the exact same path -- no branching."""
     del gate_home
+    sase_cli = _mock_sase_cli(monkeypatch)
     mock = _mock_submit(monkeypatch)
     gate = create_gate(_spec("tg-plain-1", shell=False))
 
@@ -178,7 +188,7 @@ def test_telegram_submits_an_ordinary_gate_identically(
     mock.assert_called_once()
     submitted = mock.call_args.args[0]
     assert submitted.argv == [
-        "sase",
+        sase_cli,
         "gate",
         "answer",
         "--id",

@@ -21,6 +21,7 @@ from sase.notification_gates.registry import (
     PRIVILEGED_GATE_ACTIONS,
     adapter_for_action,
 )
+from sase_telegram.executables import resolve_console_script
 
 
 _LAUNCH_XPROMPT_AT_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
@@ -129,6 +130,7 @@ GATE_COMPLETION_PENDING_DIR = Path.home() / ".sase" / "telegram" / "gate_complet
 #: durable-submission API, mirroring ``sase gate answer``'s own
 #: ``GATE_ANSWER_DETACH_ORIGIN``.
 GATE_ANSWER_TELEGRAM_ORIGIN = "telegram-gate-detach"
+_SASE_CLI = "sase"
 
 
 @dataclass
@@ -455,7 +457,7 @@ def submit_gate_response(
         proc = submit_proc_request(
             ProcSubmitRequest(
                 argv=[
-                    "sase",
+                    resolve_console_script(_SASE_CLI),
                     "gate",
                     "answer",
                     "--id",
