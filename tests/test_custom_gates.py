@@ -7,6 +7,7 @@ from datetime import datetime
 from inspect import signature
 import json
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from sase.bead.model import SnoozeRecord
 from sase.bead.snooze_gate import create_bead_snooze_gate
 from sase.bead.stale_cleanup_gate import create_bead_stale_cleanup_gate
 from sase.bead.task_gate import create_task_triage_gate
+from sase.feature_flags import override_flags
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import (
     adapter_for_kind,
@@ -31,6 +33,7 @@ from sase.notifications.store import load_notifications
 from sase.plan_gate import build_plan_approval_gate_spec
 from sase.plugins.required_gate import create_plugins_required_gate
 from sase.sdd.plan_validate import validate_plan as validate_sase_plan
+from sase.sudo.gate import build_sudo_gate_request
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
 from sase_telegram.gate_flow import GateProgress
@@ -295,6 +298,21 @@ def _missing_plugin_entry() -> dict[str, str]:
             "required plugin `sase-github` is not installed; "
             "run `sase plugin install sase-github`"
         ),
+    }
+
+
+def _sudo_request() -> dict[str, Any]:
+    executable = shutil.which("true")
+    assert executable is not None
+    return {
+        "reason": "Need to refresh root-owned package metadata",
+        "commands": [{"id": "refresh", "argv": [executable]}],
+        "run_as": "root",
+        "cwd": "/tmp",
+        "env": {"LC_ALL": "C"},
+        "timeout_seconds": 30,
+        "stop_policy": "terminate",
+        "output_policy": "bounded",
     }
 
 
@@ -729,8 +747,11 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         missing=[_missing_plugin_entry()],
         producer={"chop": "plugins_required"},
     )
+    with override_flags(agent_sudo_requests=True):
+        sudo = create_gate(build_sudo_gate_request(_sudo_request()))
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
+        "sudo": _stored_notification(sudo.notification_id),
         "task_triage": _stored_notification(task.notification_id),
         "bead_snooze": _stored_notification(snooze.notification_id),
         "flag_triage": _stored_notification(flag.notification_id),
