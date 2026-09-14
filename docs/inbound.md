@@ -11,15 +11,50 @@ immediately with status `0`, prints nothing, and skips all heavy imports and net
 ## CLI Usage
 
 ```bash
-sase_chop_tg_inbound              # Process pending updates and exit
-sase_chop_tg_inbound --once       # Compatibility flag; also processes pending updates and exits
+sase_chop_tg_inbound              # Local cleanup, then ensure the long-poll receiver is running
+sase_chop_tg_inbound --once       # Process pending updates once (no long-polling) and exit
+sase_chop_tg_inbound --receiver   # Run the persistent long-poll receiver loop (internal use)
 sase_chop_tg_inbound --context X  # Pass context string for logging
 ```
 
+## Long-Poll Receiver
+
+Telegram updates are fetched by one persistent, supervised long-poll receiver per
+configured bot, not by the five-second chop tick itself. Each tick calls
+`ensure_receiver_running`, an idempotent, non-blocking durable-proc submission
+(`sase.procs.submit_proc_request` with a fingerprint/concurrency key derived from the
+configured chat id): a receiver already active for that bot replays the same proc row,
+so re-arming on every tick never spawns a second `getUpdates` consumer. Because SASE's
+proc supervisor does not auto-relaunch a crashed supervised proc, this per-tick re-arm
+is also how a killed or crashed receiver comes back — within one tick interval, not
+after a manual restart.
+
+The receiver self-terminates (rather than waiting for an external stop signal) once it
+notices Telegram has been disabled (`~/.sase/telegram_is_enabled` removed) or its
+credentials stop resolving; the next enabled, credentialed tick then re-arms a fresh
+one. It is a detached supervised proc like any other (e.g. a submitted gate answer), so
+it is not tied to the lifetime of the chop tick or the AXE lumberjack that launched it,
+and it keeps running across `sase axe stop`; stop it directly with `sase proc kill` (or
+disable Telegram) if you need it down immediately.
+
+Adopting the receiver on an existing installation needs no manual config edit: the first
+tick after upgrading calls `ensure_receiver_running` exactly like every later one.
+`--once` still runs the old poll-once-and-exit path directly (no receiver involved), for
+diagnostics and tests. In-flight state predates this change in shape only, not
+semantics: the on-disk offset (`update_offset.txt`), pending actions, and awaiting-
+feedback records are read and written the same way by `--once` and by the receiver, so
+switching between them (or running `--once` manually while a receiver is active) never
+duplicates or loses that state.
+
 ## Update Processing
 
-The inbound script fetches updates from Telegram starting from the stored offset in `update_offset.txt`, saves the next
-offset before handling them, then dispatches each update by type.
+Both `--once` and the receiver fetch updates from Telegram starting from the stored
+offset in `update_offset.txt` and dispatch each update by type, in order. The offset is
+saved after each update finishes — successfully, or with a caught and logged handler
+error — rather than once for the whole batch, so a killed receiver never silently loses
+an update it had not yet reached; redelivery on restart resumes at exactly that update.
+A single update whose handler raises is logged and skipped (the offset still advances
+past it), so one bad update cannot wedge every later one behind it.
 
 ### Callback Queries (Button Presses)
 

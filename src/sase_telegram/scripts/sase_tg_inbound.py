@@ -25,6 +25,9 @@ from sase_telegram import (
     question_flow,
     telegram_client,
 )
+from sase_telegram.credentials import TelegramCredentialError
+from sase_telegram.enabled import is_telegram_enabled
+from sase_telegram.receiver import ensure_receiver_running
 from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_json
 from sase_telegram.agent_format import (
     _detail_rows,
@@ -178,6 +181,16 @@ _CUSTOM_COMMAND_CAPTION_LIMIT = 1024
 _CUSTOM_COMMAND_STDERR_LIMIT = 1000
 _KILL_SELECTION_PENDING_KEY = "kill-selection"
 _KILL_SELECTION_CHOICE = "select"
+#: getUpdates long-poll timeout for the persistent receiver (--receiver).
+#: python-telegram-bot extends its own HTTP read timeout by this amount
+#: automatically (Bot.get_updates), so this does not need a matching
+#: telegram_client change.
+_RECEIVER_POLL_TIMEOUT_SECONDS = 30
+#: Backoff before retrying the receiver's poll loop after an unexpected
+#: (non-Telegram-retryable) failure, e.g. a bug in a handler or a store
+#: error -- telegram_client.get_updates already retries rate limits/network
+#: errors internally before raising here.
+_RECEIVER_ERROR_BACKOFF_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -274,6 +287,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--once",
         action="store_true",
         help="Process pending updates once and exit (no long-polling)",
+    )
+    parser.add_argument(
+        "--receiver",
+        action="store_true",
+        help=(
+            "Run the persistent long-poll receiver loop (internal: launched "
+            "by ensure_receiver_running, not intended for direct/manual use)"
+        ),
     )
     parser.add_argument(
         "--context",
@@ -4556,24 +4577,106 @@ def _find_shared_handled_transports(
     ]
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Inbound Telegram chop entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(name)s: %(message)s",
-        stream=sys.stdout,
-    )
-    # Suppress noisy httpx request logging
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    _parse_args(argv)
+def _dispatch_one_update(
+    update: Any, custom_commands: dict[str, CustomCommand] | None
+) -> str | None:
+    """Process one Telegram update; return its summary bucket, if any.
 
-    # Load once so registration and every update in this poll share one view.
-    custom_commands = load_custom_commands()
+    Reloads pending actions fresh for each callback instead of sharing one
+    snapshot across a whole poll batch, since the long-poll receiver can
+    return much larger batches than the old zero-timeout poll ever did --
+    a stale batch-start snapshot would make a later update in the same
+    batch miss an action removed by an earlier one.
+    """
+    if update.callback_query:
+        log.info("Processing callback (update_id=%d)", update.update_id)
+        _handle_callback(update.callback_query, pending_actions.list_all())
+        return "callback"
+    if update.message:
+        msg = update.message
+        if msg.photo:
+            if _media_group_id(msg):
+                log.info("Staging grouped photo message")
+                _stage_media_group_image(msg, "photo")
+            else:
+                log.info("Processing photo message")
+                _handle_photo_message(msg)
+            return "photo"
+        if (
+            msg.document
+            and msg.document.mime_type
+            and msg.document.mime_type.startswith("image/")
+        ):
+            if _media_group_id(msg):
+                log.info("Staging grouped document image: %s", msg.document.file_name)
+                _stage_media_group_image(msg, "document")
+            else:
+                log.info("Processing document image: %s", msg.document.file_name)
+                _handle_document_image(msg)
+            return "document"
+        if msg.text:
+            log.info("Processing text message (update_id=%d)", update.update_id)
+            _handle_text_message(msg, custom_commands)
+            return "text"
+        log.info("Skipping unsupported message type (update_id=%d)", update.update_id)
+        return "unsupported"
+    return None
 
-    # Register slash commands (cached, non-blocking on failure)
+
+@dataclass(frozen=True)
+class _PollResult:
+    updates: list[Any]
+    next_offset: int | None
+    counts: dict[str, int]
+
+
+def _poll_and_dispatch_updates(
+    offset: int | None,
+    *,
+    timeout: int,
+    custom_commands: dict[str, CustomCommand] | None,
+) -> _PollResult:
+    """Fetch one batch of updates and dispatch each, durably, in order.
+
+    The offset advances after each update finishes (successfully or with a
+    caught, logged error) instead of once for the whole batch, so a killed
+    receiver never silently loses an update that arrived but was not yet
+    claimed -- redelivery on restart resumes at exactly the first update
+    this process never got to. A single update whose handler raises is
+    logged and skipped (offset still advances past it) rather than wedging
+    every later update behind it forever, matching a real process crash's
+    effective behavior today.
+    """
+    updates = telegram_client.get_updates(offset=offset, timeout=timeout)
+    counts = {"callback": 0, "text": 0, "photo": 0, "document": 0, "unsupported": 0}
+    next_offset: int | None = None
+    if updates:
+        log.info("Received %d update(s) (offset=%s)", len(updates), offset)
+        for update in updates:
+            try:
+                bucket = _dispatch_one_update(update, custom_commands)
+            except Exception:
+                log.warning(
+                    "Failed to process Telegram update_id=%d",
+                    update.update_id,
+                    exc_info=True,
+                )
+                bucket = None
+            if bucket is not None:
+                counts[bucket] += 1
+            next_offset = update.update_id + 1
+            save_offset(next_offset)
+    return _PollResult(updates=updates, next_offset=next_offset, counts=counts)
+
+
+def _run_pre_poll_cleanup(
+    custom_commands: dict[str, CustomCommand] | None,
+) -> tuple[int, int]:
+    """Register commands, clean stale actions, and deliver ready completions.
+
+    Returns ``(stale_pending_count, ready_completions_sent)``.
+    """
     _register_commands_if_needed(custom_commands)
-
-    # Clean up stale pending actions
     stale_pending = pending_actions.cleanup_stale()
     ready_completions_sent = (
         _send_ready_update_completions() + _send_ready_gate_completions()
@@ -4581,79 +4684,17 @@ def main(argv: list[str] | None = None) -> int:
     # Retry any inline-keyboard removal whose Telegram API edit durably
     # failed on an earlier tick, independent of this tick's own updates.
     _retry_pending_keyboard_cleanups()
+    return len(stale_pending), ready_completions_sent
 
-    pending = pending_actions.list_all()
-    offset = get_last_offset()
-    updates = telegram_client.get_updates(offset=offset, timeout=0)
-    next_offset: int | None = None
-    callback_count = 0
-    text_count = 0
-    photo_count = 0
-    document_count = 0
-    unsupported_count = 0
 
-    if updates:
-        log.info("Received %d update(s) (offset=%s)", len(updates), offset)
-
-        # Save offset BEFORE processing to prevent duplicate agent launches when
-        # overlapping invocations race (at-most-once delivery).
-        last_update_id = max(u.update_id for u in updates)
-        next_offset = last_update_id + 1
-        save_offset(next_offset)
-
-        for update in updates:
-            if update.callback_query:
-                callback_count += 1
-                log.info("Processing callback (update_id=%d)", update.update_id)
-                _handle_callback(update.callback_query, pending)
-            elif update.message:
-                msg = update.message
-                if msg.photo:
-                    photo_count += 1
-                    if _media_group_id(msg):
-                        log.info("Staging grouped photo message")
-                        _stage_media_group_image(msg, "photo")
-                    else:
-                        log.info("Processing photo message")
-                        _handle_photo_message(msg)
-                elif (
-                    msg.document
-                    and msg.document.mime_type
-                    and msg.document.mime_type.startswith("image/")
-                ):
-                    document_count += 1
-                    if _media_group_id(msg):
-                        log.info(
-                            "Staging grouped document image: %s",
-                            msg.document.file_name,
-                        )
-                        _stage_media_group_image(msg, "document")
-                    else:
-                        log.info(
-                            "Processing document image: %s",
-                            msg.document.file_name,
-                        )
-                        _handle_document_image(msg)
-                elif msg.text:
-                    text_count += 1
-                    log.info("Processing text message (update_id=%d)", update.update_id)
-                    _handle_text_message(msg, custom_commands)
-                else:
-                    unsupported_count += 1
-                    log.info(
-                        "Skipping unsupported message type (update_id=%d)",
-                        update.update_id,
-                    )
-
-        # Re-read pending actions since _handle_callback may have removed some.
-        pending = pending_actions.list_all()
-
+def _run_post_poll_cleanup() -> int:
+    """Dismiss buttons for actions resolved outside Telegram; return count."""
     _flush_ready_media_groups()
 
     # Clean up pending actions handled by the TUI (remove stale buttons).
     # Legacy filesystem checks run first as the fallback for records that do
     # not yet carry shared transport state.
-    handled = find_externally_handled(pending)
+    handled = find_externally_handled(pending_actions.list_all())
     handled_prefixes: set[str] = set()
     for prefix, message_id, chat_id in handled:
         _dismiss_resolved_button(prefix, message_id, chat_id)
@@ -4670,20 +4711,138 @@ def main(argv: list[str] | None = None) -> int:
         _dismiss_resolved_button(prefix, message_id, chat_id)
         handled_prefixes.add(prefix)
 
+    return len(handled_prefixes)
+
+
+def _run_once(custom_commands: dict[str, CustomCommand] | None) -> int:
+    """Poll once (no long-polling) and exit -- diagnostics/tests (--once)."""
+    stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
+    offset = get_last_offset()
+    result = _poll_and_dispatch_updates(
+        offset, timeout=0, custom_commands=custom_commands
+    )
+    handled_count = _run_post_poll_cleanup()
     _print_inbound_summary(
         offset=offset,
-        next_offset=next_offset,
-        update_count=len(updates),
-        callback_count=callback_count,
-        text_count=text_count,
-        photo_count=photo_count,
-        document_count=document_count,
-        unsupported_count=unsupported_count,
+        next_offset=result.next_offset,
+        update_count=len(result.updates),
+        callback_count=result.counts["callback"],
+        text_count=result.counts["text"],
+        photo_count=result.counts["photo"],
+        document_count=result.counts["document"],
+        unsupported_count=result.counts["unsupported"],
         ready_completions_sent=ready_completions_sent,
-        pending_actions_cleaned=len(stale_pending) + len(handled_prefixes),
-        reason=None if updates else "no_updates",
+        pending_actions_cleaned=stale_count + handled_count,
+        reason=None if result.updates else "no_updates",
     )
     return 0
+
+
+def _run_chop_tick(custom_commands: dict[str, CustomCommand] | None) -> int:
+    """Default (bare) chop invocation: local cleanup plus ensure-receiver.
+
+    Network polling now belongs to the persistent ``--receiver`` proc, not
+    this short-lived tick, so this keeps the existing five-second cleanup
+    cadence (pending-action cleanup, keyboard-removal retries, completion
+    delivery) fully independent of however long the receiver's long poll is
+    currently waiting. Raises :class:`TelegramCredentialError` exactly as
+    the old always-polling ``main`` did (via ``get_updates``), so the
+    disabled-credential contract ``scripts.inbound_main`` relies on is
+    unchanged.
+    """
+    credentials.get_bot_token()
+    stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
+    handled_count = _run_post_poll_cleanup()
+    ensure_receiver_running()
+    _print_inbound_summary(
+        offset=None,
+        next_offset=None,
+        update_count=0,
+        callback_count=0,
+        text_count=0,
+        photo_count=0,
+        document_count=0,
+        unsupported_count=0,
+        ready_completions_sent=ready_completions_sent,
+        pending_actions_cleaned=stale_count + handled_count,
+        reason="receiver_ensured",
+    )
+    return 0
+
+
+def _run_receiver() -> int:
+    """Run the persistent long-poll receiver loop until told to stop.
+
+    Self-terminates when Telegram becomes disabled or its credentials stop
+    resolving, rather than requiring an external stop signal: the next
+    enabled, credentialed chop tick's ``ensure_receiver_running`` call
+    re-arms a fresh receiver, so this is sufficient to respond to disabling
+    Telegram or rotating/removing its credentials. Reloads custom commands
+    each iteration (unlike ``load_custom_commands`` being loaded once by the
+    short-lived chop tick), since this process can run for a long time.
+    """
+    log.info(
+        "Starting Telegram long-poll receiver (timeout=%ds)",
+        _RECEIVER_POLL_TIMEOUT_SECONDS,
+    )
+    while True:
+        if not is_telegram_enabled():
+            log.info("Telegram disabled; receiver exiting")
+            return 0
+        try:
+            credentials.get_bot_token()
+        except TelegramCredentialError as exc:
+            log.warning("Telegram credentials unavailable; receiver exiting: %s", exc)
+            return 0
+
+        custom_commands = load_custom_commands()
+        offset = get_last_offset()
+        try:
+            result = _poll_and_dispatch_updates(
+                offset,
+                timeout=_RECEIVER_POLL_TIMEOUT_SECONDS,
+                custom_commands=custom_commands,
+            )
+        except Exception:
+            log.warning("Receiver poll failed; retrying", exc_info=True)
+            time.sleep(_RECEIVER_ERROR_BACKOFF_SECONDS)
+            continue
+
+        if result.updates:
+            _print_inbound_summary(
+                offset=offset,
+                next_offset=result.next_offset,
+                update_count=len(result.updates),
+                callback_count=result.counts["callback"],
+                text_count=result.counts["text"],
+                photo_count=result.counts["photo"],
+                document_count=result.counts["document"],
+                unsupported_count=result.counts["unsupported"],
+                ready_completions_sent=0,
+                pending_actions_cleaned=0,
+                reason=None,
+            )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Inbound Telegram chop entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+    # Suppress noisy httpx request logging
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    args = _parse_args(argv)
+    if args.receiver:
+        # Reloads custom commands itself each iteration; nothing to share.
+        return _run_receiver()
+
+    # Load once so registration and every update in this poll share one view.
+    custom_commands = load_custom_commands()
+    if args.once:
+        return _run_once(custom_commands)
+    return _run_chop_tick(custom_commands)
 
 
 if __name__ == "__main__":

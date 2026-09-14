@@ -782,3 +782,180 @@ class TestInboundIntegration:
         assert "2. " in prompt and "album_two_1" in prompt
         assert not MEDIA_GROUP_TEST_FILE.exists()
         assert mock_tg.download_file.call_count == 2
+
+
+class TestInboundChopTick:
+    """The default (bare) chop invocation: local cleanup + ensure-receiver.
+
+    Network polling for updates now belongs to the persistent ``--receiver``
+    proc, not this short-lived five-second tick -- these tests pin down that
+    split so local cleanup (keyboard-removal retries, completion delivery)
+    stays independent of however long the receiver's long poll is waiting.
+    """
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
+    @patch("sase_telegram.scripts.sase_tg_inbound._retry_pending_keyboard_cleanups")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_bare_invocation_never_polls_and_ensures_the_receiver(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_retry_cleanup: MagicMock,
+        mock_ensure: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mock_creds.get_bot_token.return_value = "token"
+
+        assert inbound_main([]) == 0
+
+        mock_tg.get_updates.assert_not_called()
+        mock_retry_cleanup.assert_called_once_with()
+        mock_ensure.assert_called_once_with()
+        captured = capsys.readouterr()
+        assert "reason=receiver_ensured" in captured.out
+        assert "updates=0" in captured.out
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_bare_invocation_propagates_credential_error_without_ensuring(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_ensure: MagicMock,
+    ) -> None:
+        from sase_telegram.credentials import TelegramCredentialError
+
+        mock_creds.get_bot_token.side_effect = TelegramCredentialError("no token")
+
+        with pytest.raises(TelegramCredentialError):
+            inbound_main([])
+
+        mock_tg.get_updates.assert_not_called()
+        mock_ensure.assert_not_called()
+
+
+class TestReceiverLoop:
+    """The persistent ``--receiver`` loop: durable per-update offsets."""
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_offset_advances_per_update_past_a_poisoned_one(
+        self,
+        mock_tg: MagicMock,
+        mock_launch: MagicMock,
+    ) -> None:
+        """A handler exception on one update does not wedge the batch.
+
+        Matches a real process crash's effective behavior (the failing
+        update is skipped, not retried forever) while still committing the
+        offset per update rather than once for the whole batch, so a killed
+        receiver cannot silently lose an update that never got this far.
+        """
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        first = SimpleNamespace(
+            update_id=900,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="first", photo=None, document=None, entities=None, message_id=1
+            ),
+        )
+        second = SimpleNamespace(
+            update_id=901,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="second", photo=None, document=None, entities=None, message_id=2
+            ),
+        )
+        mock_tg.get_updates.return_value = [first, second]
+        mock_launch.side_effect = [RuntimeError("boom"), None]
+
+        result = inbound._poll_and_dispatch_updates(None, timeout=0, custom_commands={})
+
+        assert mock_launch.call_count == 2
+        assert result.next_offset == 902
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 902
+        # The poisoned update's handler raised, so it is not counted, but
+        # processing continued to (and counted) the next one.
+        assert result.counts["text"] == 1
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_receiver_self_terminates_when_disabled(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+    ) -> None:
+        """The receiver responds to config changes by exiting on its own.
+
+        No external stop signal is required -- the next enabled,
+        credentialed chop tick's ``ensure_receiver_running`` call re-arms a
+        fresh receiver, which is why self-checking each iteration suffices.
+        """
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_tg.get_updates.return_value = []
+        # Enabled for the first two iterations, then disabled.
+        mock_enabled.side_effect = [True, True, False]
+
+        result = inbound._run_receiver()
+
+        assert result == 0
+        assert mock_enabled.call_count == 3
+        assert mock_tg.get_updates.call_count == 2
+        # The receiver must long-poll, not busy-loop with a short timeout.
+        for call in mock_tg.get_updates.call_args_list:
+            assert call.kwargs["timeout"] == inbound._RECEIVER_POLL_TIMEOUT_SECONDS
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_receiver_self_terminates_on_credential_loss(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+    ) -> None:
+        from sase_telegram.credentials import TelegramCredentialError
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_enabled.return_value = True
+        mock_creds.get_bot_token.side_effect = TelegramCredentialError("rotated")
+
+        result = inbound._run_receiver()
+
+        assert result == 0
+        mock_tg.get_updates.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.time")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_receiver_backs_off_and_retries_after_a_poll_failure(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        mock_time: MagicMock,
+    ) -> None:
+        """A rate-limit/network failure that outlasts get_updates' own retries
+
+        does not crash the receiver -- it backs off and keeps polling
+        instead of falling back to the old multi-second application floor.
+        """
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.side_effect = [True, True, False]
+        mock_tg.get_updates.side_effect = [RuntimeError("rate limited"), []]
+
+        result = inbound._run_receiver()
+
+        assert result == 0
+        mock_time.sleep.assert_called_once_with(inbound._RECEIVER_ERROR_BACKOFF_SECONDS)
+        assert mock_tg.get_updates.call_count == 2

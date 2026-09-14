@@ -276,6 +276,7 @@ src/sase_telegram/
 ├── show_format.py           # Pure agent/clan/family/tribe HTML renderers
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling
+├── receiver.py              # Idempotent ensure/launch of the supervised long-poll receiver proc
 ├── bead_format.py           # Convert `sase bead` output to Markdown for Telegram rendering
 ├── outbound.py              # High-water mark tracking, exclusive lock, unsent detection
 ├── pending_actions.py       # Persist pending actions to JSON (24h stale cleanup)
@@ -286,7 +287,7 @@ src/sase_telegram/
 └── scripts/
     ├── __init__.py           # Re-exports inbound_main and outbound_main
     ├── sase_tg_outbound.py   # Outbound entry point (--dry-run, --context)
-    └── sase_tg_inbound.py    # Inbound entry point (--once, --context)
+    └── sase_tg_inbound.py    # Inbound entry point (--once, --receiver, --context)
 ```
 
 ## License
