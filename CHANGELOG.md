@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.11](https://github.com/sase-org/sase-telegram/compare/v0.4.10...v0.4.11) (2026-09-14)
+
+
+### Features
+
+* **gate,inbound:** submit Telegram gate answers through the shared supervised proc ([c34432c](https://github.com/sase-org/sase-telegram/commit/c34432cac2dcf8fb27a8139c877446350607b89b))
+
 ## [0.4.10](https://github.com/sase-org/sase-telegram/compare/v0.4.9...v0.4.10) (2026-09-07)
 
 
