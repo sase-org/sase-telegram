@@ -80,6 +80,12 @@ selected action. Non-question gates resolve their action and kind through SASE's
 only adapters marked branch-actionable enter the shared gate executor. A newly registered actionable kind therefore
 uses the same callback path without a Telegram-specific action table.
 
+Gate callbacks answer Telegram's callback query before durable submission starts, so the
+button tap receives a local "submitting" acknowledgement even when the shared executor
+must run a blocked command, archive output, or launch a successor in a supervised proc.
+Success and failure are then delivered through the normal completion record or chat
+message, and keyboard cleanup still runs after the accepted or terminal state.
+
 Plan `run` writes an approval response with `commit_plan: false` and `run_coder: true`.
 
 #### Two-Step Actions

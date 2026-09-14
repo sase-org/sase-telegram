@@ -1457,27 +1457,64 @@ def _execute_gate_callback_response(
     *,
     message: Any | None = None,
 ) -> None:
+    callback_acknowledged = callback_query is not None
+    _answer_callback(callback_query, "Submitting gate answer...")
     try:
         result_message = _resolve_response(response, action)
     except GateError as exc:
-        _answer_callback(callback_query, _gate_error_answer_text(exc))
-        if message is not None:
-            chat_id = _message_chat_id(message) or _configured_chat_id()
-            if chat_id is not None:
-                telegram_client.send_message(
-                    chat_id,
-                    _gate_error_answer_text(exc),
-                    reply_to_message_id=message.message_id,
-                )
+        error_text = _gate_error_answer_text(exc)
+        if not callback_acknowledged:
+            _answer_callback(callback_query, error_text)
+        _send_gate_response_error(
+            callback_query,
+            action,
+            error_text,
+            message=message,
+        )
         if exc.code in {"already_answered", "gate_cancelled", "not_found"}:
             _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
             clear_gate_progress(view)
         return
-    _answer_callback(callback_query, result_message or "Gate answered")
+    if not callback_acknowledged:
+        _answer_callback(callback_query, result_message or "Gate answered")
     if message is not None:
         _send_confirmation(response, message.message_id)
     _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
     clear_gate_progress(view)
+
+
+def _send_gate_response_error(
+    callback_query: Any | None,
+    action: dict[str, Any],
+    text: str,
+    *,
+    message: Any | None,
+) -> None:
+    """Send a durable-submission error after an early callback acknowledgement."""
+    if message is not None:
+        chat_id = _message_chat_id(message) or _configured_chat_id()
+        reply_to_message_id = message.message_id
+    else:
+        chat_id = (
+            _callback_chat_id(callback_query, action)
+            if callback_query is not None
+            else action.get("chat_id")
+        )
+        reply_to_message_id = (
+            _callback_origin_message_id(callback_query, action)
+            if callback_query is not None
+            else _action_message_id(action)
+        )
+    if chat_id is None:
+        return
+    try:
+        telegram_client.send_message(
+            str(chat_id),
+            text,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except Exception:
+        log.warning("Failed to send gate response error", exc_info=True)
 
 
 def _begin_gate_feedback(

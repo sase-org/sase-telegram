@@ -38,6 +38,7 @@ from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
 from sase_telegram.gate_flow import GateProgress
 from sase_telegram.scripts.sase_tg_inbound import (
+    _execute_gate_callback_response,
     _handle_callback,
     _handle_gate_callback,
     _handle_text_message,
@@ -846,6 +847,96 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
             _handle_gate_callback(callback, {"registry": action})
         load_view.assert_called_once_with({}, expected_kind=adapter.kind)
         execute_response.assert_called_once()
+
+
+def test_gate_callback_acknowledges_before_durable_submission(
+    gate_home: Path,
+) -> None:
+    response = inbound.ResponseAction(
+        action_type="gate",
+        notif_id_prefix="registry",
+        response_path=gate_home / "response.json",
+        response_data={},
+        answer_text=None,
+        selected_option_ids=("accept",),
+        input_data={},
+    )
+    action = {"action": "CustomGate", "chat_id": "chat-1", "message_id": 42}
+    view = SimpleNamespace(bundle_path=gate_home)
+    callback = _callback("gate:registry:c0")
+    events: list[tuple[str, str | None]] = []
+
+    def answer(_callback_id: str, text: str | None) -> None:
+        events.append(("answer", text))
+
+    def resolve(_response: object, _action: object) -> str:
+        events.append(("resolve", None))
+        return "Gate answer submitted (accept)"
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query",
+            side_effect=answer,
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound._resolve_response",
+            side_effect=resolve,
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound._dismiss_gate_callback",
+            side_effect=lambda *_args: events.append(("dismiss", None)),
+        ),
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.clear_gate_progress",
+            side_effect=lambda *_args: events.append(("clear", None)),
+        ),
+    ):
+        _execute_gate_callback_response(callback, action, response, view)
+
+    assert events == [
+        ("answer", "Submitting gate answer..."),
+        ("resolve", None),
+        ("dismiss", None),
+        ("clear", None),
+    ]
+
+
+def test_gate_callback_submission_error_sends_chat_message_after_ack(
+    gate_home: Path,
+) -> None:
+    response = inbound.ResponseAction(
+        action_type="gate",
+        notif_id_prefix="registry",
+        response_path=gate_home / "response.json",
+        response_data={},
+        answer_text=None,
+        selected_option_ids=("accept",),
+        input_data={},
+    )
+    action = {"action": "CustomGate", "chat_id": "chat-1", "message_id": 42}
+    view = SimpleNamespace(bundle_path=gate_home)
+    callback = _callback("gate:registry:c0")
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"
+        ) as send_message,
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound._resolve_response",
+            side_effect=GateError("submission_failed", "registry", "proc store busy"),
+        ),
+    ):
+        _execute_gate_callback_response(callback, action, response, view)
+
+    answer.assert_called_once_with("callback", "Submitting gate answer...")
+    send_message.assert_called_once_with(
+        "chat-1",
+        "Gate response failed: proc store busy",
+        reply_to_message_id=42,
+    )
 
 
 @pytest.mark.parametrize(
