@@ -6,6 +6,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,6 +37,28 @@ def _proc(
         created_at=datetime.now(UTC).isoformat(),
         finished_at=finished_at or datetime.now(UTC).isoformat(),
     )
+
+
+def _use_temp_sase_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    monkeypatch.setenv("SASE_HOME", str(tmp_path / "home"))
+
+    from sase.notifications import store as notification_store
+
+    notification_store.NOTIFICATIONS_DIR = None
+    notification_store.NOTIFICATIONS_FILE = None
+    notification_store._invalidate_load_cache()
+    return notification_store
+
+
+def _receiver_notifications(notification_store: Any) -> list[Any]:
+    return [
+        notification
+        for notification in notification_store.load_notifications(
+            include_dismissed=True
+        )
+        if notification.sender == "telegram"
+        and notification.dedup_key == "telegram-receiver-launch-failure"
+    ]
 
 
 class TestReceiverIdentity:
@@ -126,9 +149,14 @@ class TestEnsureReceiverRunning:
                 notifications=list(notifications)
             )
         )
-        upsert_notification = MagicMock(
-            side_effect=lambda notification: notifications.append(notification)
-        )
+
+        def _upsert_notification(
+            notification: object, *, plus_one_note: str | None = None
+        ) -> None:
+            assert plus_one_note == "Proc proc-1: could not start command"
+            notifications.append(notification)
+
+        upsert_notification = MagicMock(side_effect=_upsert_notification)
         monkeypatch.setattr(
             "sase.notifications.store.read_current_notification_snapshot",
             read_notifications,
@@ -207,9 +235,15 @@ class TestEnsureReceiverRunning:
             "sase.notifications.store.read_current_notification_snapshot",
             lambda **_kwargs: SimpleNamespace(notifications=[]),
         )
+
+        def _upsert_notification(
+            _notification: object, *, plus_one_note: str | None = None
+        ) -> None:
+            assert plus_one_note == "Proc proc-1: could not start command"
+
         monkeypatch.setattr(
             "sase.notifications.store.upsert_notification",
-            lambda _notification: None,
+            _upsert_notification,
         )
         launched = MagicMock(proc_id="fresh")
         mock_submit.return_value = launched
@@ -217,6 +251,135 @@ class TestEnsureReceiverRunning:
         assert receiver.ensure_receiver_running() is launched
 
         mock_submit.assert_called_once()
+
+
+class TestReceiverLaunchFailureNotifications:
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_recent_launch_failure_creates_real_notification_during_backoff(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        notification_store = _use_temp_sase_home(tmp_path, monkeypatch)
+        failed = _proc()
+        mock_snapshot.return_value = SimpleNamespace(procs=[failed])
+
+        assert receiver.ensure_receiver_running() is failed
+
+        mock_submit.assert_not_called()
+        rows = _receiver_notifications(notification_store)
+        assert len(rows) == 1
+        notification = rows[0]
+        assert notification.plus_one_count == 0
+        assert notification.dismissed is False
+        assert "Proc proc-1: could not start command" in "\n".join(notification.notes)
+        assert notification.files == ["/tmp/proc-1.log"]
+
+    @pytest.mark.parametrize("dismissed", [False, True])
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_existing_notification_blocks_repeated_ticks_even_when_dismissed(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        dismissed: bool,
+    ) -> None:
+        notification_store = _use_temp_sase_home(tmp_path, monkeypatch)
+        failed = _proc()
+        mock_snapshot.return_value = SimpleNamespace(procs=[failed])
+
+        receiver.ensure_receiver_running()
+        [notification] = _receiver_notifications(notification_store)
+        notification_store.append_notification_plus_one(
+            note="existing retry evidence",
+            sender="telegram",
+            timestamp=datetime.now(UTC).isoformat(),
+            dedup_key="telegram-receiver-launch-failure",
+        )
+        if dismissed:
+            assert notification_store.mark_dismissed(notification.id) is True
+
+        receiver.ensure_receiver_running()
+        receiver.ensure_receiver_running()
+
+        mock_submit.assert_not_called()
+        rows = _receiver_notifications(notification_store)
+        assert len(rows) == 1
+        assert rows[0].plus_one_count == 1
+        assert rows[0].dismissed is dismissed
+
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_chop_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_expired_launch_failure_notifies_and_rearms_with_real_store(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        notification_store = _use_temp_sase_home(tmp_path, monkeypatch)
+        failed_at = datetime.now(UTC) - timedelta(seconds=301)
+        mock_snapshot.return_value = SimpleNamespace(
+            procs=[_proc(finished_at=failed_at.isoformat())]
+        )
+        launched = MagicMock(proc_id="fresh")
+        mock_submit.return_value = launched
+
+        assert receiver.ensure_receiver_running() is launched
+
+        request = mock_submit.call_args.args[0]
+        assert request.argv == ["/venv/bin/sase_chop_tg_inbound", "--receiver"]
+        rows = _receiver_notifications(notification_store)
+        assert len(rows) == 1
+        assert rows[0].plus_one_count == 0
+
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_stale_empty_snapshot_race_plus_ones_existing_notification(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        notification_store = _use_temp_sase_home(tmp_path, monkeypatch)
+        mock_snapshot.return_value = SimpleNamespace(procs=[_proc()])
+        stale_read = MagicMock(return_value=SimpleNamespace(notifications=[]))
+        monkeypatch.setattr(
+            notification_store,
+            "read_current_notification_snapshot",
+            stale_read,
+        )
+
+        assert receiver.ensure_receiver_running().proc_id == "proc-1"
+        assert receiver.ensure_receiver_running().proc_id == "proc-1"
+
+        mock_submit.assert_not_called()
+        assert stale_read.call_count == 2
+        rows = _receiver_notifications(notification_store)
+        assert len(rows) == 1
+        notification = rows[0]
+        assert notification.plus_one_count == 1
+        assert len(notification.plus_ones) == 1
+        assert notification.plus_ones[0].note == "Proc proc-1: could not start command"
 
 
 class TestSingleOwnerReplay:

@@ -163,6 +163,7 @@ def _notify_receiver_launch_failure(proc: Proc) -> None:
 
     timestamp = datetime.now(UTC).isoformat()
     message = _one_line(proc.message or _result_message(proc) or "unknown launch error")
+    plus_one_note = f"Proc {proc.proc_id}: {message}"
     log_path = proc.log_path
     upsert_notification(
         Notification(
@@ -177,7 +178,8 @@ def _notify_receiver_launch_failure(proc: Proc) -> None:
             files=[log_path] if log_path else [],
             tags=normalize_notification_tags(["telegram", "receiver", "error"]),
             dedup_key=_RECEIVER_LAUNCH_FAILURE_DEDUP_KEY,
-        )
+        ),
+        plus_one_note=plus_one_note,
     )
 
 
