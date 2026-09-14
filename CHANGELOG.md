@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.14](https://github.com/sase-org/sase-telegram/compare/v0.4.13...v0.4.14) (2026-09-14)
+
+
+### Features
+
+* **telegram:** acknowledge callback queries before durable gate submission ([90815d2](https://github.com/sase-org/sase-telegram/commit/90815d20c1b5223df24e244aa58701a54b125643))
+
 ## [0.4.13](https://github.com/sase-org/sase-telegram/compare/v0.4.12...v0.4.13) (2026-09-14)
 
 
