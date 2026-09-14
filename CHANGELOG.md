@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.12](https://github.com/sase-org/sase-telegram/compare/v0.4.11...v0.4.12) (2026-09-14)
+
+
+### Features
+
+* **inbound:** replace polling gap with a supervised long-poll receiver ([829e738](https://github.com/sase-org/sase-telegram/commit/829e73801ba60f0ac8611c30aa8f0c97a95c5e56))
+
 ## [0.4.11](https://github.com/sase-org/sase-telegram/compare/v0.4.10...v0.4.11) (2026-09-14)
 
 
