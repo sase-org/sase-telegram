@@ -8,6 +8,7 @@ from inspect import signature
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -95,8 +96,72 @@ def gate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     monkeypatch.setattr(pending_actions, "PENDING_ACTIONS_PATH", tmp_path / "core.json")
     monkeypatch.setattr(inbound, "AWAITING_FEEDBACK_PATH", tmp_path / "awaiting.json")
+    monkeypatch.setattr(
+        inbound, "GATE_COMPLETION_PENDING_DIR", tmp_path / "gate_completions"
+    )
+    monkeypatch.setattr(
+        "sase_telegram.scripts.sase_tg_inbound._GATE_KEYBOARD_CLEANUP_DIR",
+        tmp_path / "gate_keyboard_cleanup",
+    )
     store._LOAD_CACHE.clear()
     return tmp_path
+
+
+def _run_gate_answer_proc_request_inline(request: Any) -> Any:
+    """Run one submitted gate-answer proc request's effect synchronously.
+
+    Stands in for the supervised background proc Telegram now submits
+    (``inbound.submit_gate_response``) instead of executing a gate itself
+    (sase-zr.4). Spawning a real ``sase gate answer --no-detach`` subprocess
+    in every flow test in this file would be slow and require a real
+    console script on PATH; this replays the exact same
+    ``execute_gate_selection`` call that reinvoked CLI process would make,
+    from the submitted request's argv/payload, so existing assertions about
+    the resulting ``response.json`` still hold.
+    """
+    from sase.notification_gates.cli_support import resolve_gate_cli_bundle
+    from sase.notification_gates.executor import execute_gate_selection
+
+    argv = list(request.argv)
+    kind = argv[argv.index("--kind") + 1]
+    request_id = argv[argv.index("--id") + 1]
+    bundle = resolve_gate_cli_bundle(kind, request_id)
+    payload = dict(request.operation_payload or {})
+    option_ids = [str(item) for item in payload.get("option_ids", [])]
+    feedback = payload.get("feedback")
+    option_inputs = payload.get("option_inputs")
+    if option_inputs is not None:
+        execute_gate_selection(
+            bundle.root,
+            option_ids,
+            None,
+            feedback=feedback,
+            source="telegram",
+            option_inputs=option_inputs,
+        )
+    else:
+        input_data = payload.get("input_data")
+        execute_gate_selection(
+            bundle.root,
+            option_ids,
+            {} if input_data is None else input_data,
+            feedback=feedback,
+            source="telegram",
+        )
+    return SimpleNamespace(proc_id="fake-telegram-proc")
+
+
+@pytest.fixture(autouse=True)
+def _run_telegram_gate_submissions_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make a Telegram-submitted gate-answer proc execute inline in tests.
+
+    A test that cares about the submission itself (argv, operation payload)
+    re-patches ``submit_proc_request`` inside its own ``with`` block, which
+    wins for its duration over this outer, autouse patch.
+    """
+    monkeypatch.setattr(
+        "sase.procs.service.submit_proc_request", _run_gate_answer_proc_request_inline
+    )
 
 
 def _command_script(result: str) -> str:
@@ -709,8 +774,8 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
             return_value=bundle,
         ),
         patch(
-            "sase.notification_gates.executor.execute_gate_selection",
-            return_value=SimpleNamespace(already_completed=False),
+            "sase.procs.service.submit_proc_request",
+            return_value=SimpleNamespace(proc_id="proc-registry"),
         ),
     ):
         for kind in registered_gate_kinds():
@@ -718,7 +783,7 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
             action = {"action": adapter.action, "action_data": {}}
             if adapter.branch_actionable:
                 assert inbound.resolve_gate_response(response, action) == (
-                    "Gate answered with accept"
+                    "Gate answer submitted (accept)"
                 )
             else:
                 with pytest.raises(GateError, match="unsupported gate action"):

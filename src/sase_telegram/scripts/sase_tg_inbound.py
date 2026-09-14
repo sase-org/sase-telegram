@@ -52,6 +52,8 @@ from sase.agent.status_buckets import AGENT_STATUS_BUCKETS
 from sase.user_question_actions import UserQuestionActionError
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import adapter_for_action
+from sase.procs.models import TERMINAL_PROC_STATUSES
+from sase.procs.store import get_proc
 from sase.xprompt.models import InputType, XPromptValidationError
 from sase_telegram.formatting import (
     build_fork_copy_text,
@@ -95,6 +97,7 @@ from sase_telegram.gate_inputs import (
     unsupported_fields,
 )
 from sase_telegram.inbound import (
+    GATE_COMPLETION_PENDING_DIR,
     IMAGES_DIR,
     ResponseAction,
     build_image_prompt,
@@ -165,6 +168,12 @@ _VCS_PROJECT_RE = re.compile(_VCS_PROJECT_PATTERN, re.IGNORECASE)
 _DIRECTIVE_PREFIX_RE = re.compile(r"^(?:%\S+\s+)+")
 _LAUNCH_AGENTS_DISABLED_ENV = "SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED"
 _STALE_AWAITING_FEEDBACK_TEXT = "This action has already been handled"
+# Durable retry record for one inline-keyboard removal whose Telegram API
+# edit failed after `telegram_client`'s own bounded rate-limit/network
+# retries were exhausted -- see `_dismiss_button_with_retry`.
+_GATE_KEYBOARD_CLEANUP_DIR = (
+    Path.home() / ".sase" / "telegram" / "gate_keyboard_cleanup"
+)
 _CUSTOM_COMMAND_CAPTION_LIMIT = 1024
 _CUSTOM_COMMAND_STDERR_LIMIT = 1000
 _KILL_SELECTION_PENDING_KEY = "kill-selection"
@@ -1323,6 +1332,90 @@ def _gate_error_answer_text(exc: GateError) -> str:
     return f"Gate response failed: {exc}"
 
 
+def _keyboard_cleanup_retry_path(prefix: str) -> Path:
+    return _GATE_KEYBOARD_CLEANUP_DIR / f"{prefix}.json"
+
+
+def _persist_keyboard_cleanup_pending(
+    prefix: str, chat_id: str, message_id: int
+) -> None:
+    record = {
+        "prefix": prefix,
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "created_at": time.time(),
+    }
+    try:
+        _GATE_KEYBOARD_CLEANUP_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(_keyboard_cleanup_retry_path(prefix), record)
+    except OSError:
+        log.warning(
+            "Failed to persist gate keyboard cleanup retry context", exc_info=True
+        )
+
+
+def _clear_keyboard_cleanup_pending(prefix: str) -> None:
+    _keyboard_cleanup_retry_path(prefix).unlink(missing_ok=True)
+
+
+def _dismiss_button_with_retry(
+    prefix: str, chat_id: str | None, message_id: int | None
+) -> None:
+    """Remove one inline keyboard, retrying durably if the edit itself fails.
+
+    ``telegram_client.edit_message_reply_markup`` already retries transient
+    rate-limit/network failures internally; this covers what happens once
+    those bounded retries are exhausted (or the failure is not transient).
+    A tombstone is written *before* attempting the edit and cleared only on
+    success, so a failed edit is retried on a later poll tick
+    (``_retry_pending_keyboard_cleanups``) instead of the stale keyboard
+    silently outliving all record of needing cleanup -- the local
+    pending-action record is safe to drop either way, since a stale tap
+    already answers "already handled".
+    """
+    if message_id is None or chat_id is None:
+        return
+    _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+    try:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=None
+        )
+    except Exception:
+        log.warning("Failed to dismiss gate keyboard; will retry", exc_info=True)
+        return
+    _clear_keyboard_cleanup_pending(prefix)
+
+
+def _retry_pending_keyboard_cleanups() -> int:
+    """Retry keyboard-removal edits that durably failed on an earlier tick."""
+    retried = 0
+    try:
+        pending_paths = sorted(_GATE_KEYBOARD_CLEANUP_DIR.glob("*.json"))
+    except OSError:
+        log.warning("Failed to scan gate keyboard cleanup retries", exc_info=True)
+        return retried
+    for pending_path in pending_paths:
+        record = _load_json_file(pending_path)
+        if not isinstance(record, dict):
+            pending_path.unlink(missing_ok=True)
+            continue
+        chat_id = record.get("chat_id")
+        message_id = record.get("message_id")
+        if not isinstance(chat_id, str) or not isinstance(message_id, int):
+            pending_path.unlink(missing_ok=True)
+            continue
+        try:
+            telegram_client.edit_message_reply_markup(
+                chat_id, message_id, reply_markup=None
+            )
+        except Exception:
+            log.warning("Retrying gate keyboard cleanup failed again", exc_info=True)
+            continue
+        pending_path.unlink(missing_ok=True)
+        retried += 1
+    return retried
+
+
 def _dismiss_gate_callback(
     callback_query: Any,
     action: dict[str, Any],
@@ -1330,13 +1423,7 @@ def _dismiss_gate_callback(
 ) -> None:
     message_id = _action_message_id(action)
     chat_id = _callback_chat_id(callback_query, action)
-    if message_id is not None and chat_id is not None:
-        try:
-            telegram_client.edit_message_reply_markup(
-                chat_id, message_id, reply_markup=None
-            )
-        except Exception:
-            log.warning("Failed to dismiss gate keyboard", exc_info=True)
+    _dismiss_button_with_retry(prefix, chat_id, message_id)
     pending_actions.remove(prefix)
     clear_awaiting_feedback_by_prefix(prefix)
 
@@ -2803,6 +2890,140 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
 def _shorten_home(path: str) -> str:
     home = str(Path.home())
     return "~" + path[len(home) :] if path.startswith(home + os.sep) else path
+
+
+# ---------------------------------------------------------------------------
+# Gate answer completion delivery
+#
+# `inbound.resolve_gate_response` only submits a gate answer to the shared
+# supervised proc and returns; it does not know the outcome. This scans the
+# durable records it persisted (`inbound.GATE_COMPLETION_PENDING_DIR`) and
+# delivers the real result -- success, a recorded execution error, or the
+# proc itself exiting without either -- as a follow-up message once it is
+# known, mirroring `_send_ready_update_completions` above.
+# ---------------------------------------------------------------------------
+
+
+def _latest_gate_execution_error(
+    bundle_path: Path, *, since: float
+) -> dict[str, Any] | None:
+    """Return the newest ``errors/`` record written at/after *since*, if any."""
+    try:
+        candidates = sorted((bundle_path / "errors").glob("*.json"))
+    except OSError:
+        return None
+    latest: dict[str, Any] | None = None
+    latest_created_at = -1.0
+    for candidate in candidates:
+        payload = _load_json_file(candidate)
+        if not isinstance(payload, dict):
+            continue
+        created_at = payload.get("created_at_unix")
+        if not isinstance(created_at, (int, float)) or created_at < since:
+            continue
+        if created_at >= latest_created_at:
+            latest = payload
+            latest_created_at = created_at
+    return latest
+
+
+def _format_gate_response_success(
+    record: dict[str, Any], response: dict[str, Any]
+) -> str:
+    selected = response.get("selected_option_ids")
+    options = (
+        ", ".join(str(item) for item in selected)
+        if isinstance(selected, list) and selected
+        else "?"
+    )
+    return f"✅ Gate {record.get('kind', '?')}/{record.get('request_id', '?')} answered with {options}"
+
+
+def _format_gate_execution_error(record: dict[str, Any], error: dict[str, Any]) -> str:
+    message = error.get("message")
+    message = message if isinstance(message, str) and message else "unknown error"
+    return f"❌ Gate {record.get('kind', '?')}/{record.get('request_id', '?')} failed: {message}"
+
+
+def _format_gate_proc_failure(record: dict[str, Any], proc: Any) -> str:
+    log_text = _shorten_home(str(proc.log_path)) if proc.log_path else "(unknown)"
+    return (
+        f"❌ Gate {record.get('kind', '?')}/{record.get('request_id', '?')} failed: "
+        f"background proc exited ({proc.status}); log: {log_text}"
+    )
+
+
+def _send_ready_gate_completions() -> int:
+    sent_count = 0
+    try:
+        pending_paths = sorted(GATE_COMPLETION_PENDING_DIR.glob("*.json"))
+    except OSError:
+        log.warning("Failed to scan Telegram gate completion context", exc_info=True)
+        return sent_count
+
+    for pending_path in pending_paths:
+        record = _load_json_file(pending_path)
+        if not isinstance(record, dict):
+            pending_path.unlink(missing_ok=True)
+            continue
+
+        chat_id = record.get("chat_id")
+        bundle_path_raw = record.get("bundle_path")
+        proc_id = record.get("proc_id")
+        created_at = record.get("created_at")
+        if not (
+            isinstance(chat_id, str)
+            and isinstance(bundle_path_raw, str)
+            and isinstance(proc_id, str)
+            and isinstance(created_at, (int, float))
+        ):
+            pending_path.unlink(missing_ok=True)
+            continue
+
+        bundle_path = Path(bundle_path_raw)
+        response = _load_json_file(bundle_path / "response.json")
+        text: str | None = None
+        if isinstance(response, dict):
+            text = _format_gate_response_success(record, response)
+        else:
+            error = _latest_gate_execution_error(bundle_path, since=created_at)
+            if error is not None:
+                text = _format_gate_execution_error(record, error)
+            else:
+                proc = _gate_answer_proc_status(proc_id)
+                if (
+                    proc is not None
+                    and proc.status in TERMINAL_PROC_STATUSES
+                    and proc.status != "success"
+                ):
+                    text = _format_gate_proc_failure(record, proc)
+
+        if text is None:
+            # Still running, the proc row is not visible yet, or it reported
+            # success but `response.json`/an error record has not landed on
+            # disk yet -- wait for a later tick rather than guessing.
+            continue
+
+        try:
+            telegram_client.send_message(chat_id, text)
+        except Exception:
+            log.warning(
+                "Failed to send Telegram gate completion for proc %s",
+                proc_id,
+                exc_info=True,
+            )
+            continue
+        sent_count += 1
+        pending_path.unlink(missing_ok=True)
+    return sent_count
+
+
+def _gate_answer_proc_status(proc_id: str) -> Any | None:
+    try:
+        return get_proc(proc_id)
+    except Exception:
+        log.warning("Failed to read Telegram gate answer proc status", exc_info=True)
+        return None
 
 
 def _format_agent_description(
@@ -4298,13 +4519,13 @@ def _register_commands_if_needed(
 
 
 def _dismiss_resolved_button(prefix: str, message_id: int, chat_id: str) -> None:
-    """Remove a resolved action's inline keyboard and Telegram pending record."""
-    try:
-        telegram_client.edit_message_reply_markup(
-            chat_id, message_id, reply_markup=None
-        )
-    except Exception:
-        pass  # Message may have been deleted or already edited
+    """Remove a resolved action's inline keyboard and Telegram pending record.
+
+    Cross-surface acceptance (auto-approved, or answered from the TUI/CLI/
+    mobile) drives the same durable keyboard-cleanup retry a Telegram-native
+    answer does -- see ``_dismiss_button_with_retry``.
+    """
+    _dismiss_button_with_retry(prefix, chat_id, message_id)
     pending_actions.remove(prefix)
     clear_awaiting_feedback_by_prefix(prefix)
 
@@ -4354,7 +4575,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Clean up stale pending actions
     stale_pending = pending_actions.cleanup_stale()
-    ready_completions_sent = _send_ready_update_completions()
+    ready_completions_sent = (
+        _send_ready_update_completions() + _send_ready_gate_completions()
+    )
+    # Retry any inline-keyboard removal whose Telegram API edit durably
+    # failed on an earlier tick, independent of this tick's own updates.
+    _retry_pending_keyboard_cleanups()
 
     pending = pending_actions.list_all()
     offset = get_last_offset()

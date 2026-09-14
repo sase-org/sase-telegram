@@ -7,7 +7,10 @@ and manages offset/feedback state. No Telegram API calls.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -113,6 +116,19 @@ def reconstruct_code_markers(text: str, entities: Sequence[Any] | None) -> str:
 UPDATE_OFFSET_PATH = Path.home() / ".sase" / "telegram" / "update_offset.txt"
 AWAITING_FEEDBACK_PATH = Path.home() / ".sase" / "telegram" / "awaiting_feedback.json"
 IMAGES_DIR = Path.home() / ".sase" / "telegram" / "images"
+
+#: Durable record of one gate answer submitted to the shared supervised
+#: proc, keyed by proc id, read back by
+#: ``sase_tg_inbound._send_ready_gate_completions`` once execution finishes.
+#: A Telegram callback popup can already have expired by the time slow
+#: option commands, archive publication, or successor launch complete, so
+#: the real outcome is delivered as a follow-up message instead.
+GATE_COMPLETION_PENDING_DIR = Path.home() / ".sase" / "telegram" / "gate_completions"
+
+#: Origin tag recorded on the proc Telegram submits through the shared
+#: durable-submission API, mirroring ``sase gate answer``'s own
+#: ``GATE_ANSWER_DETACH_ORIGIN``.
+GATE_ANSWER_TELEGRAM_ORIGIN = "telegram-gate-detach"
 
 
 @dataclass
@@ -345,26 +361,58 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
     return None
 
 
-def resolve_gate_response(
+@dataclass(frozen=True)
+class GateSubmission:
+    """One gate decision durably submitted to the shared supervised proc."""
+
+    proc_id: str
+    request_id: str
+    kind: str
+    bundle_path: Path
+    response_path: Path
+
+
+def submit_gate_response(
     response: ResponseAction,
     action: dict[str, Any] | None,
-) -> str:
-    """Resolve any v2 gate through the shared host executor.
+) -> GateSubmission:
+    """Durably submit one gate decision to the shared supervised proc, fast.
 
-    A shell-backed gate (``sase gate create --shell``) is a family-attached
-    gate shell that owns its own settlement and follow-up launch; the same
-    ``shell_backed`` -> ``bind_gate_shell_execution_callbacks`` ->
-    ``settle_gate_shell`` sequence ``sase gate answer`` and the mobile bridge
-    run must run here too, or a shell gate answered from Telegram is answered
-    but never settles: its family member stays pending forever and its
-    follow-up never launches.
+    Mirrors ``sase gate answer --detach``: re-invokes ``sase gate answer
+    --no-detach`` as a background proc instead of calling
+    ``execute_gate_selection`` in this poll process, so slow option
+    commands, archive publication, and successor launch never block
+    Telegram's inbound handler or delay processing later updates in the
+    same batch. The re-invoked proc runs the identical fast
+    decision-acceptance boundary (which durably records the decision and
+    dismisses the notification independent of how long execution takes)
+    and, for a shell-backed gate, the same
+    ``bind_gate_shell_execution_callbacks`` -> ``settle_gate_shell``
+    sequence ``sase gate answer`` already runs -- so Telegram no longer
+    needs its own gate-shell settlement glue.
+
+    Only shallow (option-id, adapter, bundle, already-answered/cancelled)
+    validation happens here, so a malformed or stale callback fails fast
+    instead of spawning a doomed proc. This existence check is a best-effort
+    optimization, not the authoritative one -- the proc's own
+    ``accept_gate_decision`` re-checks the same files under its bounded
+    per-gate lock before doing anything durable, so a race with this
+    unlocked check is harmless. Anything deeper -- schema validation, a
+    conflicting resubmission, a partial AND-branch attempt -- is discovered
+    inside the proc and reported later through the completion-delivery
+    record (see ``sase_tg_inbound._send_ready_gate_completions``), since a
+    Telegram callback popup can already have expired by the time it is
+    known.
     """
-    from sase.gate_shell.log import bind_gate_shell_execution_callbacks
-    from sase.gate_shell.settlement import settle_gate_shell
-    from sase.gate_shell.store import find_gate_shell_by_gate_id
-    from sase.notification_gates.executor import execute_gate_selection
     from sase.notification_gates.models import GateError
-    from sase.notification_gates.paths import resolve_action_bundle
+    from sase.notification_gates.paths import (
+        CANCELLATION_FILENAME,
+        RESPONSE_FILENAME,
+        resolve_action_bundle,
+    )
+    from sase.ops.names import GATE_ANSWER
+    from sase.procs.request import ProcSubmitRequest
+    from sase.procs.service import submit_proc_request
 
     if action is None:
         raise GateError(
@@ -384,46 +432,113 @@ def resolve_gate_response(
         raise GateError(
             "invalid_request", "selected_option_ids", "gate selection is missing"
         )
-
-    # A gate-shell family member is looked up by the same request id every
-    # other surface resolves the bundle from; when one exists, this gate is
-    # shell-backed and its execution must stream to the same gate.log and
-    # settle through the same path ``sase gate answer`` uses.
-    request_id = action_data.get("request_id")
-    gate_shell = (
-        find_gate_shell_by_gate_id(None, str(request_id)) if request_id else None
-    )
-    execution_kwargs: dict[str, Any] = (
-        {}
-        if gate_shell is None
-        else bind_gate_shell_execution_callbacks(gate_shell.artifacts_dir).as_kwargs()
-    )
-    if response.option_inputs is not None:
-        execution = execute_gate_selection(
-            bundle.root,
-            response.selected_option_ids,
-            None,
-            feedback=response.feedback,
-            source="telegram",
-            option_inputs=response.option_inputs,
-            **execution_kwargs,
-        )
-    else:
-        execution = execute_gate_selection(
-            bundle.root,
-            response.selected_option_ids,
-            {} if response.input_data is None else response.input_data,
-            feedback=response.feedback,
-            source="telegram",
-            **execution_kwargs,
-        )
-    if execution.already_completed:
+    if (bundle.root / RESPONSE_FILENAME).exists():
         raise GateError(
             "already_answered", response.notif_id_prefix, "gate is already answered"
         )
-    if gate_shell is not None:
-        settle_gate_shell(gate_shell, gate_state="answered", reason="gate answered")
-    return f"Gate answered with {', '.join(response.selected_option_ids)}"
+    if (bundle.root / CANCELLATION_FILENAME).exists():
+        raise GateError(
+            "gate_cancelled", response.notif_id_prefix, "gate is already cancelled"
+        )
+
+    request_id = str(action_data.get("request_id") or bundle.root.name)
+    kind = str(action_data.get("request_kind") or adapter.kind)
+    payload: dict[str, Any] = {"option_ids": list(response.selected_option_ids)}
+    if response.option_inputs is not None:
+        payload["option_inputs"] = dict(response.option_inputs)
+    elif response.input_data is not None:
+        payload["input_data"] = response.input_data
+    if response.feedback is not None:
+        payload["feedback"] = response.feedback
+
+    try:
+        proc = submit_proc_request(
+            ProcSubmitRequest(
+                argv=[
+                    "sase",
+                    "gate",
+                    "answer",
+                    "--id",
+                    request_id,
+                    "--kind",
+                    kind,
+                    "--no-detach",
+                    "--json",
+                ],
+                label=f"Telegram gate answer: {kind}/{request_id}",
+                cwd=str(Path.home()),
+                origin=GATE_ANSWER_TELEGRAM_ORIGIN,
+                operation=GATE_ANSWER,
+                operation_payload=payload,
+            )
+        )
+    except GateError:
+        raise
+    except Exception as exc:
+        raise GateError("submission_failed", request_id, str(exc)) from exc
+
+    return GateSubmission(
+        proc_id=proc.proc_id,
+        request_id=request_id,
+        kind=kind,
+        bundle_path=bundle.root,
+        response_path=bundle.root / RESPONSE_FILENAME,
+    )
+
+
+def persist_gate_completion_pending(
+    submission: GateSubmission,
+    *,
+    notif_id_prefix: str,
+    action: dict[str, Any] | None,
+) -> None:
+    """Durably record a submitted gate answer for later completion delivery.
+
+    A no-op when *action* carries no chat id (nothing to deliver a
+    completion message to). Written under :data:`GATE_COMPLETION_PENDING_DIR`,
+    keyed by proc id, mirroring the existing ``/update`` completion-delivery
+    record (``sase_tg_inbound._persist_update_completion_pending``).
+    """
+    chat_id = action.get("chat_id") if action is not None else None
+    if chat_id is None:
+        return
+    record = {
+        "prefix": notif_id_prefix,
+        "proc_id": submission.proc_id,
+        "request_id": submission.request_id,
+        "kind": submission.kind,
+        "bundle_path": str(submission.bundle_path),
+        "response_path": str(submission.response_path),
+        "chat_id": str(chat_id),
+        "created_at": time.time(),
+    }
+    path = GATE_COMPLETION_PENDING_DIR / f"{submission.proc_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(record, stream, indent=2)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def resolve_gate_response(
+    response: ResponseAction,
+    action: dict[str, Any] | None,
+) -> str:
+    """Submit one gate decision and return its submission acknowledgement.
+
+    See :func:`submit_gate_response`. The returned text is only a bounded
+    "received" acknowledgement for the immediate Telegram popup/reply -- not
+    a completion report, which the shared supervised proc delivers later.
+    """
+    submission = submit_gate_response(response, action)
+    persist_gate_completion_pending(
+        submission, notif_id_prefix=response.notif_id_prefix, action=action
+    )
+    return f"Gate answer submitted ({', '.join(response.selected_option_ids)})"
 
 
 def resolve_user_question_response(

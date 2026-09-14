@@ -1335,6 +1335,330 @@ class TestUpdateCommand:
         assert "will retry later" in caplog.text
 
 
+class TestGateAnswerCompletion:
+    """``_send_ready_gate_completions`` delivers a submitted gate's real outcome.
+
+    ``inbound.resolve_gate_response`` (sase-zr.4) only submits a gate answer
+    to the shared supervised proc and returns; a Telegram callback popup can
+    already have expired by the time execution actually finishes, so the
+    real outcome is delivered as a follow-up message once it is known,
+    mirroring the ``/update`` completion-delivery tests above.
+    """
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_success_sends_completion_once(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        bundle_path.mkdir()
+        (bundle_path / "response.json").write_text(
+            json.dumps({"selected_option_ids": ["accept"]})
+        )
+        (pending_dir / "proc-1.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "abc12345",
+                    "proc_id": "proc-1",
+                    "request_id": "req-1",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "✅ Gate custom/req-1 answered with accept"
+        )
+        assert not (pending_dir / "proc-1.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_recorded_execution_error_sends_failure(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        (bundle_path / "errors").mkdir(parents=True)
+        (bundle_path / "errors" / "err.json").write_text(
+            json.dumps(
+                {"message": "command exited with status 1", "created_at_unix": 5.0}
+            )
+        )
+        (pending_dir / "proc-2.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "def12345",
+                    "proc_id": "proc-2",
+                    "request_id": "req-2",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "❌ Gate custom/req-2 failed: command exited with status 1",
+        )
+        assert not (pending_dir / "proc-2.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_ignores_error_recorded_before_this_submission(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        """An error from an earlier, unrelated attempt must not be misreported."""
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        (bundle_path / "errors").mkdir(parents=True)
+        (bundle_path / "errors" / "old.json").write_text(
+            json.dumps({"message": "stale failure", "created_at_unix": 1.0})
+        )
+        (pending_dir / "proc-3.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "ghi12345",
+                    "proc_id": "proc-3",
+                    "request_id": "req-3",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 5.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_not_called()
+        assert (pending_dir / "proc-3.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.get_proc")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_proc_failure_without_error_record_sends_generic_failure(
+        self, mock_tg: MagicMock, mock_get_proc: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        bundle_path.mkdir()
+        (pending_dir / "proc-4.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "jkl12345",
+                    "proc_id": "proc-4",
+                    "request_id": "req-4",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+        mock_get_proc.return_value = SimpleNamespace(
+            status="killed", log_path="/tmp/proc-4.log"
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345",
+            "❌ Gate custom/req-4 failed: background proc exited (killed); "
+            "log: /tmp/proc-4.log",
+        )
+        assert not (pending_dir / "proc-4.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.get_proc")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_still_running_proc_is_left_pending(
+        self, mock_tg: MagicMock, mock_get_proc: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        bundle_path.mkdir()
+        (pending_dir / "proc-5.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "mno12345",
+                    "proc_id": "proc-5",
+                    "request_id": "req-5",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+        mock_get_proc.return_value = SimpleNamespace(
+            status="running", log_path="/tmp/x"
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_not_called()
+        assert (pending_dir / "proc-5.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_send_failure_keeps_pending_for_retry(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        mock_tg.send_message.side_effect = RuntimeError("telegram down")
+        pending_dir = tmp_path / "pending"
+        pending_dir.mkdir()
+        bundle_path = tmp_path / "bundle"
+        bundle_path.mkdir()
+        (bundle_path / "response.json").write_text(
+            json.dumps({"selected_option_ids": ["accept"]})
+        )
+        pending_path = pending_dir / "proc-6.json"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "prefix": "pqr12345",
+                    "proc_id": "proc-6",
+                    "request_id": "req-6",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_path),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "GATE_COMPLETION_PENDING_DIR", pending_dir):
+            tg_inbound._send_ready_gate_completions()
+
+        mock_tg.send_message.assert_called_once()
+        assert pending_path.exists()
+
+
+class TestGateKeyboardCleanupRetry:
+    """A keyboard-removal edit that fails durably is retried on a later tick.
+
+    Regression coverage for the bug the plan calls out by name:
+    ``_dismiss_gate_callback`` used to remove the transport/pending-action
+    record even when the Telegram API edit itself failed, permanently
+    losing track of a stale inline keyboard that was never actually removed.
+    """
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_failed_edit_persists_a_retry_record(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        mock_tg.edit_message_reply_markup.side_effect = RuntimeError("rate limited")
+        cleanup_dir = tmp_path / "cleanup"
+
+        with patch.object(tg_inbound, "_GATE_KEYBOARD_CLEANUP_DIR", cleanup_dir):
+            tg_inbound._dismiss_button_with_retry("abc12345", "12345", 99)
+
+        record = json.loads((cleanup_dir / "abc12345.json").read_text())
+        assert record["chat_id"] == "12345"
+        assert record["message_id"] == 99
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_successful_edit_leaves_no_retry_record(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        cleanup_dir = tmp_path / "cleanup"
+        cleanup_dir.mkdir()
+
+        with patch.object(tg_inbound, "_GATE_KEYBOARD_CLEANUP_DIR", cleanup_dir):
+            tg_inbound._dismiss_button_with_retry("abc12345", "12345", 99)
+
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 99, reply_markup=None
+        )
+        assert not (cleanup_dir / "abc12345.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_retry_pass_clears_a_previously_failed_edit(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        cleanup_dir = tmp_path / "cleanup"
+        cleanup_dir.mkdir()
+        (cleanup_dir / "abc12345.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "abc12345",
+                    "chat_id": "12345",
+                    "message_id": 99,
+                    "created_at": 1.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "_GATE_KEYBOARD_CLEANUP_DIR", cleanup_dir):
+            retried = tg_inbound._retry_pending_keyboard_cleanups()
+
+        assert retried == 1
+        mock_tg.edit_message_reply_markup.assert_called_once_with(
+            "12345", 99, reply_markup=None
+        )
+        assert not (cleanup_dir / "abc12345.json").exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_retry_pass_keeps_a_still_failing_edit_pending(
+        self, mock_tg: MagicMock, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+
+        mock_tg.edit_message_reply_markup.side_effect = RuntimeError("still limited")
+        cleanup_dir = tmp_path / "cleanup"
+        cleanup_dir.mkdir()
+        pending_path = cleanup_dir / "abc12345.json"
+        pending_path.write_text(
+            json.dumps(
+                {
+                    "prefix": "abc12345",
+                    "chat_id": "12345",
+                    "message_id": 99,
+                    "created_at": 1.0,
+                }
+            )
+        )
+
+        with patch.object(tg_inbound, "_GATE_KEYBOARD_CLEANUP_DIR", cleanup_dir):
+            retried = tg_inbound._retry_pending_keyboard_cleanups()
+
+        assert retried == 0
+        assert pending_path.exists()
+
+
 class TestProjectSpecPath:
     """``_project_spec_path`` resolves through the canonical ``sase.ace.patch`` API."""
 
