@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.13](https://github.com/sase-org/sase-telegram/compare/v0.4.12...v0.4.13) (2026-09-14)
+
+
+### Bug Fixes
+
+* **receiver:** anchor telegram proc executables ([8586f91](https://github.com/sase-org/sase-telegram/commit/8586f9159ef4577c795e8f3f386879f709e56d11))
+* **receiver:** preserve telegram retry notifications ([4a7b9f0](https://github.com/sase-org/sase-telegram/commit/4a7b9f06a540e895188ed61ce9627d9cf6c6af1a))
+
 ## [0.4.12](https://github.com/sase-org/sase-telegram/compare/v0.4.11...v0.4.12) (2026-09-14)
 
 
