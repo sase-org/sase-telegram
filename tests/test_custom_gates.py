@@ -21,7 +21,7 @@ from sase.bead.model import SnoozeRecord
 from sase.bead.snooze_gate import create_bead_snooze_gate
 from sase.bead.stale_cleanup_gate import create_bead_stale_cleanup_gate
 from sase.bead.task_gate import create_task_triage_gate
-from sase.feature_flags import SASE_FEATURE_FLAGS_ENV, override_flags
+from sase.feature_flags import override_flags
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import (
     adapter_for_kind,
@@ -696,9 +696,7 @@ def test_disabled_feedback_branch_has_no_feedback_button(gate_home: Path) -> Non
     assert not (Path(result.bundle_path) / "response.json").exists()
 
 
-def test_registry_declared_generic_forms_render_keyboards(
-    gate_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> None:
     custom = create_gate(_custom_spec(request_id="telegram-registry-custom"))
     task = create_task_triage_gate(
         request_id="telegram-registry-task",
@@ -749,7 +747,6 @@ def test_registry_declared_generic_forms_render_keyboards(
         missing=[_missing_plugin_entry()],
         producer={"chop": "plugins_required"},
     )
-    monkeypatch.delenv(SASE_FEATURE_FLAGS_ENV, raising=False)
     with override_flags(agent_sudo_requests=True):
         sudo = create_gate(build_sudo_gate_request(_sudo_request()))
     notifications = {
@@ -973,6 +970,7 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
         },
         source_surface="telegram-test",
     )
+    assert result.gate_shell_creation is None
     notification = _notification(
         SimpleNamespace(
             bundle_path=result.response_dir,
