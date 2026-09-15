@@ -18,7 +18,7 @@ are available to SASE's chop automation.
 
 ### Recommended: SASE Admin Center Updates tab
 
-If SASE is already installed with `uv tool install sase`, open `sase ace`, press `#` for the SASE Admin Center, then go
+If SASE is already installed with `uv tool install sase`, open `sase tui`, press `#` for the SASE Admin Center, then go
 to the **Updates** tab (`5`, or `[` / `]`). Highlight `sase-telegram` in the plugin list (`j` / `k`, or `/` to filter),
 press `i` to install, and confirm the preview modal. The preview shows the exact `uv` command and resolved package set;
 the install runs as a tracked background task and is discovered on the next `sase` run.
