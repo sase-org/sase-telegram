@@ -36,7 +36,7 @@ pdf_convert.py
 
 ### Outbound
 
-1. `sase_chop_tg_outbound` acquires an exclusive file lock (`outbound.lock`)
+1. `sase_job_tg_outbound` acquires an exclusive file lock (`outbound.lock`)
 2. Reads current notification state and selects unsent rows past a versioned `(activity_at, id)` high-water cursor
    (`last_sent_ts`), oldest-first
 3. Formats each notification as MarkdownV2 with inline keyboards (`formatting.py`)
@@ -46,7 +46,7 @@ pdf_convert.py
 
 ### Inbound
 
-1. `sase_chop_tg_inbound` fetches the currently pending Telegram updates
+1. `sase_job_tg_inbound` fetches the currently pending Telegram updates
 2. Saves the next Telegram offset before processing, so overlapping invocations use at-most-once delivery
 3. Dispatches each update by type:
    - **Callback query** → decodes button press, handles notification responses or agent/bead callbacks
@@ -58,14 +58,14 @@ pdf_convert.py
 - **Machine enable gate**: Both console-script wrappers (`scripts/__init__.py`) check `~/.sase/telegram_is_enabled`
   via `enabled.py` before doing anything else. If the flag is absent, the wrapper returns `0` immediately — before the
   lazy import of the entry-point module — so a disabled machine skips all heavy imports, network, and locks and stays
-  silent. This lets the telegram lumberjack be configured globally while only flagged machines talk to Telegram.
+  silent. This lets the telegram routine be configured globally while only flagged machines talk to Telegram.
 - **Pure logic separation**: `inbound.py` contains no API calls — all logic is independently testable. The entry point
   script handles I/O and wiring.
 - **High-water mark**: The outbound process tracks the timestamp of the last sent notification rather than individual
   notification IDs. It is initialized to "now" on first run to avoid dumping historical backlog, then advanced after
   each successful send.
 - **Exclusive locking**: A file lock prevents concurrent outbound runs from sending the same notifications twice. This
-  is important because outbound runs are triggered by a chop (periodic scheduler).
+  is important because outbound runs are triggered by an AXE job (periodic scheduler).
 - **Rate limiting**: A sliding-window limiter (default 8 messages / 15 seconds) prevents hitting Telegram's flood
   limits. Timestamps are persisted to `rate_limit.json` so the window survives process restarts.
 - **Two-step feedback isolation**: Feedback/custom flows are keyed by the originating Telegram message ID. A user can

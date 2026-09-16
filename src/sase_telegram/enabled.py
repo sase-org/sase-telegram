@@ -1,4 +1,4 @@
-"""Machine-level enable flag for the sase-telegram chops."""
+"""Machine-level enable flag for the sase-telegram jobs."""
 
 from pathlib import Path
 

@@ -1,19 +1,20 @@
 # Outbound
 
-The outbound script (`sase_chop_tg_outbound`) sends sase notifications to Telegram.
+The outbound job (`sase_job_tg_outbound`) sends sase notifications to Telegram.
+The legacy `sase_chop_tg_outbound` executable remains available as a compatibility alias.
 
 ## Machine Enable Flag
 
-The chop is a **no-op unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent, the script exits
+The job is a **no-op unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent, the script exits
 immediately with status `0`, prints nothing, and skips all heavy imports, network calls, and locks. Enable a machine
 with `touch ~/.sase/telegram_is_enabled`.
 
 ## CLI Usage
 
 ```bash
-sase_chop_tg_outbound              # Normal run
-sase_chop_tg_outbound --dry-run    # Print what would be sent and advance the high-water mark
-sase_chop_tg_outbound --context X  # Pass context string for logging
+sase_job_tg_outbound              # Normal run
+sase_job_tg_outbound --dry-run    # Print what would be sent and advance the high-water mark
+sase_job_tg_outbound --context X  # Pass context string for logging
 ```
 
 ## Pipeline
@@ -59,7 +60,7 @@ Consequences for delivery:
   timestamp comparison so nothing is re-delivered — and is migrated to the versioned form atomically on that read.
 
 The outbound read prefers the host store's current-state API, which atomically expires due snoozes before projecting, so
-an offline-then-online chop catches up on the next run rather than losing the reminder. Older `sase` installs fall back
+an offline-then-online job catches up on the next run rather than losing the reminder. Older `sase` installs fall back
 to the equivalent expiring snapshot read.
 
 ## Notification Formatting

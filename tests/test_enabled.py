@@ -1,4 +1,4 @@
-"""Tests for the machine-level telegram enable flag and chop wrapper gate."""
+"""Tests for the machine-level telegram enable flag and job wrapper gate."""
 
 from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Inbound chop entry point: poll Telegram for user actions."""
+"""Inbound job entry point: poll Telegram for user actions."""
 
 from __future__ import annotations
 
@@ -280,7 +280,7 @@ def _print_inbound_summary(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="sase_tg_inbound",
+        prog="sase_job_tg_inbound",
         description="Poll Telegram for user action responses",
     )
     parser.add_argument(
@@ -299,7 +299,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--context",
         default=None,
-        help="Optional context string for lumberjack compatibility",
+        help="Optional AXE job context string",
     )
     return parser.parse_args(argv)
 
@@ -4776,7 +4776,7 @@ def _run_once(custom_commands: dict[str, CustomCommand] | None) -> int:
 
 
 def _run_chop_tick(custom_commands: dict[str, CustomCommand] | None) -> int:
-    """Default (bare) chop invocation: local cleanup plus ensure-receiver.
+    """Default (bare) job invocation: local cleanup plus ensure-receiver.
 
     Network polling now belongs to the persistent ``--receiver`` proc, not
     this short-lived tick, so this keeps the existing five-second cleanup
@@ -4812,11 +4812,11 @@ def _run_receiver() -> int:
 
     Self-terminates when Telegram becomes disabled or its credentials stop
     resolving, rather than requiring an external stop signal: the next
-    enabled, credentialed chop tick's ``ensure_receiver_running`` call
+    enabled, credentialed job tick's ``ensure_receiver_running`` call
     re-arms a fresh receiver, so this is sufficient to respond to disabling
     Telegram or rotating/removing its credentials. Reloads custom commands
     each iteration (unlike ``load_custom_commands`` being loaded once by the
-    short-lived chop tick), since this process can run for a long time.
+    short-lived job tick), since this process can run for a long time.
     """
     log.info(
         "Starting Telegram long-poll receiver (timeout=%ds)",
@@ -4862,7 +4862,7 @@ def _run_receiver() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Inbound Telegram chop entry point."""
+    """Inbound Telegram job entry point."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(name)s: %(message)s",

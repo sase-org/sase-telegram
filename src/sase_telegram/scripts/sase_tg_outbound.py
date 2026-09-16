@@ -1,4 +1,4 @@
-"""Outbound chop entry point: send sase notifications to Telegram."""
+"""Outbound job entry point: send sase notifications to Telegram."""
 
 from __future__ import annotations
 
@@ -272,7 +272,7 @@ def _prepend_commit_message_to_markdown(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="sase_tg_outbound",
+        prog="sase_job_tg_outbound",
         description="Send sase notifications to Telegram",
     )
     parser.add_argument(
@@ -283,7 +283,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--context",
         default=None,
-        help="Optional context string for lumberjack compatibility",
+        help="Optional AXE job context string",
     )
     return parser.parse_args(argv)
 
@@ -350,7 +350,7 @@ def _print_outbound_summary(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Outbound Telegram chop entry point."""
+    """Outbound Telegram job entry point."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(name)s: %(message)s",
@@ -364,8 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     stale_pending = pending_actions.cleanup_stale()
 
     # Acquire exclusive lock to prevent concurrent outbound runs from
-    # sending the same notification multiple times.  Lumberjack fires
-    # this chop every few seconds; if a run takes longer than the
+    # sending the same notification multiple times.  AXE runs this job
+    # every few seconds; if a run takes longer than the
     # interval (retries, rate-limit sleeps, PDF conversion), overlapping
     # runs would read the same high-water mark and duplicate sends.
     from sase_telegram.outbound import release_outbound_lock, try_acquire_outbound_lock

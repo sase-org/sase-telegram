@@ -2,12 +2,12 @@
 
 The receiver itself (the persistent ``getUpdates`` loop) lives in
 ``scripts/sase_tg_inbound.py`` next to the update handlers it dispatches to.
-This module only owns *launching* it: every ~5-second chop tick calls
+This module only owns *launching* it: every ~5-second job tick calls
 :func:`ensure_receiver_running`, which is cheap and non-blocking because a
 receiver already active for this bot replays the same durable proc row
 instead of spawning a second one -- see ``request_fingerprint`` below. SASE's
 proc supervisor does not auto-relaunch a crashed supervised proc, so this
-per-tick re-arm from the still-ticking chop is what gives the receiver its
+per-tick re-arm from the still-ticking job is what gives the receiver its
 restart resilience.
 """
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 #: Console-script entry point (see pyproject.toml ``[project.scripts]``),
 #: re-invoked with ``--receiver`` so the spawned proc runs the persistent
 #: long-poll loop instead of one local-cleanup tick.
-_RECEIVER_SCRIPT = "sase_chop_tg_inbound"
+_RECEIVER_SCRIPT = "sase_job_tg_inbound"
 _RECEIVER_ORIGIN = "telegram-receiver"
 _RECEIVER_LAUNCH_FAILURE_BACKOFF = timedelta(seconds=300)
 _RECEIVER_LAUNCH_FAILURE_DEDUP_KEY = "telegram-receiver-launch-failure"
@@ -59,8 +59,8 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
 
     A call while a receiver for this bot is still active replays the same
     durable proc row -- no new process, no duplicate ``getUpdates``
-    consumer -- so this is safe (and expected) to call on every chop tick.
-    ``argv`` defaults to re-invoking this chop's own entry point with
+    consumer -- so this is safe (and expected) to call on every job tick.
+    ``argv`` defaults to re-invoking this job's own entry point with
     ``--receiver``; tests substitute a harmless command so they can exercise
     the real durable single-owner reservation without actually polling
     Telegram.

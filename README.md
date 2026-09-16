@@ -1,4 +1,4 @@
-# sase-telegram — Telegram Integration Chop for sase
+# sase-telegram — Telegram Integration Jobs for sase
 
 [![PyPI](https://img.shields.io/pypi/v/sase-telegram?logo=pypi&logoColor=white)](https://pypi.org/project/sase-telegram/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -14,7 +14,7 @@ questions, and even launch new agents — all from Telegram.
 ## Installation
 
 For a managed SASE install, install `sase-telegram` into the same `uv tool` environment as `sase` so its CLI scripts
-are available to SASE's chop automation.
+are available to SASE's AXE job automation.
 
 ### Recommended: SASE Admin Center Updates tab
 
@@ -55,8 +55,11 @@ Installing sase-telegram adds the following commands:
 
 | Command                    | Description                                                   |
 | -------------------------- | ------------------------------------------------------------- |
-| `sase_chop_tg_outbound`   | Send pending notifications to Telegram (supports `--dry-run`) |
-| `sase_chop_tg_inbound`    | Poll Telegram for user responses and process them             |
+| `sase_job_tg_outbound`    | Send pending notifications to Telegram (supports `--dry-run`) |
+| `sase_job_tg_inbound`     | Poll Telegram for user responses and process them             |
+
+The legacy `sase_chop_tg_outbound` and `sase_chop_tg_inbound` entrypoints are still installed as compatibility aliases
+for existing SASE configurations.
 
 ### Supported Notification Types
 
@@ -97,9 +100,9 @@ Installing sase-telegram adds the following commands:
 
 ### Machine Enable Flag
 
-The chops are **no-ops unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent,
-`sase_chop_tg_outbound` and `sase_chop_tg_inbound` exit immediately with status `0`, print nothing, and skip all heavy
-imports, network calls, and locks. This lets the telegram lumberjack be configured globally (on every machine) while
+The jobs are **no-ops unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent,
+`sase_job_tg_outbound` and `sase_job_tg_inbound` exit immediately with status `0`, print nothing, and skip all heavy
+imports, network calls, and locks. This lets the telegram routine be configured globally (on every machine) while
 only explicitly-enabled machines actually talk to Telegram.
 
 Enable a machine with:
@@ -135,7 +138,7 @@ The chat target and bot username are required separately:
 ### Custom Slash Commands
 
 Declare additional commands in SASE configuration. The executable is parsed into an argument vector and run directly;
-the inbound chop never invokes a shell.
+the inbound job never invokes a shell.
 
 ```yaml
 telegram:

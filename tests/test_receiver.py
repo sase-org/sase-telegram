@@ -78,7 +78,7 @@ class TestEnsureReceiverRunning:
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(
         "sase_telegram.receiver.resolve_console_script",
-        return_value="/venv/bin/sase_chop_tg_inbound",
+        return_value="/venv/bin/sase_job_tg_inbound",
     )
     @patch("sase.procs.store.read_proc_snapshot")
     def test_submits_a_deterministic_request(
@@ -93,7 +93,7 @@ class TestEnsureReceiverRunning:
 
         assert mock_submit.call_count == 1
         request = mock_submit.call_args.args[0]
-        assert request.argv == ["/venv/bin/sase_chop_tg_inbound", "--receiver"]
+        assert request.argv == ["/venv/bin/sase_job_tg_inbound", "--receiver"]
         assert request.origin == "telegram-receiver"
         assert request.concurrency_keys == ["telegram-receiver:12345"]
         assert request.request_fingerprint == "telegram-receiver:12345"
@@ -105,7 +105,7 @@ class TestEnsureReceiverRunning:
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(
         "sase_telegram.receiver.resolve_console_script",
-        return_value="/venv/bin/sase_chop_tg_inbound",
+        return_value="/venv/bin/sase_job_tg_inbound",
     )
     @patch("sase.procs.store.read_proc_snapshot")
     def test_two_calls_carry_the_same_fingerprint_and_concurrency_key(
@@ -193,7 +193,7 @@ class TestEnsureReceiverRunning:
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(
         "sase_telegram.receiver.resolve_console_script",
-        return_value="/venv/bin/sase_chop_tg_inbound",
+        return_value="/venv/bin/sase_job_tg_inbound",
     )
     @patch("sase.procs.store.read_proc_snapshot")
     def test_absent_or_healthy_newest_row_rearms(
@@ -216,7 +216,7 @@ class TestEnsureReceiverRunning:
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(
         "sase_telegram.receiver.resolve_console_script",
-        return_value="/venv/bin/sase_chop_tg_inbound",
+        return_value="/venv/bin/sase_job_tg_inbound",
     )
     @patch("sase.procs.store.read_proc_snapshot")
     def test_old_launch_failure_rearms_after_backoff(
@@ -321,7 +321,7 @@ class TestReceiverLaunchFailureNotifications:
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(
         "sase_telegram.receiver.resolve_console_script",
-        return_value="/venv/bin/sase_chop_tg_inbound",
+        return_value="/venv/bin/sase_job_tg_inbound",
     )
     @patch("sase.procs.store.read_proc_snapshot")
     def test_expired_launch_failure_notifies_and_rearms_with_real_store(
@@ -344,7 +344,7 @@ class TestReceiverLaunchFailureNotifications:
         assert receiver.ensure_receiver_running() is launched
 
         request = mock_submit.call_args.args[0]
-        assert request.argv == ["/venv/bin/sase_chop_tg_inbound", "--receiver"]
+        assert request.argv == ["/venv/bin/sase_job_tg_inbound", "--receiver"]
         rows = _receiver_notifications(notification_store)
         assert len(rows) == 1
         assert rows[0].plus_one_count == 0
@@ -419,7 +419,7 @@ class TestSingleOwnerReplay:
         procs do not auto-relaunch a crashed supervised proc (see
         ``receiver.py``'s module docstring), so this proves the *other*
         half of that design: once the durable row is terminal, the next
-        ``ensure_receiver_running`` call (mirroring the next chop tick)
+        ``ensure_receiver_running`` call (mirroring the next job tick)
         reserves a genuinely new proc rather than replaying the dead one.
         """
         from sase.procs import kill_proc, wait_for_proc

@@ -1,1 +1,1 @@
-"""Telegram integration chop for sase."""
+"""Telegram integration jobs for sase."""

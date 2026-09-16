@@ -307,7 +307,13 @@ def _sudo_request() -> dict[str, Any]:
     assert executable is not None
     return {
         "reason": "Need to refresh root-owned package metadata",
-        "commands": [{"id": "refresh", "argv": [executable]}],
+        "commands": [
+            {
+                "id": "refresh",
+                "argv": [executable],
+                "why": "Refresh package metadata for the registry render test",
+            }
+        ],
         "run_as": "root",
         "cwd": "/tmp",
         "env": {"LC_ALL": "C"},

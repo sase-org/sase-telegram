@@ -1,26 +1,27 @@
 # Inbound
 
-The inbound script (`sase_chop_tg_inbound`) polls Telegram for user responses and dispatches them back to sase.
+The inbound job (`sase_job_tg_inbound`) polls Telegram for user responses and dispatches them back to sase.
+The legacy `sase_chop_tg_inbound` executable remains available as a compatibility alias.
 
 ## Machine Enable Flag
 
-The chop is a **no-op unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent, the script exits
+The job is a **no-op unless `~/.sase/telegram_is_enabled` exists**. When the flag file is absent, the script exits
 immediately with status `0`, prints nothing, and skips all heavy imports and network calls. Enable a machine with
 `touch ~/.sase/telegram_is_enabled`.
 
 ## CLI Usage
 
 ```bash
-sase_chop_tg_inbound              # Local cleanup, then ensure the long-poll receiver is running
-sase_chop_tg_inbound --once       # Process pending updates once (no long-polling) and exit
-sase_chop_tg_inbound --receiver   # Run the persistent long-poll receiver loop (internal use)
-sase_chop_tg_inbound --context X  # Pass context string for logging
+sase_job_tg_inbound              # Local cleanup, then ensure the long-poll receiver is running
+sase_job_tg_inbound --once       # Process pending updates once (no long-polling) and exit
+sase_job_tg_inbound --receiver   # Run the persistent long-poll receiver loop (internal use)
+sase_job_tg_inbound --context X  # Pass context string for logging
 ```
 
 ## Long-Poll Receiver
 
 Telegram updates are fetched by one persistent, supervised long-poll receiver per
-configured bot, not by the five-second chop tick itself. Each tick calls
+configured bot, not by the five-second job tick itself. Each tick calls
 `ensure_receiver_running`, an idempotent, non-blocking durable-proc submission
 (`sase.procs.submit_proc_request` with a fingerprint/concurrency key derived from the
 configured chat id): a receiver already active for that bot replays the same proc row,
@@ -33,7 +34,7 @@ The receiver self-terminates (rather than waiting for an external stop signal) o
 notices Telegram has been disabled (`~/.sase/telegram_is_enabled` removed) or its
 credentials stop resolving; the next enabled, credentialed tick then re-arms a fresh
 one. It is a detached supervised proc like any other (e.g. a submitted gate answer), so
-it is not tied to the lifetime of the chop tick or the AXE lumberjack that launched it,
+it is not tied to the lifetime of the job tick or the AXE routine that launched it,
 and it keeps running across `sase axe stop`; stop it directly with `sase proc kill` (or
 disable Telegram) if you need it down immediately.
 
@@ -225,7 +226,7 @@ are capped with an explicit truncation note.
 ## Custom Slash Commands
 
 Custom commands are read once at the start of each inbound poll from SASE's merged configuration, with project-local
-configuration disabled so behavior does not depend on the chop's working directory. For example:
+configuration disabled so behavior does not depend on the job's working directory. For example:
 
 ```yaml
 telegram:
