@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sase-telegram"
-version = "0.4.14"
+version = "0.4.15"
 description = "Telegram integration jobs for sase"
 readme = "README.md"
 requires-python = ">=3.12"
