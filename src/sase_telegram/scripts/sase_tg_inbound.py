@@ -343,6 +343,36 @@ def _configured_chat_id() -> str | None:
     return str(chat_id) if chat_id is not None else None
 
 
+def _callback_query_sender_id(callback_query: Any) -> str | None:
+    user = getattr(callback_query, "from_user", None)
+    user_id = getattr(user, "id", None) if user is not None else None
+    return str(user_id) if user_id is not None else None
+
+
+def _update_is_from_configured_chat(update: Any) -> bool:
+    """Return whether *update* comes from the configured chat (and sender).
+
+    Any Telegram account that discovers the bot can message or tap a
+    callback button on it; nothing before this checked identity, so every
+    handler -- including agent launch -- was reachable by a stranger. When
+    the configured chat id itself cannot be resolved there is nothing
+    trustworthy to compare against, so updates are let through unfiltered,
+    unchanged from prior behavior.
+    """
+    configured = _configured_chat_id()
+    if configured is None:
+        return True
+    callback_query = update.callback_query
+    if callback_query is not None:
+        chat_id = _message_chat_id(getattr(callback_query, "message", None))
+        sender_id = _callback_query_sender_id(callback_query)
+        return chat_id == configured and sender_id == configured
+    message = update.message
+    if message is not None:
+        return _message_chat_id(message) == configured
+    return True
+
+
 def _context_chat_id(message: Any | None) -> str | None:
     return _message_chat_id(message) or _configured_chat_id()
 
@@ -1556,6 +1586,32 @@ def _begin_gate_feedback(
         )
 
 
+def _reject_tty_required_selection(
+    callback_query: Any, view: GateView, selected_option_ids: tuple[str, ...]
+) -> bool:
+    """Reject a selection that includes a requires_tty option; return True if rejected.
+
+    Mirrors ``cli_answer._reject_detached_tty_options``: Telegram is a
+    detached transport with no controlling TTY, so these options must never
+    reach ``execute_gate_selection``. ``render_gate_keyboard`` already hides
+    them, but a forged or stale callback token can still name one directly.
+    """
+    ids = [
+        option_id
+        for option_id in selected_option_ids
+        if (option := option_for_id(view, option_id)) is not None
+        and option.requires_tty
+    ]
+    if not ids:
+        return False
+    _answer_callback(
+        callback_query,
+        "This gate option requires a controlling TTY and cannot be answered "
+        "through Telegram",
+    )
+    return True
+
+
 def _start_or_submit_gate_selection(
     callback_query: Any,
     action: dict[str, Any],
@@ -1567,6 +1623,8 @@ def _start_or_submit_gate_selection(
     feedback_requested: bool,
 ) -> None:
     """Open declared-input collection for a committed selection, or submit it."""
+    if _reject_tty_required_selection(callback_query, view, selected_option_ids):
+        return
     try:
         fields = pending_fields(view, selected_option_ids)
     except GateError as exc:
@@ -4625,6 +4683,12 @@ def _dispatch_one_update(
     a stale batch-start snapshot would make a later update in the same
     batch miss an action removed by an earlier one.
     """
+    if not _update_is_from_configured_chat(update):
+        log.warning(
+            "Rejecting Telegram update from an unauthorized chat (update_id=%d)",
+            update.update_id,
+        )
+        return None
     if update.callback_query:
         log.info("Processing callback (update_id=%d)", update.update_id)
         _handle_callback(update.callback_query, pending_actions.list_all())

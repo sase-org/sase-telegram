@@ -1030,7 +1030,13 @@ def render_gate_keyboard(
     view: GateView,
     progress: GateProgress | None = None,
 ) -> InlineKeyboardMarkup:
-    """Render every gate kind from its verified option-query branches."""
+    """Render every gate kind from its verified option-query branches.
+
+    Options that ``requires_tty`` (sudo ``approve``, in particular) are
+    never rendered: Telegram has no controlling TTY to satisfy them, and a
+    submitted answer for one would fail after the gate's other options --
+    including Deny -- had already been removed from the keyboard.
+    """
     progress = progress or initial_progress(view)
     rows: list[list[InlineKeyboardButton]] = []
     singleton_row: list[InlineKeyboardButton] = []
@@ -1045,6 +1051,8 @@ def render_gate_keyboard(
     for branch_index, branch in enumerate(view.branches):
         if len(branch) == 1:
             option = by_id[branch[0]]
+            if option.requires_tty:
+                continue
             singleton_row.append(
                 InlineKeyboardButton(
                     _option_button_text(option),
@@ -1071,7 +1079,14 @@ def render_gate_keyboard(
         group = group_for_branch(view, branch)
         if group is None:
             continue
-        group_text = f"{group.icon or '•'} {group.label or by_id[branch[0]].label}"
+        visible_members = tuple(
+            option_id for option_id in branch if not by_id[option_id].requires_tty
+        )
+        if not visible_members:
+            continue
+        group_text = (
+            f"{group.icon or '•'} {group.label or by_id[visible_members[0]].label}"
+        )
         if progress.expanded_branch_index != branch_index:
             rows.append(
                 [
@@ -1084,7 +1099,7 @@ def render_gate_keyboard(
                 ]
             )
             continue
-        for option_id in branch:
+        for option_id in visible_members:
             option = by_id[option_id]
             checked = "☑️" if option_id in selected_ids else "⬜"
             rows.append(
@@ -1104,12 +1119,14 @@ def render_gate_keyboard(
             )
         ]
         branch_selection = tuple(
-            option_id for option_id in branch if option_id in selected_ids
+            option_id for option_id in visible_members if option_id in selected_ids
         )
         if feedback_mode(view, branch_selection) == "optional":
             submit_row.append(
                 InlineKeyboardButton(
-                    _feedback_button_text(group.label or by_id[branch[0]].label),
+                    _feedback_button_text(
+                        group.label or by_id[visible_members[0]].label
+                    ),
                     callback_data=callback_data.encode(
                         "gate", prefix, f"f{branch_index}"
                     ),

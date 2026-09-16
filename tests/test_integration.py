@@ -677,6 +677,7 @@ class TestInboundIntegration:
             caption_entities=None,
             text=None,
             document=None,
+            chat=SimpleNamespace(id=12345),
         )
         update = SimpleNamespace(
             update_id=600,
@@ -782,6 +783,167 @@ class TestInboundIntegration:
         assert "2. " in prompt and "album_two_1" in prompt
         assert not MEDIA_GROUP_TEST_FILE.exists()
         assert mock_tg.download_file.call_count == 2
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_text_message")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_foreign_chat_text_message_is_rejected_before_dispatch(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_text: MagicMock,
+    ) -> None:
+        """A stranger's text message never reaches the handler."""
+        mock_creds.get_chat_id.return_value = "12345"
+        message = SimpleNamespace(
+            text="launch something",
+            photo=None,
+            document=None,
+            entities=None,
+            message_id=1,
+            chat=SimpleNamespace(id=99999),
+        )
+        update = SimpleNamespace(update_id=700, callback_query=None, message=message)
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_text.assert_not_called()
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 701
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_photo_message")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_foreign_chat_photo_message_is_rejected_before_dispatch(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_photo: MagicMock,
+    ) -> None:
+        """A stranger's photo message never reaches the handler."""
+        mock_creds.get_chat_id.return_value = "12345"
+        photo = SimpleNamespace(file_id="stranger_photo_id")
+        message = SimpleNamespace(
+            photo=[photo],
+            caption=None,
+            caption_entities=None,
+            text=None,
+            document=None,
+            media_group_id=None,
+            chat=SimpleNamespace(id=99999),
+        )
+        update = SimpleNamespace(update_id=701, callback_query=None, message=message)
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_photo.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_document_image")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_foreign_chat_document_image_is_rejected_before_dispatch(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_document: MagicMock,
+    ) -> None:
+        """A stranger's document-image message never reaches the handler."""
+        mock_creds.get_chat_id.return_value = "12345"
+        document = SimpleNamespace(mime_type="image/png", file_name="x.png")
+        message = SimpleNamespace(
+            photo=None,
+            document=document,
+            caption=None,
+            caption_entities=None,
+            text=None,
+            media_group_id=None,
+            chat=SimpleNamespace(id=99999),
+        )
+        update = SimpleNamespace(update_id=702, callback_query=None, message=message)
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_document.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_foreign_chat_callback_is_rejected_before_dispatch(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_callback: MagicMock,
+    ) -> None:
+        """A stranger's callback query never reaches the handler."""
+        mock_creds.get_chat_id.return_value = "12345"
+        callback_query = SimpleNamespace(
+            id="cb_stranger",
+            data="gate:abcd1234:c0",
+            message=SimpleNamespace(message_id=42, chat=SimpleNamespace(id=99999)),
+            from_user=SimpleNamespace(id=99999),
+        )
+        update = SimpleNamespace(
+            update_id=703, callback_query=callback_query, message=None
+        )
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_callback.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_own_chat_callback_from_a_different_sender_is_rejected(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_callback: MagicMock,
+    ) -> None:
+        """Matching chat alone is not enough -- the presser is checked too."""
+        mock_creds.get_chat_id.return_value = "12345"
+        callback_query = SimpleNamespace(
+            id="cb_stranger",
+            data="gate:abcd1234:c0",
+            message=SimpleNamespace(message_id=42, chat=SimpleNamespace(id=12345)),
+            from_user=SimpleNamespace(id=99999),
+        )
+        update = SimpleNamespace(
+            update_id=704, callback_query=callback_query, message=None
+        )
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_callback.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_configured_chat_callback_reaches_the_handler(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_callback: MagicMock,
+    ) -> None:
+        """The owner's own chat and account are not rejected."""
+        mock_creds.get_chat_id.return_value = "12345"
+        callback_query = SimpleNamespace(
+            id="cb_owner",
+            data="gate:abcd1234:c0",
+            message=SimpleNamespace(message_id=42, chat=SimpleNamespace(id=12345)),
+            from_user=SimpleNamespace(id=12345),
+        )
+        update = SimpleNamespace(
+            update_id=705, callback_query=callback_query, message=None
+        )
+        mock_tg.get_updates.return_value = [update]
+
+        assert inbound_main(["--once"]) == 0
+
+        mock_handle_callback.assert_called_once()
 
 
 class TestInboundChopTick:

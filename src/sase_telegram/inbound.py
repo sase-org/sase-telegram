@@ -445,7 +445,10 @@ def submit_gate_response(
 
     request_id = str(action_data.get("request_id") or bundle.root.name)
     kind = str(action_data.get("request_kind") or adapter.kind)
-    payload: dict[str, Any] = {"option_ids": list(response.selected_option_ids)}
+    payload: dict[str, Any] = {
+        "option_ids": list(response.selected_option_ids),
+        "source": "telegram",
+    }
     if response.option_inputs is not None:
         payload["option_inputs"] = dict(response.option_inputs)
     elif response.input_data is not None:

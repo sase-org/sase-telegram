@@ -36,7 +36,7 @@ from sase.sdd.plan_validate import validate_plan as validate_sase_plan
 from sase.sudo.gate import build_sudo_gate_request
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
-from sase_telegram.gate_flow import GateProgress
+from sase_telegram.gate_flow import GateProgress, load_gate_view
 from sase_telegram.scripts.sase_tg_inbound import (
     _execute_gate_callback_response,
     _handle_callback,
@@ -772,6 +772,12 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
             continue
         _text, keyboard, _attachments = format_notification(notifications[kind])
         assert keyboard is not None, kind
+        if kind == "sudo":
+            button_texts = [
+                button.text for row in keyboard.inline_keyboard for button in row
+            ]
+            assert not any("Approve" in text for text in button_texts)
+            assert any("Deny" in text for text in button_texts)
 
 
 def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
@@ -943,6 +949,39 @@ def test_gate_callback_submission_error_sends_chat_message_after_ack(
         "Gate response failed: proc store busy",
         reply_to_message_id=42,
     )
+
+
+def test_sudo_approve_selection_is_rejected_before_submission(
+    gate_home: Path,
+) -> None:
+    """A forged callback naming the hidden ``approve`` branch is still refused.
+
+    ``render_gate_keyboard`` never renders a button for it, but the branch
+    index still exists in the verified envelope, so the rejection must also
+    hold server-side -- mirroring ``cli_answer._reject_detached_tty_options``.
+    """
+    with override_flags(agent_sudo_requests=True):
+        sudo = create_gate(build_sudo_gate_request(_sudo_request()))
+    notification = _stored_notification(sudo.notification_id)
+    action = _pending(notification)
+    prefix = notification.id[:8]
+    view = load_gate_view(notification.action_data, expected_kind="sudo")
+    approve_branch_index = next(
+        index for index, branch in enumerate(view.branches) if branch == ("approve",)
+    )
+    callback = _callback(f"gate:{prefix}:c{approve_branch_index}")
+
+    with (
+        patch(
+            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        ) as answer,
+        patch("sase_telegram.scripts.sase_tg_inbound._resolve_response") as resolve,
+    ):
+        _handle_gate_callback(callback, {prefix: action})
+
+    resolve.assert_not_called()
+    answer.assert_called_once()
+    assert "TTY" in answer.call_args.args[1]
 
 
 @pytest.mark.parametrize(

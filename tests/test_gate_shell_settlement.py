@@ -156,7 +156,10 @@ def test_telegram_submits_a_shell_backed_gate(
         "--no-detach",
         "--json",
     ]
-    assert submitted.operation_payload == {"option_ids": ["cleanup"]}
+    assert submitted.operation_payload == {
+        "option_ids": ["cleanup"],
+        "source": "telegram",
+    }
     # Execution (and settlement) has not happened yet -- it happens inside
     # the submitted proc, not this call.
     assert not gate.response_path.exists()
@@ -198,6 +201,7 @@ def test_telegram_submits_an_ordinary_gate_identically(
         "--no-detach",
         "--json",
     ]
+    assert submitted.operation_payload["source"] == "telegram"
     assert not gate.response_path.exists()
 
 
