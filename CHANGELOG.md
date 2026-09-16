@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.16](https://github.com/sase-org/sase-telegram/compare/v0.4.15...v0.4.16) (2026-09-16)
+
+
+### Bug Fixes
+
+* **telegram:** authenticate inbound updates and pre-reject TTY-only gate options ([24900c0](https://github.com/sase-org/sase-telegram/commit/24900c02de4e76e91f7b35fb8f4a3851e97ed4a8))
+
 ## [0.4.15](https://github.com/sase-org/sase-telegram/compare/v0.4.14...v0.4.15) (2026-09-16)
 
 
