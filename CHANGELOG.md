@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.15](https://github.com/sase-org/sase-telegram/compare/v0.4.14...v0.4.15) (2026-09-16)
+
+
+### Features
+
+* **telegram:** add canonical job entrypoints ([ab9d985](https://github.com/sase-org/sase-telegram/commit/ab9d985d29927872e69ca487bf7c7b902d62c22a))
+
+
+### Documentation
+
+* use sase tui launch command ([35e81c6](https://github.com/sase-org/sase-telegram/commit/35e81c6074ff26e4f92abe79a461fb89f5387758))
+
 ## [0.4.14](https://github.com/sase-org/sase-telegram/compare/v0.4.13...v0.4.14) (2026-09-14)
 
 
