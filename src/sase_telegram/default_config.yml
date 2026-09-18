@@ -1,0 +1,9 @@
+service:
+  procs:
+    telegram_receiver:
+      command: ["sase_job_tg_inbound", "--receiver"]
+      description: "Telegram inbound long-poll receiver."
+      enabled: false
+      mode: daemon
+      restart: on-failure
+      success_exit_codes: [0]

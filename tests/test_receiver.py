@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sase.feature_flags import override_flags
 
 from sase_telegram import receiver
 
@@ -74,6 +75,54 @@ class TestReceiverIdentity:
 
 
 class TestEnsureReceiverRunning:
+    @patch("sase.procs.submit_proc_request")
+    def test_service_host_owned_receiver_skips_legacy_submit(
+        self,
+        mock_submit: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        configured = SimpleNamespace(available=True)
+        composition = SimpleNamespace(
+            get=lambda name: configured if name == "telegram_receiver" else None
+        )
+        monkeypatch.setattr(
+            "sase.service.config.load_service_config",
+            lambda: composition,
+        )
+
+        with override_flags(service_host=True):
+            assert receiver.ensure_receiver_running() is None
+
+        mock_submit.assert_not_called()
+
+    @patch("sase.procs.submit_proc_request")
+    @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
+    @patch(
+        "sase_telegram.receiver.resolve_console_script",
+        return_value="/venv/bin/sase_job_tg_inbound",
+    )
+    @patch("sase.procs.store.read_proc_snapshot")
+    def test_service_config_error_preserves_legacy_rearm(
+        self,
+        mock_snapshot: MagicMock,
+        _mock_resolve: MagicMock,
+        _mock_chat_id: MagicMock,
+        mock_submit: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail_config() -> object:
+            raise RuntimeError("composition failed")
+
+        monkeypatch.setattr("sase.service.config.load_service_config", fail_config)
+        mock_snapshot.return_value = SimpleNamespace(procs=[])
+        launched = MagicMock(proc_id="fresh")
+        mock_submit.return_value = launched
+
+        with override_flags(service_host=True):
+            assert receiver.ensure_receiver_running() is launched
+
+        mock_submit.assert_called_once()
+
     @patch("sase.procs.submit_proc_request")
     @patch("sase_telegram.credentials.get_chat_id", return_value="12345")
     @patch(

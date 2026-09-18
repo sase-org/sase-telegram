@@ -35,6 +35,9 @@ sase_job_tg_inbound = "sase_telegram.scripts:inbound_main"
 sase_chop_tg_outbound = "sase_telegram.scripts:outbound_main"
 sase_chop_tg_inbound = "sase_telegram.scripts:inbound_main"
 
+[project.entry-points.sase_config]
+sase_telegram = "sase_telegram"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/sase_telegram"]
 

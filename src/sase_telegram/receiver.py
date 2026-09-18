@@ -32,6 +32,7 @@ _RECEIVER_ORIGIN = "telegram-receiver"
 _RECEIVER_LAUNCH_FAILURE_BACKOFF = timedelta(seconds=300)
 _RECEIVER_LAUNCH_FAILURE_DEDUP_KEY = "telegram-receiver-launch-failure"
 _RECEIVER_LAUNCH_FAILURE_SENDER = "telegram"
+_SERVICE_PROC_NAME = "telegram_receiver"
 
 
 def receiver_identity() -> str:
@@ -54,7 +55,7 @@ def receiver_identity() -> str:
     return f"telegram-receiver:{chat_id}"
 
 
-def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
+def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc | None:
     """Idempotently ensure one long-poll receiver proc is active for this bot.
 
     A call while a receiver for this bot is still active replays the same
@@ -66,6 +67,9 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
     Telegram.
     """
     from sase.procs import ProcSubmitRequest, submit_proc_request
+
+    if _service_host_owns_receiver():
+        return None
 
     identity = receiver_identity()
     if argv is None:
@@ -96,6 +100,24 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc:
 
 def _receiver_argv() -> list[str]:
     return [resolve_console_script(_RECEIVER_SCRIPT), "--receiver"]
+
+
+def _service_host_owns_receiver() -> bool:
+    try:
+        from sase.feature_flags import FeatureFlag, current_flags
+
+        if not current_flags().enabled(FeatureFlag.service_host):
+            return False
+    except Exception:
+        return False
+
+    try:
+        from sase.service.config import load_service_config
+
+        entry = load_service_config().get(_SERVICE_PROC_NAME)
+    except Exception:
+        return False
+    return bool(entry is not None and entry.available)
 
 
 def _newest_launch_failed_receiver(fingerprint: str) -> Proc | None:
