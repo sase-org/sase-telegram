@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.17](https://github.com/sase-org/sase-telegram/compare/v0.4.16...v0.4.17) (2026-09-18)
+
+
+### Features
+
+* **receiver:** register service-host proc ([2f76876](https://github.com/sase-org/sase-telegram/commit/2f768762d2aba05cafa52ba7a7ec96d71a4342d9))
+
 ## [0.4.16](https://github.com/sase-org/sase-telegram/compare/v0.4.15...v0.4.16) (2026-09-16)
 
 
