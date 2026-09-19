@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sase.notifications.models import Notification
+from sase_telegram.receiver_runtime import RuntimeGeneration, RuntimeScanError
 from sase_telegram.scripts.sase_tg_outbound import main as outbound_main
 from sase_telegram.scripts.sase_tg_inbound import main as inbound_main
 
@@ -998,8 +999,24 @@ class TestInboundChopTick:
         mock_ensure.assert_not_called()
 
 
+def _runtime_generation(digest: str = "stable") -> RuntimeGeneration:
+    return RuntimeGeneration(
+        digest=digest,
+        executable="/venv/bin/sase_job_tg_inbound",
+        roots=(("sase", "/sase"),),
+    )
+
+
 class TestReceiverLoop:
     """The persistent ``--receiver`` loop: durable per-update offsets."""
+
+    @pytest.fixture(autouse=True)
+    def _stable_runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        generation = _runtime_generation()
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            lambda: generation,
+        )
 
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
@@ -1121,3 +1138,260 @@ class TestReceiverLoop:
         assert result == 0
         mock_time.sleep.assert_called_once_with(inbound._RECEIVER_ERROR_BACKOFF_SECONDS)
         assert mock_tg.get_updates.call_count == 2
+
+
+class _ExecReplaced(Exception):
+    """Sentinel raised by a mocked ``os.execvp`` that would have replaced us."""
+
+    def __init__(self, path: str, argv: list[str]) -> None:
+        super().__init__(path)
+        self.path = path
+        self.argv = argv
+
+
+def _raise_execvp(path: str, argv: list[str]) -> None:
+    raise _ExecReplaced(path, list(argv))
+
+
+class TestReceiverRuntimeRefresh:
+    """Re-exec the persistent receiver when its loaded runtime goes stale."""
+
+    def _stub_observe(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        values: list[RuntimeGeneration | Exception],
+    ) -> None:
+        queue = list(values)
+
+        def observe() -> RuntimeGeneration:
+            item = queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            observe,
+        )
+
+    def _stub_refresh_settle(
+        self, monkeypatch: pytest.MonkeyPatch, generation: RuntimeGeneration
+    ) -> None:
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.wait_for_settled_generation",
+            lambda **_kwargs: generation,
+        )
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.canonical_receiver_argv",
+            lambda: ["/venv/bin/sase_job_tg_inbound", "--receiver"],
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.os.execvp")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_unchanged_generation_keeps_polling(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        generation = _runtime_generation("same")
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            lambda: generation,
+        )
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.side_effect = [True, True, False]
+        mock_tg.get_updates.return_value = []
+
+        result = inbound._run_receiver()
+
+        assert result == 0
+        assert mock_tg.get_updates.call_count == 2
+        mock_execvp.assert_not_called()
+
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        side_effect=_raise_execvp,
+    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_refresh_before_polling_skips_get_updates(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        _mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        baseline = _runtime_generation("old")
+        current = _runtime_generation("new")
+        self._stub_observe(monkeypatch, [baseline, current])
+        self._stub_refresh_settle(monkeypatch, current)
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.return_value = True
+
+        with pytest.raises(_ExecReplaced) as caught:
+            inbound._run_receiver()
+
+        mock_tg.get_updates.assert_not_called()
+        assert caught.value.path == "/venv/bin/sase_job_tg_inbound"
+        assert caught.value.argv == [
+            "/venv/bin/sase_job_tg_inbound",
+            "--receiver",
+        ]
+        assert not OFFSET_TEST_FILE.exists()
+
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        side_effect=_raise_execvp,
+    )
+    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_refresh_after_fetch_does_not_advance_offset(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        mock_launch: MagicMock,
+        _mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        baseline = _runtime_generation("old")
+        current = _runtime_generation("new")
+        self._stub_observe(monkeypatch, [baseline, baseline, current])
+        self._stub_refresh_settle(monkeypatch, current)
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.return_value = True
+        update = SimpleNamespace(
+            update_id=50,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="do not lose me",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=7,
+            ),
+        )
+        mock_tg.get_updates.return_value = [update]
+
+        with pytest.raises(_ExecReplaced) as caught:
+            inbound._run_receiver()
+
+        mock_tg.get_updates.assert_called_once()
+        mock_launch.assert_not_called()
+        assert not OFFSET_TEST_FILE.exists()
+        assert caught.value.argv == [
+            "/venv/bin/sase_job_tg_inbound",
+            "--receiver",
+        ]
+
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        side_effect=_raise_execvp,
+    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_refresh_uses_canonical_receiver_argv(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        _mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        current = _runtime_generation("new")
+        self._stub_observe(monkeypatch, [_runtime_generation("old"), current])
+        self._stub_refresh_settle(monkeypatch, current)
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.canonical_receiver_argv",
+            lambda: ["/opt/sase/bin/sase_job_tg_inbound", "--receiver"],
+        )
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.return_value = True
+
+        with pytest.raises(_ExecReplaced) as caught:
+            inbound._run_receiver()
+
+        mock_tg.get_updates.assert_not_called()
+        assert caught.value.path == "/opt/sase/bin/sase_job_tg_inbound"
+        assert caught.value.argv == [
+            "/opt/sase/bin/sase_job_tg_inbound",
+            "--receiver",
+        ]
+
+    @patch(
+        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        side_effect=OSError("exec format error"),
+    )
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_exec_failure_exits_nonzero(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        _mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        current = _runtime_generation("new")
+        self._stub_observe(monkeypatch, [_runtime_generation("old"), current])
+        self._stub_refresh_settle(monkeypatch, current)
+        mock_creds.get_bot_token.return_value = "token"
+        mock_enabled.return_value = True
+
+        with caplog.at_level("ERROR"):
+            result = inbound._run_receiver()
+
+        assert result == 1
+        mock_tg.get_updates.assert_not_called()
+        assert "Failed to refresh Telegram receiver runtime: exec format error" in (
+            caplog.text
+        )
+        assert "Traceback" not in caplog.text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.os.execvp")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_unsettled_start_refreshes_without_polling(
+        self,
+        mock_tg: MagicMock,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        mock_execvp: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        settled = _runtime_generation("settled")
+        self._stub_observe(monkeypatch, [RuntimeScanError("torn install at start")])
+        self._stub_refresh_settle(monkeypatch, settled)
+        mock_execvp.side_effect = _raise_execvp
+
+        with pytest.raises(_ExecReplaced):
+            inbound._run_receiver()
+
+        mock_enabled.assert_not_called()
+        mock_creds.get_bot_token.assert_not_called()
+        mock_tg.get_updates.assert_not_called()

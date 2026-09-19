@@ -38,6 +38,25 @@ it is not tied to the lifetime of the job tick or the AXE routine that launched 
 and it keeps running across `sase axe stop`; stop it directly with `sase proc kill` (or
 disable Telegram) if you need it down immediately.
 
+The process is long-lived but generation-aware, so an in-place SASE, `sase-telegram`, or
+`sase_core_rs` update does not leave a mixed old/new interpreter consuming Telegram
+updates. At start it fingerprints the canonical `sase_job_tg_inbound` executable plus
+the resolved installed code roots for `sase`, `sase_telegram`, and `sase_core_rs`
+(relative path, size, and nanosecond mtime of regular runtime files;
+`__pycache__` / `.pyc` / other interpreter cache churn is ignored). It rechecks that
+generation before every long poll and again immediately after `getUpdates` returns,
+before dispatching. If the generation changed, or a scan fails because the tree is
+mid-update, the receiver stops polling, waits until two consecutive observations agree,
+and then `exec`s the canonical `sase_job_tg_inbound --receiver` argv in the same
+environment. Re-exec keeps the existing supervised process slot and concurrency
+ownership under both the legacy durable-proc supervisor and the service-host
+`restart: on-failure` proc, so a second `getUpdates` consumer is never started. An
+update fetched across that boundary is not offset-advanced; the fresh runtime fetches
+it again. If re-exec fails, the receiver logs a one-line diagnostic and exits nonzero
+so the five-second `tg_inbound` tick (legacy) or `restart: on-failure` (service host)
+can replace it. Clean exits for disablement or credential loss stay `0` and do not
+loop.
+
 Adopting the receiver on an existing installation needs no manual config edit: the first
 tick after upgrading calls `ensure_receiver_running` exactly like every later one.
 `--once` still runs the old poll-once-and-exit path directly (no receiver involved), for

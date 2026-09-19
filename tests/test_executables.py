@@ -70,9 +70,10 @@ def test_default_receiver_argv_uses_canonical_executable(monkeypatch) -> None:
         lambda name: f"/venv/bin/{name}",
     )
 
-    argv = receiver._receiver_argv()
+    argv = receiver.canonical_receiver_argv()
 
     assert argv == ["/venv/bin/sase_job_tg_inbound", "--receiver"]
+    assert argv == receiver._receiver_argv()
 
 
 def test_project_registers_canonical_and_legacy_console_scripts() -> None:

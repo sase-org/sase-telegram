@@ -15,12 +15,12 @@ outbound.py            inbound.py
      │                     │
 formatting.py          pending_actions.py
   Notification → TG        Action persistence
-     │
-bead_format.py
-  sase bead output → Markdown
-     │
-rate_limit.py
-  Sliding-window throttle
+     │                     │
+bead_format.py         receiver.py
+  sase bead output         Idempotent ensure of the long-poll proc
+     │                     │
+rate_limit.py          receiver_runtime.py
+  Sliding-window throttle  Installed SASE/plugin/native generation fingerprint
      │
 credentials.py
   Bot token (pass) + env vars
@@ -46,9 +46,17 @@ pdf_convert.py
 
 ### Inbound
 
-1. `sase_job_tg_inbound` fetches the currently pending Telegram updates
-2. Saves the next Telegram offset before processing, so overlapping invocations use at-most-once delivery
-3. Dispatches each update by type:
+1. `sase_job_tg_inbound --receiver` is a long-lived process. Before each `getUpdates`
+   long poll, and again after the poll returns, it compares the installed SASE /
+   `sase-telegram` / `sase_core_rs` generation to the fingerprint captured at start.
+   A changed or unsettled generation re-execs the canonical
+   `sase_job_tg_inbound --receiver` argv in the same process slot instead of
+   dispatching with mixed imports.
+2. `getUpdates` fetches the currently pending Telegram updates from the stored offset
+3. Each update is dispatched by type, and the offset in `update_offset.txt` is saved
+   only after that update finishes (successfully or with a caught, logged handler
+   error). An update fetched across a runtime refresh is not saved, so the fresh
+   interpreter fetches it again rather than acknowledging it as processed:
    - **Callback query** → decodes button press, handles notification responses or agent/bead callbacks
    - **Text message** → completes a matching two-step feedback flow, dispatches a slash command, or launches an agent
    - **Photo/image document** → downloads file, builds agent prompt with image path
@@ -59,6 +67,11 @@ pdf_convert.py
   via `enabled.py` before doing anything else. If the flag is absent, the wrapper returns `0` immediately — before the
   lazy import of the entry-point module — so a disabled machine skips all heavy imports, network, and locks and stays
   silent. This lets the telegram routine be configured globally while only flagged machines talk to Telegram.
+- **Generation-aware receiver refresh**: The long-poll process fingerprints its installed
+  runtime and re-execs in place when that fingerprint changes, so editable or managed
+  updates cannot mix old extension bindings with new Python. Re-exec preserves the
+  single `getUpdates` consumer; offset handoff stays lossless because the offset
+  advances only after a successful or explicitly skipped dispatch.
 - **Pure logic separation**: `inbound.py` contains no API calls — all logic is independently testable. The entry point
   script handles I/O and wiring.
 - **High-water mark**: The outbound process tracks the timestamp of the last sent notification rather than individual

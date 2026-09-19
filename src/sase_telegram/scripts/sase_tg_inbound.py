@@ -27,7 +27,13 @@ from sase_telegram import (
 )
 from sase_telegram.credentials import TelegramCredentialError
 from sase_telegram.enabled import is_telegram_enabled
-from sase_telegram.receiver import ensure_receiver_running
+from sase_telegram.receiver import canonical_receiver_argv, ensure_receiver_running
+from sase_telegram.receiver_runtime import (
+    RuntimeGeneration,
+    RuntimeScanError,
+    observe_runtime_generation,
+    wait_for_settled_generation,
+)
 from sase_telegram.bead_format import bead_show_to_markdown, parse_bead_list_json
 from sase_telegram.agent_format import (
     _detail_rows,
@@ -4749,6 +4755,18 @@ def _poll_and_dispatch_updates(
     effective behavior today.
     """
     updates = telegram_client.get_updates(offset=offset, timeout=timeout)
+    return _dispatch_fetched_updates(
+        updates, offset=offset, custom_commands=custom_commands
+    )
+
+
+def _dispatch_fetched_updates(
+    updates: list[Any],
+    *,
+    offset: int | None,
+    custom_commands: dict[str, CustomCommand] | None,
+) -> _PollResult:
+    """Dispatch an already-fetched batch, advancing the offset per update."""
     counts = {"callback": 0, "text": 0, "photo": 0, "document": 0, "unsupported": 0}
     next_offset: int | None = None
     if updates:
@@ -4881,10 +4899,24 @@ def _run_receiver() -> int:
     Telegram or rotating/removing its credentials. Reloads custom commands
     each iteration (unlike ``load_custom_commands`` being loaded once by the
     short-lived job tick), since this process can run for a long time.
+
+    The loop is generation-aware: if the installed SASE, plugin, or native
+    runtime changes, the process re-execs the canonical
+    ``sase_job_tg_inbound --receiver`` argv in place so the supervised
+    process slot and ``getUpdates`` consumer stay unique. An update fetched
+    across that boundary is not offset-advanced.
     """
+    try:
+        baseline = observe_runtime_generation()
+    except RuntimeScanError:
+        log.warning(
+            "Telegram receiver runtime is unsettled at start; refreshing when settled"
+        )
+        return _refresh_receiver_runtime()
     log.info(
-        "Starting Telegram long-poll receiver (timeout=%ds)",
+        "Starting Telegram long-poll receiver (timeout=%ds generation=%s)",
         _RECEIVER_POLL_TIMEOUT_SECONDS,
+        baseline.digest,
     )
     while True:
         if not is_telegram_enabled():
@@ -4896,19 +4928,31 @@ def _run_receiver() -> int:
             log.warning("Telegram credentials unavailable; receiver exiting: %s", exc)
             return 0
 
+        if _runtime_requires_refresh(baseline):
+            return _refresh_receiver_runtime()
+
         custom_commands = load_custom_commands()
         offset = get_last_offset()
         try:
-            result = _poll_and_dispatch_updates(
-                offset,
-                timeout=_RECEIVER_POLL_TIMEOUT_SECONDS,
-                custom_commands=custom_commands,
+            updates = telegram_client.get_updates(
+                offset=offset, timeout=_RECEIVER_POLL_TIMEOUT_SECONDS
             )
         except Exception:
             log.warning("Receiver poll failed; retrying", exc_info=True)
             time.sleep(_RECEIVER_ERROR_BACKOFF_SECONDS)
             continue
 
+        if _runtime_requires_refresh(baseline):
+            if updates:
+                log.info(
+                    "Deferring %d update(s) across receiver runtime refresh",
+                    len(updates),
+                )
+            return _refresh_receiver_runtime()
+
+        result = _dispatch_fetched_updates(
+            updates, offset=offset, custom_commands=custom_commands
+        )
         if result.updates:
             _print_inbound_summary(
                 offset=offset,
@@ -4923,6 +4967,43 @@ def _run_receiver() -> int:
                 pending_actions_cleaned=0,
                 reason=None,
             )
+
+
+def _runtime_requires_refresh(baseline: RuntimeGeneration) -> bool:
+    """Return True when the loaded runtime is stale or cannot be scanned."""
+    try:
+        current = observe_runtime_generation()
+    except RuntimeScanError:
+        log.warning("Telegram receiver runtime scan failed; refreshing when settled")
+        return True
+    if current.digest != baseline.digest:
+        log.info(
+            "Telegram receiver runtime changed (%s -> %s)",
+            baseline.digest,
+            current.digest,
+        )
+        return True
+    return False
+
+
+def _refresh_receiver_runtime() -> int:
+    """Wait for a settled generation, then re-exec the canonical receiver."""
+    settled = wait_for_settled_generation(scan=observe_runtime_generation)
+    log.info(
+        "Refreshing Telegram receiver runtime (generation=%s)",
+        settled.digest,
+    )
+    argv = canonical_receiver_argv()
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        log.error(
+            "Failed to refresh Telegram receiver runtime: %s",
+            " ".join(str(exc).split()),
+        )
+        return 1
+    log.error("Failed to refresh Telegram receiver runtime: exec returned")
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:

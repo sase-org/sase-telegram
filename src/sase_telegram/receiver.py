@@ -98,6 +98,16 @@ def ensure_receiver_running(*, argv: Sequence[str] | None = None) -> Proc | None
     )
 
 
+def canonical_receiver_argv() -> list[str]:
+    """Return the canonical argv used to (re)start the long-poll receiver.
+
+    Re-exec uses this same vector so a process that started under the legacy
+    ``sase_chop_tg_inbound`` alias refreshes onto ``sase_job_tg_inbound``
+    without spawning a second ``getUpdates`` consumer.
+    """
+    return _receiver_argv()
+
+
 def _receiver_argv() -> list[str]:
     return [resolve_console_script(_RECEIVER_SCRIPT), "--receiver"]
 
@@ -218,4 +228,8 @@ def _one_line(value: str) -> str:
     return " ".join(value.split())
 
 
-__all__ = ["ensure_receiver_running", "receiver_identity"]
+__all__ = [
+    "canonical_receiver_argv",
+    "ensure_receiver_running",
+    "receiver_identity",
+]
