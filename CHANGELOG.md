@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.18](https://github.com/sase-org/sase-telegram/compare/v0.4.17...v0.4.18) (2026-09-19)
+
+
+### Bug Fixes
+
+* **receiver:** re-exec when the installed runtime generation changes ([95354bc](https://github.com/sase-org/sase-telegram/commit/95354bc1c53c04e313962b2c0fa7b84eedd38682))
+
 ## [0.4.17](https://github.com/sase-org/sase-telegram/compare/v0.4.16...v0.4.17) (2026-09-18)
 
 
