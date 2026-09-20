@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.19](https://github.com/sase-org/sase-telegram/compare/v0.4.18...v0.4.19) (2026-09-20)
+
+
+### Documentation
+
+* **inbound:** document real receiver stop procedure, upgrade caveat and chat authentication ([4d20559](https://github.com/sase-org/sase-telegram/commit/4d20559691a408d5c1908b59c7344daaca65be38))
+
 ## [0.4.18](https://github.com/sase-org/sase-telegram/compare/v0.4.17...v0.4.18) (2026-09-19)
 
 
