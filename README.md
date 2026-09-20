@@ -191,6 +191,12 @@ up. Text messages that don't complete a feedback flow are dispatched as follows:
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
 
+Updates from any chat other than the configured chat (and callbacks from any other sender) are rejected before any
+handler runs, and `requires_tty` gate options such as sudo approve are hidden from keyboards. To stop the receiver,
+disable Telegram or remove its credentials: the job tick re-arms it and it survives `sase axe stop` and TUI updates.
+Until `sase-11w` lands, a package upgrade requires manually retiring the running receiver so one running current code
+starts.
+
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
 messages include Fork and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 

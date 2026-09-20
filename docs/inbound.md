@@ -35,8 +35,10 @@ notices Telegram has been disabled (`~/.sase/telegram_is_enabled` removed) or it
 credentials stop resolving; the next enabled, credentialed tick then re-arms a fresh
 one. It is a detached supervised proc like any other (e.g. a submitted gate answer), so
 it is not tied to the lifetime of the job tick or the AXE routine that launched it,
-and it keeps running across `sase axe stop`; stop it directly with `sase proc kill` (or
-disable Telegram) if you need it down immediately.
+and it survives `sase axe stop` and TUI updates. The real stop procedure is to disable
+Telegram (or remove its credentials): the job tick re-arms a killed receiver, so
+`sase proc kill` alone only restarts it. Until `sase-11w` lands, a package upgrade
+requires manually retiring the running receiver so one running current code starts.
 
 The process is long-lived but generation-aware, so an in-place SASE, `sase-telegram`, or
 `sase_core_rs` update does not leave a mixed old/new interpreter consuming Telegram
