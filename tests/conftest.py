@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 import os
+from types import SimpleNamespace
 
 import pytest
 from sase.env_contracts import WORKSPACE_PIN_ENV_VARS
@@ -67,3 +68,18 @@ def _clear_agent_env_vars(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         *leaked_proc_keys,
     ):
         os.environ.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def _no_service_owned_receiver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the host machine's service config from claiming the receiver.
+
+    ``ensure_receiver_running`` defers to a configured ``telegram_receiver``
+    service proc; without this stub, tests would depend on whether the machine
+    running them has adopted that proc. Tests that exercise the service-owned
+    path override ``load_service_config`` themselves.
+    """
+    monkeypatch.setattr(
+        "sase.service.config.load_service_config",
+        lambda: SimpleNamespace(get=lambda _name: None),
+    )

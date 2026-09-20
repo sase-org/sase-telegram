@@ -114,14 +114,6 @@ def _receiver_argv() -> list[str]:
 
 def _service_host_owns_receiver() -> bool:
     try:
-        from sase.feature_flags import FeatureFlag, current_flags
-
-        if not current_flags().enabled(FeatureFlag.service_host):
-            return False
-    except Exception:
-        return False
-
-    try:
         from sase.service.config import load_service_config
 
         entry = load_service_config().get(_SERVICE_PROC_NAME)

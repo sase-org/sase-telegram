@@ -10,7 +10,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sase.feature_flags import override_flags
 
 from sase_telegram import receiver
 
@@ -90,8 +89,7 @@ class TestEnsureReceiverRunning:
             lambda: composition,
         )
 
-        with override_flags(service_host=True):
-            assert receiver.ensure_receiver_running() is None
+        assert receiver.ensure_receiver_running() is None
 
         mock_submit.assert_not_called()
 
@@ -118,8 +116,7 @@ class TestEnsureReceiverRunning:
         launched = MagicMock(proc_id="fresh")
         mock_submit.return_value = launched
 
-        with override_flags(service_host=True):
-            assert receiver.ensure_receiver_running() is launched
+        assert receiver.ensure_receiver_running() is launched
 
         mock_submit.assert_called_once()
 
