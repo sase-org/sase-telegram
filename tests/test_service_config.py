@@ -6,9 +6,12 @@ import importlib.resources
 from pathlib import Path
 import tomllib
 
+import pytest
 import yaml
 from sase.config.core import ConfigLayer
-from sase.service.config import compose_service_config
+
+# Bound at import, before conftest's autouse stub replaces the module attribute.
+from sase.service.config import load_service_config
 
 
 def test_package_declares_sase_config_entry_point() -> None:
@@ -22,21 +25,23 @@ def test_package_declares_sase_config_entry_point() -> None:
     )
 
 
-def test_default_config_declares_disabled_service_receiver() -> None:
+def test_default_config_declares_disabled_service_receiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ref = importlib.resources.files("sase_telegram").joinpath("default_config.yml")
     data = yaml.safe_load(ref.read_text(encoding="utf-8"))
-
-    composition = compose_service_config(
-        [
-            ConfigLayer(
-                name="plugin:sase_telegram",
-                path=None,
-                exists=True,
-                list_strategy="concatenate",
-                data=data,
-            )
-        ]
+    plugin_layer = ConfigLayer(
+        name="plugin:sase_telegram",
+        path=None,
+        exists=True,
+        list_strategy="concatenate",
+        data=data,
     )
+    monkeypatch.setattr(
+        "sase.service.config.load_config_layers", lambda: [plugin_layer]
+    )
+
+    composition = load_service_config()
 
     proc = composition.get("telegram_receiver")
     assert proc is not None
