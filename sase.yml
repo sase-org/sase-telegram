@@ -1,2 +1,27 @@
 commit_hooks:
   before: "just fmt"
+
+# Project-owned named tools (see sase docs/tool.md, "Guarded recipes").
+# Complete entries: other config layers cannot alter this catalog. This file
+# stays the legacy project-config location: adding sase/sase.yml alongside it
+# would raise LayoutCollisionError, so the catalog lives here.
+tools:
+  check:
+    argv: [just, check]
+    description: Run the repository scoped check.
+    stages: none
+    inputs:
+      - Justfile
+      - pyproject.toml
+      - uv.lock
+    args: deny
+    fingerprint:
+      toolchain:
+        python: [.venv/bin/python, --version]
+        just: [just, --version]
+        sase-telegram:
+          [
+            .venv/bin/python,
+            -c,
+            "from importlib.metadata import version; print(version('sase-telegram'))",
+          ]

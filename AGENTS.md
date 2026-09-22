@@ -30,3 +30,9 @@ just check      # lint + test
 - Absolute imports: `from sase_telegram.credentials import get_bot_token`
 - Target Python 3.12+
 - Follow ruff rules matching sase core
+
+## sase tool runs
+
+Agents run `sase tool run check` here, not bare `just check`: `check` is
+guarded and a raw agent invocation is refused with the wrapped and bypass
+forms. To run raw on purpose: `SASE_TOOL_BYPASS='<why>' just check`.

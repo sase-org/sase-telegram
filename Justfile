@@ -98,7 +98,13 @@ fmt: _setup
 test *args: _setup
     {{ venv_bin }}/pytest {{ args }}
 
-check: lint test
+# Agents must run guarded tools through `sase tool run` (sase docs/tool.md).
+# The guard is the first dependency, ahead of `_setup`, so a refusal costs
+# milliseconds rather than a dependency sync.
+_require-tool-run name:
+    @tools/require_tool_run {{ name }}
+
+check: (_require-tool-run "check") lint test
 
 clean:
     rm -rf build/ dist/ *.egg-info src/*.egg-info .mypy_cache/ .ruff_cache/ .pytest_cache/
