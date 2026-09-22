@@ -201,6 +201,11 @@ _RECEIVER_ERROR_BACKOFF_SECONDS = 5.0
 #: configured (EX_CONFIG). Non-zero so the service host applies its
 #: `restart: on-failure` backoff and shows the proc as failing.
 _RECEIVER_CHAT_ID_MISSING_EXIT_CODE = 78
+#: Exit code when the receiver cannot resolve its bot token (EX_TEMPFAIL).
+#: Retryable so the service host applies its `restart: on-failure` backoff
+#: until the credential is usable (for example gpg-agent after login)
+#: instead of ending the episode as a clean exit.
+_RECEIVER_CREDENTIALS_UNAVAILABLE_EXIT_CODE = 75
 _RECEIVER_CHAT_ID_MISSING_DEDUP_KEY = "telegram-receiver-chat-id-missing"
 _RECEIVER_CHAT_ID_MISSING_SENDER = "telegram"
 
@@ -5010,8 +5015,8 @@ def _run_receiver() -> int:
         try:
             credentials.get_bot_token()
         except TelegramCredentialError as exc:
-            log.warning("Telegram credentials unavailable; receiver exiting: %s", exc)
-            return 0
+            log.warning("Telegram credentials unavailable; receiver retrying: %s", exc)
+            return _RECEIVER_CREDENTIALS_UNAVAILABLE_EXIT_CODE
         try:
             credentials.get_chat_id()
         except TelegramCredentialError as exc:

@@ -44,7 +44,11 @@ Before its first poll the receiver resolves the configured chat id. When the cha
 is missing the receiver logs an error, upserts one deduped `telegram` notification
 (`telegram-receiver-chat-id-missing`), and exits `78` (EX_CONFIG) without polling, so
 Telegram keeps unfetched updates for redelivery after the fix and the service host
-applies its `restart: on-failure` backoff instead of showing a healthy receiver. The
+applies its `restart: on-failure` backoff instead of showing a healthy receiver. When
+the bot token cannot be resolved (for example `gpg-agent` is not yet usable after
+login), the receiver logs a warning and exits `75` (EX_TEMPFAIL) without polling, so
+the service host retries with capped backoff until the credential resolves instead of
+ending the episode as a clean exit. The
 receiver does not inherit AXE routine `env:` under the service host: set both
 `SASE_TELEGRAM_BOT_USERNAME` and `SASE_TELEGRAM_BOT_CHAT_ID` under
 `service.procs.telegram_receiver.env`.
@@ -65,8 +69,10 @@ ownership under both the legacy durable-proc supervisor and the service-host
 update fetched across that boundary is not offset-advanced; the fresh runtime fetches
 it again. If re-exec fails, the receiver logs a one-line diagnostic and exits nonzero
 so the five-second `tg_inbound` tick (legacy) or `restart: on-failure` (service host)
-can replace it. Clean exits for disablement or credential loss stay `0` and do not
-loop.
+can replace it. A disabled Telegram exits `0` and does not loop: the service host
+parks the proc as given up, so after `~/.sase/telegram_is_enabled` comes back, revive
+it with `sase service proc start telegram_receiver` (or restart the host). A missing
+bot token exits `75` and retries with backoff instead.
 
 Adopting the receiver on an existing installation needs no manual config edit: the first
 tick after upgrading calls `ensure_receiver_running` exactly like every later one.

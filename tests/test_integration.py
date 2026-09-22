@@ -1145,7 +1145,8 @@ class TestReceiverLoop:
 
         result = inbound._run_receiver()
 
-        assert result == 0
+        assert result == 75
+        assert result == inbound._RECEIVER_CREDENTIALS_UNAVAILABLE_EXIT_CODE
         mock_tg.get_updates.assert_not_called()
 
     @patch("sase_telegram.scripts.sase_tg_inbound.time")
