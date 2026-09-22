@@ -197,6 +197,12 @@ _RECEIVER_POLL_TIMEOUT_SECONDS = 30
 #: error -- telegram_client.get_updates already retries rate limits/network
 #: errors internally before raising here.
 _RECEIVER_ERROR_BACKOFF_SECONDS = 5.0
+#: Exit code when the receiver refuses to poll because its chat id is not
+#: configured (EX_CONFIG). Non-zero so the service host applies its
+#: `restart: on-failure` backoff and shows the proc as failing.
+_RECEIVER_CHAT_ID_MISSING_EXIT_CODE = 78
+_RECEIVER_CHAT_ID_MISSING_DEDUP_KEY = "telegram-receiver-chat-id-missing"
+_RECEIVER_CHAT_ID_MISSING_SENDER = "telegram"
 
 
 @dataclass(frozen=True)
@@ -362,12 +368,17 @@ def _update_is_from_configured_chat(update: Any) -> bool:
     callback button on it; nothing before this checked identity, so every
     handler -- including agent launch -- was reachable by a stranger. When
     the configured chat id itself cannot be resolved there is nothing
-    trustworthy to compare against, so updates are let through unfiltered,
-    unchanged from prior behavior.
+    trustworthy to compare against, so every update is rejected: fail
+    closed rather than letting strangers through unfiltered.
     """
     configured = _configured_chat_id()
     if configured is None:
-        return True
+        log.warning(
+            "Rejecting Telegram update (update_id=%d) because the chat id "
+            "is not configured",
+            getattr(update, "update_id", -1),
+        )
+        return False
     callback_query = update.callback_query
     if callback_query is not None:
         chat_id = _message_chat_id(getattr(callback_query, "message", None))
@@ -4760,6 +4771,30 @@ def _poll_and_dispatch_updates(
     )
 
 
+def _reply_dispatch_failure(update: Any, exc: BaseException) -> None:
+    """Best-effort reply when a message update's handler raises.
+
+    Only message-carrying updates get a reply, in the originating chat, so
+    the sender learns the message was not processed and can resend it.
+    Callbacks already answer their own queries. Send failures are swallowed
+    and logged.
+    """
+    message = getattr(update, "message", None)
+    if message is None:
+        return
+    chat_id = _message_chat_id(message)
+    if chat_id is None:
+        return
+    detail = " ".join(str(exc).split()) or exc.__class__.__name__
+    try:
+        telegram_client.send_message(
+            chat_id,
+            f"Could not process your message ({detail}). Please resend it.",
+        )
+    except Exception:
+        log.warning("Failed to send Telegram dispatch-failure reply", exc_info=True)
+
+
 def _dispatch_fetched_updates(
     updates: list[Any],
     *,
@@ -4774,12 +4809,13 @@ def _dispatch_fetched_updates(
         for update in updates:
             try:
                 bucket = _dispatch_one_update(update, custom_commands)
-            except Exception:
+            except Exception as exc:
                 log.warning(
                     "Failed to process Telegram update_id=%d",
                     update.update_id,
                     exc_info=True,
                 )
+                _reply_dispatch_failure(update, exc)
                 bucket = None
             if bucket is not None:
                 counts[bucket] += 1
@@ -4833,8 +4869,56 @@ def _run_post_poll_cleanup() -> int:
     return len(handled_prefixes)
 
 
+def _notify_receiver_chat_id_missing() -> None:
+    """Upsert one deduped notification about the missing receiver chat id.
+
+    Modeled on :func:`sase_telegram.receiver._notify_receiver_launch_failure`
+    so a service-host restart loop cannot pile up duplicates. The outbound
+    job still has the chat id, so this notification also reaches Telegram.
+    """
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from sase.notifications.models import Notification, normalize_notification_tags
+    from sase.notifications.store import (
+        read_current_notification_snapshot,
+        upsert_notification,
+    )
+
+    snapshot = read_current_notification_snapshot(include_dismissed=True)
+    notifications = getattr(snapshot, "notifications", snapshot)
+    if any(
+        notification.sender == _RECEIVER_CHAT_ID_MISSING_SENDER
+        and notification.dedup_key == _RECEIVER_CHAT_ID_MISSING_DEDUP_KEY
+        for notification in notifications
+    ):
+        return
+
+    timestamp = datetime.now(UTC).isoformat()
+    notes = [
+        "Telegram inbound receiver cannot start: SASE_TELEGRAM_BOT_CHAT_ID "
+        "is not configured.",
+        "Set it under service.procs.telegram_receiver.env (the service host "
+        "does not inherit AXE routine env).",
+    ]
+    plus_one_note = "Telegram receiver missing chat id: SASE_TELEGRAM_BOT_CHAT_ID unset"
+    upsert_notification(
+        Notification(
+            id=str(uuid4()),
+            timestamp=timestamp,
+            sender=_RECEIVER_CHAT_ID_MISSING_SENDER,
+            notes=notes,
+            files=[],
+            tags=normalize_notification_tags(["telegram", "receiver", "error"]),
+            dedup_key=_RECEIVER_CHAT_ID_MISSING_DEDUP_KEY,
+        ),
+        plus_one_note=plus_one_note,
+    )
+
+
 def _run_once(custom_commands: dict[str, CustomCommand] | None) -> int:
     """Poll once (no long-polling) and exit -- diagnostics/tests (--once)."""
+    credentials.get_chat_id()
     stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
     offset = get_last_offset()
     result = _poll_and_dispatch_updates(
@@ -4870,6 +4954,7 @@ def _run_chop_tick(custom_commands: dict[str, CustomCommand] | None) -> int:
     unchanged.
     """
     credentials.get_bot_token()
+    credentials.get_chat_id()
     stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
     handled_count = _run_post_poll_cleanup()
     ensure_receiver_running()
@@ -4927,6 +5012,16 @@ def _run_receiver() -> int:
         except TelegramCredentialError as exc:
             log.warning("Telegram credentials unavailable; receiver exiting: %s", exc)
             return 0
+        try:
+            credentials.get_chat_id()
+        except TelegramCredentialError as exc:
+            log.error(
+                "Telegram receiver chat id is not configured; set it under "
+                "service.procs.telegram_receiver.env: %s",
+                exc,
+            )
+            _notify_receiver_chat_id_missing()
+            return _RECEIVER_CHAT_ID_MISSING_EXIT_CODE
 
         if _runtime_requires_refresh(baseline):
             return _refresh_receiver_runtime()

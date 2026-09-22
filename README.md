@@ -128,6 +128,19 @@ The chat target and bot username are required separately:
 | `SASE_TELEGRAM_BOT_CHAT_ID`  | Chat ID to send messages to |
 | `SASE_TELEGRAM_BOT_USERNAME` | Bot username                |
 
+When the receiver runs as the service-host `telegram_receiver` proc it does **not** inherit AXE routine `env:`. Give it
+its own copy of the bot identity:
+
+```yaml
+service:
+  procs:
+    telegram_receiver:
+      enabled: true
+      env:
+        SASE_TELEGRAM_BOT_USERNAME: sase_athena_bot
+        SASE_TELEGRAM_BOT_CHAT_ID: "8990449281"
+```
+
 ### Environment Variables
 
 | Variable                                 | Default | Description |
@@ -192,7 +205,8 @@ up. Text messages that don't complete a feedback flow are dispatched as follows:
 - **Everything else** — launches a new sase agent with the message as the prompt
 
 Updates from any chat other than the configured chat (and callbacks from any other sender) are rejected before any
-handler runs, and `requires_tty` gate options such as sudo approve are hidden from keyboards. To stop the receiver,
+handler runs, and `requires_tty` gate options such as sudo approve are hidden from keyboards. When the chat id itself
+is unconfigured, every update is rejected and the receiver refuses to start. To stop the receiver,
 disable Telegram or remove its credentials: the job tick re-arms it and it survives `sase axe stop` and TUI updates.
 Until `sase-11w` lands, a package upgrade requires manually retiring the running receiver so one running current code
 starts.

@@ -40,6 +40,15 @@ Telegram (or remove its credentials): the job tick re-arms a killed receiver, so
 `sase proc kill` alone only restarts it. Until `sase-11w` lands, a package upgrade
 requires manually retiring the running receiver so one running current code starts.
 
+Before its first poll the receiver resolves the configured chat id. When the chat id
+is missing the receiver logs an error, upserts one deduped `telegram` notification
+(`telegram-receiver-chat-id-missing`), and exits `78` (EX_CONFIG) without polling, so
+Telegram keeps unfetched updates for redelivery after the fix and the service host
+applies its `restart: on-failure` backoff instead of showing a healthy receiver. The
+receiver does not inherit AXE routine `env:` under the service host: set both
+`SASE_TELEGRAM_BOT_USERNAME` and `SASE_TELEGRAM_BOT_CHAT_ID` under
+`service.procs.telegram_receiver.env`.
+
 The process is long-lived but generation-aware, so an in-place SASE, `sase-telegram`, or
 `sase_core_rs` update does not leave a mixed old/new interpreter consuming Telegram
 updates. At start it fingerprints the canonical `sase_job_tg_inbound` executable plus

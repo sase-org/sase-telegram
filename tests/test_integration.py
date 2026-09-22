@@ -457,11 +457,16 @@ class TestOutboundIntegration:
 class TestInboundIntegration:
     """Integration tests for the inbound main() entry point."""
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_no_updates_exits_cleanly(
-        self, mock_tg: MagicMock, capsys: pytest.CaptureFixture[str]
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """When there are no Telegram updates, exits with 0."""
+        mock_creds.get_chat_id.return_value = "12345"
         mock_tg.get_updates.return_value = []
         result = inbound_main(["--once"])
         assert result == 0
@@ -470,10 +475,14 @@ class TestInboundIntegration:
         assert "updates=0" in captured.out
         assert "reason=no_updates" in captured.out
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    def test_custom_commands_load_once_and_dispatch(self, mock_tg: MagicMock) -> None:
+    def test_custom_commands_load_once_and_dispatch(
+        self, mock_tg: MagicMock, mock_creds: MagicMock
+    ) -> None:
         from sase_telegram.custom_commands import CustomCommand
 
+        mock_creds.get_chat_id.return_value = "12345"
         command = CustomCommand(
             name="tasks",
             description="Tasks dashboard",
@@ -488,6 +497,7 @@ class TestInboundIntegration:
             entities=None,
             message_id=42,
             reply_to_message=None,
+            chat=SimpleNamespace(id=12345),
         )
         mock_tg.get_updates.return_value = [
             SimpleNamespace(
@@ -556,9 +566,10 @@ class TestInboundIntegration:
         )
         return notif_id
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_shared_store_handled_dismisses_keyboard(
-        self, mock_tg: MagicMock, tmp_path: Path
+        self, mock_tg: MagicMock, mock_creds: MagicMock, tmp_path: Path
     ) -> None:
         """An auto-approved plan's stale keyboard is removed via shared state.
 
@@ -568,6 +579,7 @@ class TestInboundIntegration:
         """
         from sase_telegram import pending_actions
 
+        mock_creds.get_chat_id.return_value = "12345"
         response_dir = tmp_path / "responses"
         response_dir.mkdir()
         (response_dir / "plan_request.json").write_text("{}")
@@ -585,13 +597,15 @@ class TestInboundIntegration:
         assert pending_actions.get("abcd1234") is None
         assert not (response_dir / "plan_response.json").exists()
 
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_callback_on_already_handled_action_is_rejected(
-        self, mock_tg: MagicMock, tmp_path: Path
+        self, mock_tg: MagicMock, mock_creds: MagicMock, tmp_path: Path
     ) -> None:
         """A late button press loses the race to an already-resolved plan."""
         from sase_telegram import pending_actions
 
+        mock_creds.get_chat_id.return_value = "12345"
         response_dir = tmp_path / "responses"
         response_dir.mkdir()
         (response_dir / "plan_request.json").write_text("{}")
@@ -602,7 +616,8 @@ class TestInboundIntegration:
         callback_query = SimpleNamespace(
             id="cb_1",
             data="gate:abcd1234:c0",
-            message=SimpleNamespace(message_id=42),
+            message=SimpleNamespace(message_id=42, chat=SimpleNamespace(id=12345)),
+            from_user=SimpleNamespace(id=12345),
         )
         update = SimpleNamespace(
             update_id=100, callback_query=callback_query, message=None
@@ -624,20 +639,24 @@ class TestInboundIntegration:
         assert pending_actions.get("abcd1234") is None
 
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_saves_offset_after_processing(
         self,
         mock_tg: MagicMock,
+        mock_creds: MagicMock,
         _mock_launch: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Offset file is updated after processing updates."""
+        mock_creds.get_chat_id.return_value = "12345"
         text_msg = SimpleNamespace(
             text="random message",
             photo=None,
             document=None,
             entities=None,
             message_id=500,
+            chat=SimpleNamespace(id=12345),
         )
         update = SimpleNamespace(
             update_id=500,
@@ -712,14 +731,18 @@ class TestInboundIntegration:
         assert offset == 601
 
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_photo_album_stages_then_flushes_one_launch(
         self,
         mock_tg: MagicMock,
+        mock_creds: MagicMock,
         mock_launch: MagicMock,
     ) -> None:
         """Media-group photos become one later launch containing both paths."""
         from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_chat_id.return_value = "12345"
 
         def _download(_file_id: str, dest: Path) -> None:
             dest.write_text("image")
@@ -969,6 +992,7 @@ class TestInboundChopTick:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
 
         assert inbound_main([]) == 0
 
@@ -1019,10 +1043,12 @@ class TestReceiverLoop:
         )
 
     @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
     @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
     def test_offset_advances_per_update_past_a_poisoned_one(
         self,
         mock_tg: MagicMock,
+        mock_creds: MagicMock,
         mock_launch: MagicMock,
     ) -> None:
         """A handler exception on one update does not wedge the batch.
@@ -1034,18 +1060,29 @@ class TestReceiverLoop:
         """
         from sase_telegram.scripts import sase_tg_inbound as inbound
 
+        mock_creds.get_chat_id.return_value = "12345"
         first = SimpleNamespace(
             update_id=900,
             callback_query=None,
             message=SimpleNamespace(
-                text="first", photo=None, document=None, entities=None, message_id=1
+                text="first",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=1,
+                chat=SimpleNamespace(id=12345),
             ),
         )
         second = SimpleNamespace(
             update_id=901,
             callback_query=None,
             message=SimpleNamespace(
-                text="second", photo=None, document=None, entities=None, message_id=2
+                text="second",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=2,
+                chat=SimpleNamespace(id=12345),
             ),
         )
         mock_tg.get_updates.return_value = [first, second]
@@ -1395,3 +1432,273 @@ class TestReceiverRuntimeRefresh:
         mock_enabled.assert_not_called()
         mock_creds.get_bot_token.assert_not_called()
         mock_tg.get_updates.assert_not_called()
+
+
+class TestChatIdMissingFailClosed:
+    """Fail-closed chat-id behavior: reject, refuse to poll, reply loudly."""
+
+    def _missing_chat_creds(self, mock_creds: MagicMock) -> None:
+        from sase_telegram.credentials import TelegramCredentialError
+
+        mock_creds.get_chat_id.side_effect = TelegramCredentialError(
+            "SASE_TELEGRAM_BOT_CHAT_ID environment variable is not set"
+        )
+
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_document_image")
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_photo_message")
+    @patch("sase_telegram.scripts.sase_tg_inbound._handle_text_message")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_unconfigured_chat_id_rejects_every_update_type_before_dispatch(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        mock_handle_text: MagicMock,
+        mock_handle_photo: MagicMock,
+        mock_handle_document: MagicMock,
+        mock_handle_callback: MagicMock,
+    ) -> None:
+        """With no chat id, text/photo/document/callback never reach handlers."""
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        self._missing_chat_creds(mock_creds)
+        text = SimpleNamespace(
+            update_id=710,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="hello",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=1,
+                chat=SimpleNamespace(id=12345),
+            ),
+        )
+        photo = SimpleNamespace(
+            update_id=711,
+            callback_query=None,
+            message=SimpleNamespace(
+                photo=[SimpleNamespace(file_id="photo_id")],
+                caption=None,
+                caption_entities=None,
+                text=None,
+                document=None,
+                media_group_id=None,
+                message_id=2,
+                chat=SimpleNamespace(id=12345),
+            ),
+        )
+        document = SimpleNamespace(
+            update_id=712,
+            callback_query=None,
+            message=SimpleNamespace(
+                photo=None,
+                document=SimpleNamespace(mime_type="image/png", file_name="x.png"),
+                caption=None,
+                caption_entities=None,
+                text=None,
+                media_group_id=None,
+                message_id=3,
+                chat=SimpleNamespace(id=12345),
+            ),
+        )
+        callback = SimpleNamespace(
+            update_id=713,
+            callback_query=SimpleNamespace(
+                id="cb_owner",
+                data="gate:abcd1234:c0",
+                message=SimpleNamespace(message_id=42, chat=SimpleNamespace(id=12345)),
+                from_user=SimpleNamespace(id=12345),
+            ),
+            message=None,
+        )
+
+        result = inbound._dispatch_fetched_updates(
+            [text, photo, document, callback],
+            offset=710,
+            custom_commands={},
+        )
+
+        mock_handle_text.assert_not_called()
+        mock_handle_photo.assert_not_called()
+        mock_handle_document.assert_not_called()
+        mock_handle_callback.assert_not_called()
+        assert result.next_offset == 714
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 714
+        assert result.counts == {
+            "callback": 0,
+            "text": 0,
+            "photo": 0,
+            "document": 0,
+            "unsupported": 0,
+        }
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    def test_receiver_refuses_to_poll_without_chat_id_and_notifies_once(
+        self,
+        mock_enabled: MagicMock,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No chat id: never polls, exits 78, and notifies exactly once."""
+        from types import SimpleNamespace as _NS
+
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        generation = _runtime_generation()
+        monkeypatch.setattr(
+            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            lambda: generation,
+        )
+        mock_enabled.return_value = True
+        mock_creds.get_bot_token.return_value = "token"
+        self._missing_chat_creds(mock_creds)
+
+        stored: list[Any] = []
+
+        def _fake_read(*_args: Any, **_kwargs: Any) -> Any:
+            return _NS(notifications=list(stored))
+
+        def _fake_upsert(notification: Any, *args: Any, **kwargs: Any) -> None:
+            stored.append(notification)
+
+        with (
+            patch(
+                "sase.notifications.store.read_current_notification_snapshot",
+                _fake_read,
+            ),
+            patch(
+                "sase.notifications.store.upsert_notification",
+                _fake_upsert,
+            ),
+        ):
+            assert inbound._run_receiver() == 78
+            assert inbound._run_receiver() == 78
+
+        mock_tg.get_updates.assert_not_called()
+        assert len(stored) == 1
+        notification = stored[0]
+        assert notification.sender == "telegram"
+        assert notification.dedup_key == "telegram-receiver-chat-id-missing"
+        assert set(notification.tags) >= {"telegram", "receiver", "error"}
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    def test_chop_tick_without_chat_id_never_ensures_receiver(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_ensure: MagicMock,
+    ) -> None:
+        """A legacy tick without a chat id must not spawn a doomed receiver."""
+        from sase_telegram.credentials import TelegramCredentialError
+
+        mock_creds.get_bot_token.return_value = "token"
+        self._missing_chat_creds(mock_creds)
+
+        with pytest.raises(TelegramCredentialError):
+            inbound_main([])
+
+        mock_tg.get_updates.assert_not_called()
+        mock_ensure.assert_not_called()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_once_without_chat_id_never_polls(
+        self, mock_tg: MagicMock, mock_creds: MagicMock
+    ) -> None:
+        """--once without a chat id never consumes updates it would reject."""
+        from sase_telegram.credentials import TelegramCredentialError
+
+        self._missing_chat_creds(mock_creds)
+
+        with pytest.raises(TelegramCredentialError):
+            inbound_main(["--once"])
+
+        mock_tg.get_updates.assert_not_called()
+        assert not OFFSET_TEST_FILE.exists()
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_dispatch_failure_replies_once_and_advances_offset(
+        self, mock_tg: MagicMock, mock_creds: MagicMock
+    ) -> None:
+        """A raising text handler yields one reply; the offset still advances."""
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_chat_id.return_value = "12345"
+        update = SimpleNamespace(
+            update_id=720,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="launch me",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=9,
+                chat=SimpleNamespace(id=12345),
+            ),
+        )
+
+        with patch(
+            "sase_telegram.scripts.sase_tg_inbound._handle_text_message",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = inbound._dispatch_fetched_updates(
+                [update], offset=720, custom_commands={}
+            )
+
+        assert result.next_offset == 721
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 721
+        mock_tg.send_message.assert_called_once()
+        reply_chat, reply_text = mock_tg.send_message.call_args.args[:2]
+        assert reply_chat == "12345"
+        assert "Could not process" in reply_text
+        assert "boom" in reply_text
+        assert "Please resend" in reply_text
+
+    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    def test_dispatch_failure_reply_send_error_is_swallowed(
+        self,
+        mock_tg: MagicMock,
+        mock_creds: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A failing best-effort reply never blocks offset advance."""
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_tg.send_message.side_effect = RuntimeError("send down")
+        update = SimpleNamespace(
+            update_id=721,
+            callback_query=None,
+            message=SimpleNamespace(
+                text="launch me",
+                photo=None,
+                document=None,
+                entities=None,
+                message_id=10,
+                chat=SimpleNamespace(id=12345),
+            ),
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_inbound._handle_text_message",
+                side_effect=RuntimeError("boom"),
+            ),
+            caplog.at_level("WARNING"),
+        ):
+            result = inbound._dispatch_fetched_updates(
+                [update], offset=721, custom_commands={}
+            )
+
+        assert result.next_offset == 722
+        assert int(OFFSET_TEST_FILE.read_text().strip()) == 722
+        assert "Failed to send Telegram dispatch-failure reply" in caplog.text

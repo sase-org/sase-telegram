@@ -109,14 +109,24 @@ def _token_unavailable_message(failures: list[str]) -> str:
 def get_chat_id() -> str:
     """Get the Telegram chat ID from the SASE_TELEGRAM_BOT_CHAT_ID env var."""
     value = os.environ.get("SASE_TELEGRAM_BOT_CHAT_ID")
-    if not value:
-        raise RuntimeError("SASE_TELEGRAM_BOT_CHAT_ID environment variable is not set")
-    return value
+    if value is None or not value.strip():
+        raise TelegramCredentialError(
+            "SASE_TELEGRAM_BOT_CHAT_ID environment variable is not set (or is blank): "
+            "the service-host receiver needs it under "
+            "service.procs.telegram_receiver.env, because it does not inherit "
+            "AXE routine env."
+        )
+    return value.strip()
 
 
 def get_bot_username() -> str:
     """Get the Telegram bot username from the SASE_TELEGRAM_BOT_USERNAME env var."""
     value = os.environ.get("SASE_TELEGRAM_BOT_USERNAME")
-    if not value:
-        raise RuntimeError("SASE_TELEGRAM_BOT_USERNAME environment variable is not set")
-    return value
+    if value is None or not value.strip():
+        raise TelegramCredentialError(
+            "SASE_TELEGRAM_BOT_USERNAME environment variable is not set (or is blank): "
+            "the service-host receiver needs it under "
+            "service.procs.telegram_receiver.env, because it does not inherit "
+            "AXE routine env."
+        )
+    return value.strip()

@@ -1,5 +1,7 @@
 service:
   procs:
+    # The receiver needs SASE_TELEGRAM_BOT_USERNAME and SASE_TELEGRAM_BOT_CHAT_ID
+    # under this entry's `env:` (the service host does not inherit AXE routine env).
     telegram_receiver:
       command: ["sase_job_tg_inbound", "--receiver"]
       description: "Telegram inbound long-poll receiver."

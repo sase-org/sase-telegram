@@ -145,10 +145,32 @@ class TestGetChatId:
         with patch.dict("os.environ", {"SASE_TELEGRAM_BOT_CHAT_ID": "12345"}):
             assert get_chat_id() == "12345"
 
+    def test_strips_surrounding_whitespace(self) -> None:
+        with patch.dict("os.environ", {"SASE_TELEGRAM_BOT_CHAT_ID": "  12345  \n"}):
+            assert get_chat_id() == "12345"
+
     def test_raises_when_missing(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(
+                TelegramCredentialError, match="SASE_TELEGRAM_BOT_CHAT_ID"
+            ) as exc:
+                get_chat_id()
+        assert "service.procs.telegram_receiver.env" in str(exc.value)
+        # Still catchable as RuntimeError for existing callers.
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(RuntimeError, match="SASE_TELEGRAM_BOT_CHAT_ID"):
                 get_chat_id()
+
+    def test_raises_when_empty_or_whitespace(self) -> None:
+        for value in ("", "   ", "\n\t "):
+            with patch.dict(
+                "os.environ", {"SASE_TELEGRAM_BOT_CHAT_ID": value}, clear=True
+            ):
+                with pytest.raises(
+                    TelegramCredentialError, match="SASE_TELEGRAM_BOT_CHAT_ID"
+                ) as exc:
+                    get_chat_id()
+                assert "service.procs.telegram_receiver.env" in str(exc.value)
 
 
 class TestGetBotUsername:
@@ -156,7 +178,27 @@ class TestGetBotUsername:
         with patch.dict("os.environ", {"SASE_TELEGRAM_BOT_USERNAME": "mybot"}):
             assert get_bot_username() == "mybot"
 
+    def test_strips_surrounding_whitespace(self) -> None:
+        with patch.dict("os.environ", {"SASE_TELEGRAM_BOT_USERNAME": "  mybot  \n"}):
+            assert get_bot_username() == "mybot"
+
     def test_raises_when_missing(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(
+                TelegramCredentialError, match="SASE_TELEGRAM_BOT_USERNAME"
+            ) as exc:
+                get_bot_username()
+        assert "service.procs.telegram_receiver.env" in str(exc.value)
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(RuntimeError, match="SASE_TELEGRAM_BOT_USERNAME"):
                 get_bot_username()
+
+    def test_raises_when_empty_or_whitespace(self) -> None:
+        for value in ("", "   "):
+            with patch.dict(
+                "os.environ", {"SASE_TELEGRAM_BOT_USERNAME": value}, clear=True
+            ):
+                with pytest.raises(
+                    TelegramCredentialError, match="SASE_TELEGRAM_BOT_USERNAME"
+                ):
+                    get_bot_username()
