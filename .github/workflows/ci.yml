@@ -41,16 +41,7 @@ jobs:
           uv python install ${{ matrix.python-version }}
           uv venv --python ${{ matrix.python-version }} .venv
       - name: Install dependencies
-        run: |
-          just install
-          uv pip install --python .venv/bin/python maturin
-          (
-            cd .sase-deps/sase-core/crates/sase_core_py
-            VIRTUAL_ENV="${GITHUB_WORKSPACE}/.venv" \
-              PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
-              "${GITHUB_WORKSPACE}/.venv/bin/maturin" develop --release
-          )
-          uv pip install --python .venv/bin/python --no-deps -e .sase-deps/sase
+        run: just install
       - name: Lint
         if: ${{ matrix.python-version == '3.12' }}
         run: just lint

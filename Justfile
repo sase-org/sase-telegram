@@ -6,6 +6,7 @@ venv_path := clean(repo_dir / venv_dir)
 venv_bin := venv_dir / "bin"
 venv_python := venv_bin / "python"
 venv_maturin := clean(repo_dir / venv_bin / "maturin")
+sase_overrides_file := clean(repo_dir / ".sase-overrides.txt")
 
 # Override with SASE_TELEGRAM_SASE_SOURCE_DIR=/path/to/sase when the local
 # checkout is not in one of the standard development locations below.
@@ -55,18 +56,36 @@ _install-local-sase-core: _validate-local-sase-core _ensure-venv
     @[ -x {{ quote(venv_maturin) }} ] || uv pip install --python {{ quote(venv_python) }} maturin
     cd {{ quote(local_sase_core_py_source) }} && VIRTUAL_ENV={{ quote(venv_path) }} PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 {{ quote(venv_maturin) }} develop --release
 
-_setup: _validate-local-sase _validate-local-sase-core
+# Route the `sase` requirement to the coordinated local checkout with a uv
+# --overrides file so the install resolves without hitting unresolvable PyPI
+# releases. sase-core-rs still resolves from PyPI first and is then overwritten
+# by _install-local-sase-core's maturin build of the coordinated sase-core checkout.
+_write-sase-overrides: _validate-local-sase
+    @printf -- '-e %s\n' {{ quote(local_sase_source) }} > {{ quote(sase_overrides_file) }}
+
+_setup: _validate-local-sase _validate-local-sase-core _write-sase-overrides
     @if [ ! -x {{ quote(venv_python) }} ]; then \
         uv venv {{ quote(venv_dir) }}; \
-        uv pip install --python {{ quote(venv_python) }} -e ".[dev]"; \
+        uv pip install --python {{ quote(venv_python) }} --overrides {{ quote(sase_overrides_file) }} -e ".[dev]"; \
     fi
     just _install-local-sase-core
-    uv pip install --python {{ quote(venv_python) }} --no-deps -e {{ quote(local_sase_source) }}
 
-install: _validate-local-sase _validate-local-sase-core _ensure-venv
-    uv pip install --python {{ quote(venv_python) }} -e ".[dev]"
+install: _validate-local-sase _validate-local-sase-core _ensure-venv _write-sase-overrides
+    uv pip install --python {{ quote(venv_python) }} --overrides {{ quote(sase_overrides_file) }} -e ".[dev]"
     just _install-local-sase-core
-    uv pip install --python {{ quote(venv_python) }} --no-deps -e {{ quote(local_sase_source) }}
+
+# Install a source-overridden sase plus a coordinated sase-core-rs build into
+# the venv rooted at the given python interpreter (used by the wheel smoke
+# test, after the built sase-telegram wheel has already been installed with
+# an equivalent --overrides file pointed at the local sase source).
+install-source-sase python: _validate-local-sase _validate-local-sase-core
+    #!/usr/bin/env bash
+    set -euo pipefail
+    uv pip install --python "{{ python }}" --no-deps -e {{ quote(local_sase_source) }}
+    uv pip install --python "{{ python }}" maturin
+    venv_root="$(cd "$(dirname "{{ python }}")/.." && pwd)"
+    cd {{ quote(local_sase_core_py_source) }}
+    VIRTUAL_ENV="$venv_root" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 "$venv_root/bin/maturin" develop --release
 
 lint: _setup
     {{ venv_bin }}/ruff check src/ tests/

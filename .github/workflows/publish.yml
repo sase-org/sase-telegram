@@ -54,17 +54,35 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
+      - uses: actions/checkout@v4
+        with:
+          repository: sase-org/sase
+          path: .sase-deps/sase
+          token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: sase-org/sase-core
+          path: .sase-deps/sase-core
+          token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
       - uses: astral-sh/setup-uv@v4
+      - uses: extractions/setup-just@v2
+        with:
+          just-version: "1.58.0"
+          github-token: ${{ secrets.SASE_RELEASE_TOKEN || github.token }}
+      - uses: dtolnay/rust-toolchain@stable
       - name: Set up Python
         run: uv python install 3.12
       - name: Install built sase-telegram wheel into a fresh venv
         run: |
           uv venv --python 3.12 /tmp/smoke-venv
-          uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
+          printf -- '-e %s\n' "$(realpath .sase-deps/sase)" > /tmp/sase-overrides.txt
+          uv pip install --python /tmp/smoke-venv/bin/python --overrides /tmp/sase-overrides.txt dist/*.whl
+          just install-source-sase /tmp/smoke-venv/bin/python
       - name: Smoke check
         run: |
           /tmp/smoke-venv/bin/python -c "import sase_telegram"

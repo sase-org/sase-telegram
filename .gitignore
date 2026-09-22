@@ -57,3 +57,5 @@ CLAUDE.local.md
 
 # Hypothesis
 .hypothesis/
+
+.sase-overrides.txt
