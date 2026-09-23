@@ -87,15 +87,15 @@ def _patch_paths():
         patch("sase_telegram.inbound.UPDATE_OFFSET_PATH", OFFSET_TEST_FILE),
         patch("sase_telegram.inbound.AWAITING_FEEDBACK_PATH", AWAITING_TEST_FILE),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound._MEDIA_GROUPS_PATH",
+            "inbound_namespace.INBOUND._MEDIA_GROUPS_PATH",
             MEDIA_GROUP_TEST_FILE,
         ),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound._UPDATE_COMPLETION_PENDING_DIR",
+            "inbound_namespace.INBOUND._UPDATE_COMPLETION_PENDING_DIR",
             UPDATE_COMPLETION_TEST_DIR,
         ),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.load_custom_commands",
+            "inbound_namespace.INBOUND.load_custom_commands",
             return_value={},
         ),
         # Isolate the shared host pending-action store and point its legacy
@@ -457,8 +457,8 @@ class TestOutboundIntegration:
 class TestInboundIntegration:
     """Integration tests for the inbound main() entry point."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_no_updates_exits_cleanly(
         self,
         mock_tg: MagicMock,
@@ -475,8 +475,8 @@ class TestInboundIntegration:
         assert "updates=0" in captured.out
         assert "reason=no_updates" in captured.out
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_custom_commands_load_once_and_dispatch(
         self, mock_tg: MagicMock, mock_creds: MagicMock
     ) -> None:
@@ -509,12 +509,10 @@ class TestInboundIntegration:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.load_custom_commands",
+                "inbound_namespace.INBOUND.load_custom_commands",
                 return_value={"tasks": command},
             ) as load,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
-            ) as handle,
+            patch("inbound_namespace.INBOUND._handle_custom_command") as handle,
         ):
             assert inbound_main(["--once"]) == 0
 
@@ -566,8 +564,8 @@ class TestInboundIntegration:
         )
         return notif_id
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_shared_store_handled_dismisses_keyboard(
         self, mock_tg: MagicMock, mock_creds: MagicMock, tmp_path: Path
     ) -> None:
@@ -597,8 +595,8 @@ class TestInboundIntegration:
         assert pending_actions.get("abcd1234") is None
         assert not (response_dir / "plan_response.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_callback_on_already_handled_action_is_rejected(
         self, mock_tg: MagicMock, mock_creds: MagicMock, tmp_path: Path
     ) -> None:
@@ -638,9 +636,9 @@ class TestInboundIntegration:
         )
         assert pending_actions.get("abcd1234") is None
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_saves_offset_after_processing(
         self,
         mock_tg: MagicMock,
@@ -676,9 +674,9 @@ class TestInboundIntegration:
         assert "text=1" in captured.out
         assert "next_offset=501" in captured.out
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_photo_message_downloads_and_launches_agent(
         self,
         mock_tg: MagicMock,
@@ -707,7 +705,7 @@ class TestInboundIntegration:
         mock_tg.get_updates.return_value = [update]
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
+            "inbound_namespace.INBOUND.IMAGES_DIR",
             tmp_path,
         ):
             result = inbound_main(["--once"])
@@ -730,9 +728,9 @@ class TestInboundIntegration:
         offset = int(OFFSET_TEST_FILE.read_text().strip())
         assert offset == 601
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_photo_album_stages_then_flushes_one_launch(
         self,
         mock_tg: MagicMock,
@@ -740,7 +738,7 @@ class TestInboundIntegration:
         mock_launch: MagicMock,
     ) -> None:
         """Media-group photos become one later launch containing both paths."""
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_chat_id.return_value = "12345"
 
@@ -808,9 +806,9 @@ class TestInboundIntegration:
         assert not MEDIA_GROUP_TEST_FILE.exists()
         assert mock_tg.download_file.call_count == 2
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_text_message")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_text_message")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_foreign_chat_text_message_is_rejected_before_dispatch(
         self,
         mock_tg: MagicMock,
@@ -835,9 +833,9 @@ class TestInboundIntegration:
         mock_handle_text.assert_not_called()
         assert int(OFFSET_TEST_FILE.read_text().strip()) == 701
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_photo_message")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_photo_message")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_foreign_chat_photo_message_is_rejected_before_dispatch(
         self,
         mock_tg: MagicMock,
@@ -863,9 +861,9 @@ class TestInboundIntegration:
 
         mock_handle_photo.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_document_image")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_document_image")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_foreign_chat_document_image_is_rejected_before_dispatch(
         self,
         mock_tg: MagicMock,
@@ -891,9 +889,9 @@ class TestInboundIntegration:
 
         mock_handle_document.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_callback")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_foreign_chat_callback_is_rejected_before_dispatch(
         self,
         mock_tg: MagicMock,
@@ -917,9 +915,9 @@ class TestInboundIntegration:
 
         mock_handle_callback.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_callback")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_own_chat_callback_from_a_different_sender_is_rejected(
         self,
         mock_tg: MagicMock,
@@ -943,9 +941,9 @@ class TestInboundIntegration:
 
         mock_handle_callback.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_callback")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_configured_chat_callback_reaches_the_handler(
         self,
         mock_tg: MagicMock,
@@ -979,10 +977,10 @@ class TestInboundChopTick:
     stays independent of however long the receiver's long poll is waiting.
     """
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
-    @patch("sase_telegram.scripts.sase_tg_inbound._retry_pending_keyboard_cleanups")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.ensure_receiver_running")
+    @patch("inbound_namespace.INBOUND._retry_pending_keyboard_cleanups")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_bare_invocation_never_polls_and_ensures_the_receiver(
         self,
         mock_creds: MagicMock,
@@ -1003,9 +1001,9 @@ class TestInboundChopTick:
         assert "reason=receiver_ensured" in captured.out
         assert "updates=0" in captured.out
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.ensure_receiver_running")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_bare_invocation_propagates_credential_error_without_ensuring(
         self,
         mock_creds: MagicMock,
@@ -1038,13 +1036,13 @@ class TestReceiverLoop:
     def _stable_runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
         generation = _runtime_generation()
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            "inbound_namespace.INBOUND.observe_runtime_generation",
             lambda: generation,
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_offset_advances_per_update_past_a_poisoned_one(
         self,
         mock_tg: MagicMock,
@@ -1058,7 +1056,7 @@ class TestReceiverLoop:
         offset per update rather than once for the whole batch, so a killed
         receiver cannot silently lose an update that never got this far.
         """
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_chat_id.return_value = "12345"
         first = SimpleNamespace(
@@ -1097,9 +1095,9 @@ class TestReceiverLoop:
         # processing continued to (and counted) the next one.
         assert result.counts["text"] == 1
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_receiver_self_terminates_when_disabled(
         self,
         mock_tg: MagicMock,
@@ -1112,7 +1110,7 @@ class TestReceiverLoop:
         credentialed chop tick's ``ensure_receiver_running`` call re-arms a
         fresh receiver, which is why self-checking each iteration suffices.
         """
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_bot_token.return_value = "token"
         mock_tg.get_updates.return_value = []
@@ -1128,9 +1126,9 @@ class TestReceiverLoop:
         for call in mock_tg.get_updates.call_args_list:
             assert call.kwargs["timeout"] == inbound._RECEIVER_POLL_TIMEOUT_SECONDS
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_receiver_self_terminates_on_credential_loss(
         self,
         mock_tg: MagicMock,
@@ -1138,7 +1136,7 @@ class TestReceiverLoop:
         mock_creds: MagicMock,
     ) -> None:
         from sase_telegram.credentials import TelegramCredentialError
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_enabled.return_value = True
         mock_creds.get_bot_token.side_effect = TelegramCredentialError("rotated")
@@ -1149,10 +1147,10 @@ class TestReceiverLoop:
         assert result == inbound._RECEIVER_CREDENTIALS_UNAVAILABLE_EXIT_CODE
         mock_tg.get_updates.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.time")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.time")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_receiver_backs_off_and_retries_after_a_poll_failure(
         self,
         mock_tg: MagicMock,
@@ -1165,7 +1163,7 @@ class TestReceiverLoop:
         does not crash the receiver -- it backs off and keeps polling
         instead of falling back to the old multi-second application floor.
         """
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_bot_token.return_value = "token"
         mock_enabled.side_effect = [True, True, False]
@@ -1208,7 +1206,7 @@ class TestReceiverRuntimeRefresh:
             return item
 
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            "inbound_namespace.INBOUND.observe_runtime_generation",
             observe,
         )
 
@@ -1216,18 +1214,18 @@ class TestReceiverRuntimeRefresh:
         self, monkeypatch: pytest.MonkeyPatch, generation: RuntimeGeneration
     ) -> None:
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.wait_for_settled_generation",
+            "inbound_namespace.INBOUND.wait_for_settled_generation",
             lambda **_kwargs: generation,
         )
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.canonical_receiver_argv",
+            "inbound_namespace.INBOUND.canonical_receiver_argv",
             lambda: ["/venv/bin/sase_job_tg_inbound", "--receiver"],
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.os.execvp")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.os.execvp")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_unchanged_generation_keeps_polling(
         self,
         mock_tg: MagicMock,
@@ -1236,11 +1234,11 @@ class TestReceiverRuntimeRefresh:
         mock_execvp: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         generation = _runtime_generation("same")
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            "inbound_namespace.INBOUND.observe_runtime_generation",
             lambda: generation,
         )
         mock_creds.get_bot_token.return_value = "token"
@@ -1254,12 +1252,12 @@ class TestReceiverRuntimeRefresh:
         mock_execvp.assert_not_called()
 
     @patch(
-        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        "inbound_namespace.INBOUND.os.execvp",
         side_effect=_raise_execvp,
     )
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_refresh_before_polling_skips_get_updates(
         self,
         mock_tg: MagicMock,
@@ -1268,7 +1266,7 @@ class TestReceiverRuntimeRefresh:
         _mock_execvp: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         baseline = _runtime_generation("old")
         current = _runtime_generation("new")
@@ -1289,13 +1287,13 @@ class TestReceiverRuntimeRefresh:
         assert not OFFSET_TEST_FILE.exists()
 
     @patch(
-        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        "inbound_namespace.INBOUND.os.execvp",
         side_effect=_raise_execvp,
     )
-    @patch("sase_telegram.scripts.sase_tg_inbound._launch_agent")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_refresh_after_fetch_does_not_advance_offset(
         self,
         mock_tg: MagicMock,
@@ -1305,7 +1303,7 @@ class TestReceiverRuntimeRefresh:
         _mock_execvp: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         baseline = _runtime_generation("old")
         current = _runtime_generation("new")
@@ -1338,12 +1336,12 @@ class TestReceiverRuntimeRefresh:
         ]
 
     @patch(
-        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        "inbound_namespace.INBOUND.os.execvp",
         side_effect=_raise_execvp,
     )
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_refresh_uses_canonical_receiver_argv(
         self,
         mock_tg: MagicMock,
@@ -1352,13 +1350,13 @@ class TestReceiverRuntimeRefresh:
         _mock_execvp: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         current = _runtime_generation("new")
         self._stub_observe(monkeypatch, [_runtime_generation("old"), current])
         self._stub_refresh_settle(monkeypatch, current)
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.canonical_receiver_argv",
+            "inbound_namespace.INBOUND.canonical_receiver_argv",
             lambda: ["/opt/sase/bin/sase_job_tg_inbound", "--receiver"],
         )
         mock_creds.get_bot_token.return_value = "token"
@@ -1375,12 +1373,12 @@ class TestReceiverRuntimeRefresh:
         ]
 
     @patch(
-        "sase_telegram.scripts.sase_tg_inbound.os.execvp",
+        "inbound_namespace.INBOUND.os.execvp",
         side_effect=OSError("exec format error"),
     )
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_exec_failure_exits_nonzero(
         self,
         mock_tg: MagicMock,
@@ -1390,7 +1388,7 @@ class TestReceiverRuntimeRefresh:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         current = _runtime_generation("new")
         self._stub_observe(monkeypatch, [_runtime_generation("old"), current])
@@ -1408,10 +1406,10 @@ class TestReceiverRuntimeRefresh:
         )
         assert "Traceback" not in caplog.text
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.os.execvp")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.os.execvp")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_unsettled_start_refreshes_without_polling(
         self,
         mock_tg: MagicMock,
@@ -1420,7 +1418,7 @@ class TestReceiverRuntimeRefresh:
         mock_execvp: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         settled = _runtime_generation("settled")
         self._stub_observe(monkeypatch, [RuntimeScanError("torn install at start")])
@@ -1445,12 +1443,12 @@ class TestChatIdMissingFailClosed:
             "SASE_TELEGRAM_BOT_CHAT_ID environment variable is not set"
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_callback")
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_document_image")
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_photo_message")
-    @patch("sase_telegram.scripts.sase_tg_inbound._handle_text_message")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND._handle_callback")
+    @patch("inbound_namespace.INBOUND._handle_document_image")
+    @patch("inbound_namespace.INBOUND._handle_photo_message")
+    @patch("inbound_namespace.INBOUND._handle_text_message")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_unconfigured_chat_id_rejects_every_update_type_before_dispatch(
         self,
         mock_tg: MagicMock,
@@ -1461,7 +1459,7 @@ class TestChatIdMissingFailClosed:
         mock_handle_callback: MagicMock,
     ) -> None:
         """With no chat id, text/photo/document/callback never reach handlers."""
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         self._missing_chat_creds(mock_creds)
         text = SimpleNamespace(
@@ -1535,9 +1533,9 @@ class TestChatIdMissingFailClosed:
             "unsupported": 0,
         }
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
     def test_receiver_refuses_to_poll_without_chat_id_and_notifies_once(
         self,
         mock_enabled: MagicMock,
@@ -1548,11 +1546,11 @@ class TestChatIdMissingFailClosed:
         """No chat id: never polls, exits 78, and notifies exactly once."""
         from types import SimpleNamespace as _NS
 
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         generation = _runtime_generation()
         monkeypatch.setattr(
-            "sase_telegram.scripts.sase_tg_inbound.observe_runtime_generation",
+            "inbound_namespace.INBOUND.observe_runtime_generation",
             lambda: generation,
         )
         mock_enabled.return_value = True
@@ -1587,9 +1585,9 @@ class TestChatIdMissingFailClosed:
         assert notification.dedup_key == "telegram-receiver-chat-id-missing"
         assert set(notification.tags) >= {"telegram", "receiver", "error"}
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.ensure_receiver_running")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.ensure_receiver_running")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_chop_tick_without_chat_id_never_ensures_receiver(
         self,
         mock_creds: MagicMock,
@@ -1608,8 +1606,8 @@ class TestChatIdMissingFailClosed:
         mock_tg.get_updates.assert_not_called()
         mock_ensure.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_once_without_chat_id_never_polls(
         self, mock_tg: MagicMock, mock_creds: MagicMock
     ) -> None:
@@ -1624,13 +1622,13 @@ class TestChatIdMissingFailClosed:
         mock_tg.get_updates.assert_not_called()
         assert not OFFSET_TEST_FILE.exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_dispatch_failure_replies_once_and_advances_offset(
         self, mock_tg: MagicMock, mock_creds: MagicMock
     ) -> None:
         """A raising text handler yields one reply; the offset still advances."""
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_chat_id.return_value = "12345"
         update = SimpleNamespace(
@@ -1647,7 +1645,7 @@ class TestChatIdMissingFailClosed:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_text_message",
+            "inbound_namespace.INBOUND._handle_text_message",
             side_effect=RuntimeError("boom"),
         ):
             result = inbound._dispatch_fetched_updates(
@@ -1663,8 +1661,8 @@ class TestChatIdMissingFailClosed:
         assert "boom" in reply_text
         assert "Please resend" in reply_text
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_dispatch_failure_reply_send_error_is_swallowed(
         self,
         mock_tg: MagicMock,
@@ -1672,7 +1670,7 @@ class TestChatIdMissingFailClosed:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A failing best-effort reply never blocks offset advance."""
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_tg.send_message.side_effect = RuntimeError("send down")
@@ -1691,7 +1689,7 @@ class TestChatIdMissingFailClosed:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_text_message",
+                "inbound_namespace.INBOUND._handle_text_message",
                 side_effect=RuntimeError("boom"),
             ),
             caplog.at_level("WARNING"),

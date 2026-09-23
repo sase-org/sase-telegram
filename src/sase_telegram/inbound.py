@@ -120,7 +120,7 @@ IMAGES_DIR = Path.home() / ".sase" / "telegram" / "images"
 
 #: Durable record of one gate answer submitted to the shared supervised
 #: proc, keyed by proc id, read back by
-#: ``sase_tg_inbound._send_ready_gate_completions`` once execution finishes.
+#: ``inbound_handlers.gate_completions._send_ready_gate_completions`` once execution finishes.
 #: A Telegram callback popup can already have expired by the time slow
 #: option commands, archive publication, or successor launch complete, so
 #: the real outcome is delivered as a follow-up message instead.
@@ -402,7 +402,7 @@ def submit_gate_response(
     unlocked check is harmless. Anything deeper -- schema validation, a
     conflicting resubmission, a partial AND-branch attempt -- is discovered
     inside the proc and reported later through the completion-delivery
-    record (see ``sase_tg_inbound._send_ready_gate_completions``), since a
+    record (see ``inbound_handlers.gate_completions._send_ready_gate_completions``), since a
     Telegram callback popup can already have expired by the time it is
     known.
     """
@@ -502,7 +502,7 @@ def persist_gate_completion_pending(
     A no-op when *action* carries no chat id (nothing to deliver a
     completion message to). Written under :data:`GATE_COMPLETION_PENDING_DIR`,
     keyed by proc id, mirroring the existing ``/update`` completion-delivery
-    record (``sase_tg_inbound._persist_update_completion_pending``).
+    record (``inbound_handlers.update_command._persist_update_completion_pending``).
     """
     chat_id = action.get("chat_id") if action is not None else None
     if chat_id is None:

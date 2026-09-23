@@ -23,6 +23,7 @@ just check      # lint + test
 - `src/sase_telegram/pending_actions.py` — Persist pending actions to JSON (24h stale cleanup)
 - `src/sase_telegram/rate_limit.py` — Sliding window rate limiter
 - `src/sase_telegram/pdf_convert.py` — Markdown to PDF via pandoc (engine fallback chain)
+- `src/sase_telegram/inbound_handlers/` — Telegram inbound update handlers (layered; a module imports only from modules above it). Tests patch inbound modules through `tests/inbound_namespace.py`.
 - `src/sase_telegram/scripts/` — CLI entry points for outbound/inbound chops
 - Depends on `sase>=0.1.0` and `python-telegram-bot>=21.0`
 

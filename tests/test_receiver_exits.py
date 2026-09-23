@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sase_telegram.credentials import TelegramCredentialError
-from sase_telegram.scripts import sase_tg_inbound as inbound
+from inbound_namespace import INBOUND as inbound
 
 
 def _baseline() -> SimpleNamespace:

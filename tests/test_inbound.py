@@ -227,25 +227,19 @@ class TestHandleTextMessageAgentLaunch:
         _cleanup()
 
     def test_launches_agent_for_plain_text(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_text_message(msg)
             mock_record.assert_called_once_with("List all open beads", msg)
             mock_launch.assert_called_once_with("List all open beads")
 
     def test_normalizes_vcs_at_ref_before_launch(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         msg = SimpleNamespace(
             text="%i:a #gh@sase Fix the bug",
@@ -253,44 +247,34 @@ class TestHandleTextMessageAgentLaunch:
             message_id=100,
         )
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_text_message(msg)
             mock_record.assert_called_once_with("%i:a #gh:sase Fix the bug", msg)
             mock_launch.assert_called_once_with("%i:a #gh:sase Fix the bug")
 
     def test_plain_text_launch_disabled_by_empty_env_value(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
         with (
             patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": ""}),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_text_message(msg)
             mock_record.assert_not_called()
             mock_launch.assert_not_called()
 
     def test_slash_command_dispatches_when_launches_disabled(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         msg = SimpleNamespace(text="/list", entities=None, message_id=101)
         with (
             patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_command"
-            ) as mock_handle,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._handle_command") as mock_handle,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_text_message(msg)
             mock_handle.assert_called_once_with("/list", msg)
@@ -299,9 +283,7 @@ class TestHandleTextMessageAgentLaunch:
     def test_stale_gate_awaiting_does_not_consume_slash_command(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         save_awaiting_feedback(
             "42",
@@ -315,12 +297,10 @@ class TestHandleTextMessageAgentLaunch:
             chat=SimpleNamespace(id="12345"),
         )
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_command"
-            ) as mock_handle,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+            patch("inbound_namespace.INBOUND._handle_command") as mock_handle,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND.telegram_client") as mock_tg,
         ):
             mock_pa.get.return_value = None
 
@@ -334,9 +314,7 @@ class TestHandleTextMessageAgentLaunch:
     def test_stale_gate_awaiting_clears_before_plain_text_launch(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         save_awaiting_feedback(
             "42",
@@ -345,11 +323,9 @@ class TestHandleTextMessageAgentLaunch:
         )
         msg = SimpleNamespace(text="List all open beads", entities=None, message_id=100)
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
         ):
             mock_pa.get.return_value = None
 
@@ -362,9 +338,7 @@ class TestHandleTextMessageAgentLaunch:
     def test_reply_to_stale_gate_awaiting_sends_friendly_message(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         save_awaiting_feedback(
             "42",
@@ -379,9 +353,9 @@ class TestHandleTextMessageAgentLaunch:
             chat=SimpleNamespace(id="12345"),
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND.telegram_client") as mock_tg,
         ):
             mock_pa.get.return_value = None
 
@@ -396,14 +370,10 @@ class TestHandleTextMessageAgentLaunch:
         )
 
     def test_slash_command_ignored(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         msg = SimpleNamespace(text="/start", entities=None, message_id=101)
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._launch_agent"
-        ) as mock_launch:
+        with patch("inbound_namespace.INBOUND._launch_agent") as mock_launch:
             _handle_text_message(msg)
             mock_launch.assert_not_called()
 
@@ -444,7 +414,7 @@ class TestHandleQuestionFlow:
     def test_multi_question_callbacks_write_one_final_response(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         request = {
             "session_id": "s1",
@@ -460,11 +430,11 @@ class TestHandleQuestionFlow:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                "inbound_namespace.INBOUND._shared_action_resolution",
                 return_value=None,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND.telegram_client") as mock_tg,
         ):
             mock_tg.send_message.side_effect = [
                 SimpleNamespace(message_id=43),
@@ -503,7 +473,7 @@ class TestHandleQuestionFlow:
         from sase.notifications import store
         from sase.notifications.store import load_notifications
         from sase.user_question_actions import user_question_gate_spec
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         monkeypatch.setattr(paths, "INTERACTION_REQUESTS_DIR", tmp_path / "requests")
         monkeypatch.setattr(store, "NOTIFICATIONS_DIR", str(tmp_path / "notifications"))
@@ -547,11 +517,11 @@ class TestHandleQuestionFlow:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                "inbound_namespace.INBOUND._shared_action_resolution",
                 return_value=None,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND.telegram_client"),
         ):
             _handle_callback(self._callback("question:ques0001:1", 42), pending)
 
@@ -568,10 +538,8 @@ class TestHandleQuestionFlow:
         mock_pa.remove.assert_called_with("ques0001")
 
     def test_custom_text_advances_to_next_question(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_callback,
-            _handle_text_message,
-        )
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
+        from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 
         request = {
             "session_id": "s1",
@@ -585,12 +553,12 @@ class TestHandleQuestionFlow:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._shared_action_resolution",
+                "inbound_namespace.INBOUND._shared_action_resolution",
                 return_value=None,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound.pending_actions") as mock_pa,
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as mock_tg,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as launch,
+            patch("inbound_namespace.INBOUND.pending_actions") as mock_pa,
+            patch("inbound_namespace.INBOUND.telegram_client") as mock_tg,
+            patch("inbound_namespace.INBOUND._launch_agent") as launch,
         ):
             mock_pa.get.return_value = pending["ques0001"]
             mock_tg.send_message.return_value = SimpleNamespace(message_id=43)
@@ -616,18 +584,16 @@ class TestHandleImageMessageLaunchDisabled:
     """Tests launch-disabled behavior for image message handlers."""
 
     def test_photo_returns_before_download_when_launches_disabled(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+        from sase_telegram.inbound_handlers.images import _handle_photo_message
 
         msg = SimpleNamespace()
         with (
             patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+                "inbound_namespace.INBOUND.telegram_client.download_file"
             ) as mock_download,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_photo_message(msg)
             mock_download.assert_not_called()
@@ -637,18 +603,16 @@ class TestHandleImageMessageLaunchDisabled:
     def test_document_image_returns_before_download_when_launches_disabled(
         self,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_document_image
+        from sase_telegram.inbound_handlers.images import _handle_document_image
 
         msg = SimpleNamespace()
         with (
             patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+                "inbound_namespace.INBOUND.telegram_client.download_file"
             ) as mock_download,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_document_image(msg)
             mock_download.assert_not_called()
@@ -701,7 +665,7 @@ class TestMediaGroupImages:
     def test_grouped_photo_stages_without_immediate_launch(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         state_path = tmp_path / "media_groups.json"
         message = self._photo_message(
@@ -714,9 +678,9 @@ class TestMediaGroupImages:
             patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
             patch.object(inbound.time, "time", return_value=100.0),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+                "inbound_namespace.INBOUND.telegram_client.download_file"
             ) as mock_download,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             assert inbound._stage_media_group_image(message, "photo") is True
 
@@ -737,7 +701,7 @@ class TestMediaGroupImages:
     def test_flush_ready_group_downloads_all_images_and_launches_once(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         state_path = tmp_path / "media_groups.json"
         images_dir = tmp_path / "images"
@@ -763,13 +727,11 @@ class TestMediaGroupImages:
             patch.object(inbound, "IMAGES_DIR", images_dir),
             patch.object(inbound.time, "time", return_value=103.0),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file",
+                "inbound_namespace.INBOUND.telegram_client.download_file",
                 side_effect=_download,
             ) as mock_download,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             assert inbound._flush_ready_media_groups() == 1
 
@@ -785,7 +747,7 @@ class TestMediaGroupImages:
     def test_grouped_document_filename_is_preserved_safely(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         state_path = tmp_path / "media_groups.json"
         images_dir = tmp_path / "images"
@@ -810,11 +772,11 @@ class TestMediaGroupImages:
             patch.object(inbound, "IMAGES_DIR", images_dir),
             patch.object(inbound.time, "time", return_value=103.0),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file",
+                "inbound_namespace.INBOUND.telegram_client.download_file",
                 side_effect=_download,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound._record_project_context"),
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context"),
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             inbound._flush_ready_media_groups()
 
@@ -825,7 +787,7 @@ class TestMediaGroupImages:
     def test_launch_disabled_does_not_stage_grouped_images(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         state_path = tmp_path / "media_groups.json"
         message = self._photo_message("photo_one_12345678", message_id=10)
@@ -834,9 +796,9 @@ class TestMediaGroupImages:
             patch.dict("os.environ", {"SASE_TELEGRAM_LAUNCH_AGENTS_DISABLED": "1"}),
             patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
+                "inbound_namespace.INBOUND.telegram_client.download_file"
             ) as mock_download,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             assert inbound._stage_media_group_image(message, "photo") is False
             assert inbound._flush_ready_media_groups() == 0
@@ -845,11 +807,11 @@ class TestMediaGroupImages:
         mock_download.assert_not_called()
         mock_launch.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_download_failure_sends_one_error_and_does_not_launch(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         state_path = tmp_path / "media_groups.json"
         images_dir = tmp_path / "images"
@@ -876,10 +838,8 @@ class TestMediaGroupImages:
             patch.object(inbound, "_MEDIA_GROUPS_PATH", state_path),
             patch.object(inbound, "IMAGES_DIR", images_dir),
             patch.object(inbound.time, "time", return_value=103.0),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             assert inbound._flush_ready_media_groups() == 1
 
@@ -897,17 +857,15 @@ class TestChangesCommandDispatch:
     """Tests for the /changes slash command."""
 
     def test_handle_command_dispatches_changes(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_changes_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_changes_command") as mock_handler:
             _handle_command("/changes project")
 
         mock_handler.assert_called_once_with("project")
 
     def test_changes_registered_as_slash_command(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+        from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
 
         assert ("changes", "Copy Patch workflow tags") in _SLASH_COMMANDS
 
@@ -916,28 +874,24 @@ class TestForkCommandDispatch:
     """Tests for the /fork slash command."""
 
     def test_handle_command_dispatches_fork(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_fork_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_fork_command") as mock_handler:
             _handle_command("/fork")
 
         mock_handler.assert_called_once_with()
 
     def test_legacy_command_is_not_dispatched(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
         legacy = "re" + "sume"
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_fork_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_fork_command") as mock_handler:
             _handle_command(f"/{legacy}")
 
         mock_handler.assert_not_called()
 
     def test_fork_registered_as_slash_command(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+        from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
 
         assert ("fork", "Copy fork text for an agent") in _SLASH_COMMANDS
         assert not any(command == "re" + "sume" for command, _desc in _SLASH_COMMANDS)
@@ -947,11 +901,9 @@ class TestBeadCommandDispatch:
     """Tests for /bead command dispatch aliases."""
 
     def test_handle_command_dispatches_plural_beads_alias(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_bead_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_bead_command") as mock_handler:
             _handle_command("/beads")
 
         mock_handler.assert_called_once_with("", message=None)
@@ -961,65 +913,61 @@ class TestUpdateCommand:
     """Tests for the /update slash command."""
 
     def test_handle_command_dispatches_update(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_update_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_update_command") as mock_handler:
             _handle_command("/update")
 
         mock_handler.assert_called_once_with()
 
     def test_install_is_not_handled(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_update_command"
-        ) as mock_handler:
+        with patch("inbound_namespace.INBOUND._handle_update_command") as mock_handler:
             _handle_command("/install")
 
         mock_handler.assert_not_called()
 
     def test_update_registered_as_slash_command(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+        from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
 
         assert ("update", "Update SASE and restart axe") in _SLASH_COMMANDS
         assert not any(command == "install" for command, _desc in _SLASH_COMMANDS)
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_update_acknowledges_already_running(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
+        from sase_telegram.inbound_handlers.update_command import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(status="already_running", message="busy")
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            "inbound_namespace.INBOUND.start_chat_install_worker",
             return_value=result,
         ):
             _handle_update_command()
 
         mock_tg.send_message.assert_called_once_with("12345", "Update already running.")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_update_acknowledges_launched_with_log(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_update_command
+        from sase_telegram.inbound_handlers.update_command import _handle_update_command
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(
             status="launched", message="Update worker started; log: /tmp/log"
         )
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+            "inbound_namespace.INBOUND.start_chat_install_worker",
             return_value=result,
         ):
             _handle_update_command()
@@ -1029,15 +977,15 @@ class TestUpdateCommand:
             "Update worker started; log: /tmp/log",
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_update_launched_persists_completion_delivery_context(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(
@@ -1049,7 +997,7 @@ class TestUpdateCommand:
         )
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.start_chat_install_worker",
+                "inbound_namespace.INBOUND.start_chat_install_worker",
                 return_value=result,
             ),
             patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", tmp_path / "tg"),
@@ -1067,11 +1015,11 @@ class TestUpdateCommand:
             "Update worker started; log: /tmp/log",
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_update_completion_scan_sends_success_once(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1109,11 +1057,11 @@ class TestUpdateCommand:
         )
         assert not (pending_dir / "job-1.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_update_completion_scan_prefers_failure_message(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1151,11 +1099,11 @@ class TestUpdateCommand:
         )
         assert not (pending_dir / "job-2.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_update_completion_scan_falls_back_to_exit_code(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1192,11 +1140,11 @@ class TestUpdateCommand:
         )
         assert not (pending_dir / "job-2.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_update_completion_scan_waits_for_missing_completion(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1218,11 +1166,11 @@ class TestUpdateCommand:
         mock_tg.send_message.assert_not_called()
         assert pending_path.exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_update_completion_scan_keeps_pending_on_send_failure(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         mock_tg.send_message.side_effect = RuntimeError("telegram down")
         pending_dir = tmp_path / "pending"
@@ -1255,7 +1203,7 @@ class TestUpdateCommand:
     def test_command_fingerprint_change_forces_registration(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
         cache_path.write_text(
@@ -1280,7 +1228,7 @@ class TestUpdateCommand:
         assert payload["fingerprint"] == inbound._slash_commands_fingerprint()
 
     def test_legacy_timestamp_cache_forces_registration(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
         cache_path.write_text("1000.0")
@@ -1305,7 +1253,7 @@ class TestUpdateCommand:
         failure: str,
         existing_cache: bool,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
         original_cache = json.dumps(
@@ -1347,11 +1295,11 @@ class TestGateAnswerCompletion:
     mirroring the ``/update`` completion-delivery tests above.
     """
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_success_sends_completion_once(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1383,11 +1331,11 @@ class TestGateAnswerCompletion:
         )
         assert not (pending_dir / "proc-1.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_recorded_execution_error_sends_failure(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1421,12 +1369,12 @@ class TestGateAnswerCompletion:
         )
         assert not (pending_dir / "proc-2.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_ignores_error_recorded_before_this_submission(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
         """An error from an earlier, unrelated attempt must not be misreported."""
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1455,12 +1403,12 @@ class TestGateAnswerCompletion:
         mock_tg.send_message.assert_not_called()
         assert (pending_dir / "proc-3.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.get_proc")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.get_proc")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_proc_failure_without_error_record_sends_generic_failure(
         self, mock_tg: MagicMock, mock_get_proc: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1493,12 +1441,12 @@ class TestGateAnswerCompletion:
         )
         assert not (pending_dir / "proc-4.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.get_proc")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.get_proc")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_still_running_proc_is_left_pending(
         self, mock_tg: MagicMock, mock_get_proc: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         pending_dir = tmp_path / "pending"
         pending_dir.mkdir()
@@ -1527,11 +1475,11 @@ class TestGateAnswerCompletion:
         mock_tg.send_message.assert_not_called()
         assert (pending_dir / "proc-5.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_send_failure_keeps_pending_for_retry(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         mock_tg.send_message.side_effect = RuntimeError("telegram down")
         pending_dir = tmp_path / "pending"
@@ -1572,11 +1520,11 @@ class TestGateKeyboardCleanupRetry:
     losing track of a stale inline keyboard that was never actually removed.
     """
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_failed_edit_persists_a_retry_record(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         mock_tg.edit_message_reply_markup.side_effect = RuntimeError("rate limited")
         cleanup_dir = tmp_path / "cleanup"
@@ -1588,11 +1536,11 @@ class TestGateKeyboardCleanupRetry:
         assert record["chat_id"] == "12345"
         assert record["message_id"] == 99
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_successful_edit_leaves_no_retry_record(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         cleanup_dir = tmp_path / "cleanup"
         cleanup_dir.mkdir()
@@ -1605,11 +1553,11 @@ class TestGateKeyboardCleanupRetry:
         )
         assert not (cleanup_dir / "abc12345.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_retry_pass_clears_a_previously_failed_edit(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         cleanup_dir = tmp_path / "cleanup"
         cleanup_dir.mkdir()
@@ -1633,11 +1581,11 @@ class TestGateKeyboardCleanupRetry:
         )
         assert not (cleanup_dir / "abc12345.json").exists()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_retry_pass_keeps_a_still_failing_edit_pending(
         self, mock_tg: MagicMock, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as tg_inbound
+        from inbound_namespace import INBOUND as tg_inbound
 
         mock_tg.edit_message_reply_markup.side_effect = RuntimeError("still limited")
         cleanup_dir = tmp_path / "cleanup"
@@ -1665,7 +1613,7 @@ class TestProjectSpecPath:
     """``_project_spec_path`` resolves through the canonical ``sase.ace.patch`` API."""
 
     def test_prefers_canonical_sase_extension(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _project_spec_path
+        from sase_telegram.inbound_handlers.project_context import _project_spec_path
 
         project_dir = tmp_path / "myproj"
         project_dir.mkdir()
@@ -1675,7 +1623,7 @@ class TestProjectSpecPath:
         assert _project_spec_path(project_dir, "myproj") == sase_path
 
     def test_falls_back_to_legacy_gp_extension(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _project_spec_path
+        from sase_telegram.inbound_handlers.project_context import _project_spec_path
 
         project_dir = tmp_path / "myproj"
         project_dir.mkdir()
@@ -1689,7 +1637,9 @@ class TestListPatchXpromptTagsImport:
     """``_list_patch_xprompt_tags`` delegates to the canonical patch_tags API."""
 
     def test_delegates_to_canonical_patch_tags_module(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _list_patch_xprompt_tags
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _list_patch_xprompt_tags,
+        )
 
         with patch("sase.integrations.patch_tags.find_all_patches", return_value=[]):
             listing = _list_patch_xprompt_tags()
@@ -1701,20 +1651,20 @@ class TestListPatchXpromptTagsImport:
 class TestChangesCommand:
     """Tests for the /changes slash command."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_rejects_multiple_args(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
 
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags"
-        ) as mock_list:
+        with patch("inbound_namespace.INBOUND._list_patch_xprompt_tags") as mock_list:
             _handle_changes_command("one two")
 
         mock_list.assert_not_called()
@@ -1722,20 +1672,22 @@ class TestChangesCommand:
             "12345", "Usage: /changes [project]"
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_empty_without_project(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("")
@@ -1743,20 +1695,22 @@ class TestChangesCommand:
         mock_list.assert_called_once_with(None)
         mock_tg.send_message.assert_called_once_with("12345", "No active Patches.")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_project_filter_empty(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("sase")
@@ -1766,14 +1720,16 @@ class TestChangesCommand:
             "12345", "No active Patches for sase."
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_entries_use_copy_text_buttons(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(
@@ -1785,7 +1741,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -1803,14 +1759,16 @@ class TestChangesCommand:
         assert buttons[1][0].text == "sase-telegram/bar"
         assert buttons[1][0].copy_text.text == "#git:bar"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_humanizes_unfiltered_button_labels_and_copy_vcs_refs(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(
@@ -1826,23 +1784,23 @@ class TestChangesCommand:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+                "inbound_namespace.INBOUND._list_patch_xprompt_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                "inbound_namespace.INBOUND.display_project_name",
                 side_effect=lambda project: (
                     "SASE Core" if project == "sase" else project
                 ),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                "inbound_namespace.INBOUND.display_cl_name",
                 side_effect=lambda name: (
                     "SASE Core_foo" if name == "sase_foo" else name
                 ),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                "inbound_namespace.INBOUND.display_vcs_refs_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
@@ -1854,14 +1812,16 @@ class TestChangesCommand:
         assert button.text == "SASE Core/SASE Core_foo"
         assert button.copy_text.text == "#hg:sase_foo"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_project_filter_uses_short_labels(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(
@@ -1870,7 +1830,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("sase")
@@ -1884,14 +1844,16 @@ class TestChangesCommand:
         assert buttons[0][0].text == "foo"
         assert buttons[0][0].copy_text.text == "#hg:foo"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_project_filter_humanizes_header_but_uses_raw_filter(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(
@@ -1901,15 +1863,15 @@ class TestChangesCommand:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+                "inbound_namespace.INBOUND._list_patch_xprompt_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                "inbound_namespace.INBOUND.display_project_name",
                 return_value="SASE Core",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                "inbound_namespace.INBOUND.display_cl_name",
                 return_value="SASE Core_foo",
             ),
         ):
@@ -1925,14 +1887,16 @@ class TestChangesCommand:
         assert button.text == "SASE Core_foo"
         assert button.copy_text.text == "#hg:foo"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_changes_chunks_large_result_sets(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_changes_command
+        from sase_telegram.inbound_handlers.xprompt_commands import (
+            _handle_changes_command,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         listing = SimpleNamespace(
@@ -1944,7 +1908,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -1967,18 +1931,16 @@ class TestChangesCommand:
 class TestLaunchAgent:
     """Tests for the _launch_agent helper (script module)."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_success_sends_confirmation(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2000,16 +1962,16 @@ class TestLaunchAgent:
         assert "Launched" in call_args[0][1]
         assert "List all open beads" in call_args[0][1]
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_success_sends_confirmation_without_default_llm_provider(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = SimpleNamespace(pid=42, workspace_num=3)
@@ -2039,16 +2001,16 @@ class TestLaunchAgent:
         assert "Agent Launched" in call_args[0][1]
         assert "List all open beads" in call_args[0][1]
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_success_uses_explicit_model_label_without_default_llm_provider(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = SimpleNamespace(pid=42, workspace_num=3)
@@ -2079,18 +2041,16 @@ class TestLaunchAgent:
         assert "opus Launched" in call_args[0][1]
         assert "List all open beads" in call_args[0][1]
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_failure_sends_error(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
 
@@ -2105,18 +2065,16 @@ class TestLaunchAgent:
         assert "Failed to launch agent" in call_args[0][1]
         assert "No workspace available" in call_args[0][1]
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_no_auto_name_prepended_when_no_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2139,18 +2097,16 @@ class TestLaunchAgent:
         assert launched_prompt == "List all open beads"
         mock_auto.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_no_auto_name_when_name_directive_present(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2168,9 +2124,9 @@ class TestLaunchAgent:
         assert not launched_prompt.startswith("%i:foo %i:")
         assert "%i:foo" in launched_prompt
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_no_auto_name_for_repeat_prompt(
         self,
         mock_creds: MagicMock,
@@ -2181,9 +2137,7 @@ class TestLaunchAgent:
         # a %i:<auto> prepend — prepending turns the auto-name into an
         # explicit base and triggers the strict collision check against
         # orphan child-named agents.
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2207,9 +2161,9 @@ class TestLaunchAgent:
         assert "%r:3" in launched_prompt
         mock_auto.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_uses_result_agent_name_without_polling_meta(
         self,
         mock_creds: MagicMock,
@@ -2217,9 +2171,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
     ) -> None:
         """When the launch result carries an agent_name, Telegram skips the poll."""
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         # No agent_meta.json on disk: the result name alone must be enough to
@@ -2232,7 +2184,7 @@ class TestLaunchAgent:
                 return_value=[result],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
+                "inbound_namespace.INBOUND._resolve_launch_result_agent_name",
                 side_effect=AssertionError("must not poll when result name is set"),
             ),
         ):
@@ -2247,16 +2199,16 @@ class TestLaunchAgent:
         assert buttons[1][0].text == "🗡️ Kill"
         assert buttons[1][0].callback_data == "kill:c:go"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_humanizes_visible_agent_name_only(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         result = _launch_result(
@@ -2271,7 +2223,7 @@ class TestLaunchAgent:
                 return_value=[result],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                "inbound_namespace.INBOUND.display_cl_name",
                 side_effect=lambda name: (
                     "SASE Core_agent" if name == "sase_agent" else name
                 ),
@@ -2288,9 +2240,9 @@ class TestLaunchAgent:
         assert buttons[0][1].copy_text.text == "%w:sase_agent "
         assert buttons[1][0].callback_data == "kill:sase_agent:go"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_includes_wait_keyboard(
         self,
         mock_creds: MagicMock,
@@ -2298,9 +2250,7 @@ class TestLaunchAgent:
         mock_pa: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         result = _launch_result(artifacts_dir=str(tmp_path))
@@ -2333,9 +2283,9 @@ class TestLaunchAgent:
         assert buttons[1][1].text == "🔄 Retry"
         assert buttons[1][1].copy_text.text == "%i:c.r1\nList all open beads"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_fallback_reads_day_sharded_agent_meta(
         self,
         mock_creds: MagicMock,
@@ -2344,9 +2294,7 @@ class TestLaunchAgent:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         monkeypatch.setenv("SASE_HOME", str(tmp_path / ".sase"))
         mock_creds.get_chat_id.return_value = "12345"
@@ -2392,18 +2340,16 @@ class TestLaunchAgent:
         mock_pa.add.assert_called_once()
         assert mock_pa.add.call_args.args[0] == "kill-c"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_retry_button_replaces_existing_name_directive(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2426,18 +2372,16 @@ class TestLaunchAgent:
         assert retry_button.text == "🔄 Retry"
         assert retry_button.copy_text.text == "%i:c.r1 List all open beads"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_retry_button_uses_callback_for_long_prompt(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2452,7 +2396,7 @@ class TestLaunchAgent:
                 return_value=[mock_result],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_launch_result_agent_name",
+                "inbound_namespace.INBOUND._resolve_launch_result_agent_name",
                 return_value="c",
             ),
             patch("sase.agent.names.allocate_retry_name", return_value="c.r1"),
@@ -2471,18 +2415,16 @@ class TestLaunchAgent:
             {"action": "retry", "prompt": f"%i:c.r1\n{long_prompt}"},
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_copy_buttons_humanize_vcs_tags(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2500,7 +2442,7 @@ class TestLaunchAgent:
             ),
             patch("sase.agent.names.allocate_retry_name", return_value="foo.r1"),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                "inbound_namespace.INBOUND.display_vcs_refs_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
@@ -2517,18 +2459,16 @@ class TestLaunchAgent:
         assert buttons[1][1].text == "🔄 Retry"
         assert buttons[1][1].copy_text.text == "%i:foo.r1 #gh:sase Fix a bug"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_vcs_tag_uses_at_name_when_pr_present(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2545,7 +2485,7 @@ class TestLaunchAgent:
                 return_value="#gh:sase ",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._prompt_has_pr_xprompt",
+                "inbound_namespace.INBOUND._prompt_has_pr_xprompt",
                 return_value=True,
             ),
             patch(
@@ -2564,18 +2504,16 @@ class TestLaunchAgent:
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[0][1].copy_text.text == "#gh:@foo %w:foo "
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_launch_vcs_tag_unchanged_without_pr(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pa: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _launch_agent,
-        )
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_result = MagicMock()
@@ -2592,7 +2530,7 @@ class TestLaunchAgent:
                 return_value="#gh:sase ",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._prompt_has_pr_xprompt",
+                "inbound_namespace.INBOUND._prompt_has_pr_xprompt",
                 return_value=False,
             ),
         ):
@@ -2605,9 +2543,9 @@ class TestLaunchAgent:
         assert buttons[0][0].copy_text.text == "#gh:sase #fork:foo "
         assert buttons[0][1].copy_text.text == "#gh:sase %w:foo "
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_multi_model_launches_via_canonical_pipeline(
         self,
         mock_creds: MagicMock,
@@ -2617,7 +2555,7 @@ class TestLaunchAgent:
         # %{%m:opus | %m:sonnet} must dispatch through ``launch_agents_from_cwd``
         # ONCE — never per-model — so workspace allocation, naming, and
         # retries all happen inside one shared execute_launch_plan invocation.
-        from sase_telegram.scripts.sase_tg_inbound import _launch_agent
+        from sase_telegram.inbound_handlers.agent_launch import _launch_agent
 
         mock_creds.get_chat_id.return_value = "12345"
         result_opus = MagicMock()
@@ -2638,7 +2576,7 @@ class TestLaunchAgent:
                 return_value=[result_opus, result_sonnet],
             ) as mock_launch,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_slot_prompts",
+                "inbound_namespace.INBOUND._resolve_slot_prompts",
                 return_value=slot_prompts,
             ),
         ):
@@ -2676,10 +2614,10 @@ class TestLaunchAgent:
                 # Kill confirmations reuse the source prompt for Redo.
                 assert call.args[1]["prompt"] == "%{%m:opus | %m:sonnet} Do work"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound._record_project_context")
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND._record_project_context")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_multi_model_photo_records_project_context_once(
         self,
         mock_creds: MagicMock,
@@ -2689,7 +2627,7 @@ class TestLaunchAgent:
     ) -> None:
         # Multi-model photo launches still record project context once per
         # message and reference the photo file in the launched prompt.
-        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+        from sase_telegram.inbound_handlers.images import _handle_photo_message
 
         mock_creds.get_chat_id.return_value = "12345"
         result_opus = MagicMock()
@@ -2707,15 +2645,13 @@ class TestLaunchAgent:
         message.caption_entities = []
 
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.download_file"
-            ),
+            patch("inbound_namespace.INBOUND.telegram_client.download_file"),
             patch(
                 "sase.agent.launcher.launch_agents_from_cwd",
                 return_value=[result_opus, result_sonnet],
             ) as mock_launch,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_slot_prompts",
+                "inbound_namespace.INBOUND._resolve_slot_prompts",
                 return_value=[
                     "%id:c.cld-opus %model:opus describe this",
                     "%id:c.cld-sonnet %model:sonnet describe this",
@@ -2950,7 +2886,9 @@ class TestBeadProjectContext:
     """Tests for resolving the project context used by /bead."""
 
     def test_extract_project_from_prompt(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+        from sase_telegram.inbound_handlers.project_context import (
+            _extract_project_from_prompt,
+        )
 
         assert _extract_project_from_prompt("#gh:sase Fix the bug") == "sase"
         assert _extract_project_from_prompt("#gh@sase Fix the bug") == "sase"
@@ -2964,7 +2902,9 @@ class TestBeadProjectContext:
         assert _extract_project_from_prompt("plain prompt") is None
 
     def test_extract_project_from_tag_prompt(self, _fake_tag_catalog) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+        from sase_telegram.inbound_handlers.project_context import (
+            _extract_project_from_prompt,
+        )
 
         assert _extract_project_from_prompt("+sase Fix the bug") == "sase"
         # Mobile keyboards auto-capitalize: resolution is case-insensitive.
@@ -2977,7 +2917,7 @@ class TestBeadProjectContext:
     def test_records_project_context_for_tag_prompt(
         self, _fake_tag_catalog, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         workspace = tmp_path / "sase"
         workspace.mkdir()
@@ -3005,7 +2945,7 @@ class TestBeadProjectContext:
         }
 
     def test_fork_wait_copy_text_uses_tag_form(self, _fake_tag_catalog) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
+        from sase_telegram.inbound_handlers.agent_launch import (
             _build_agent_action_keyboard,
         )
 
@@ -3022,7 +2962,9 @@ class TestBeadProjectContext:
         assert buttons[0][1].copy_text.text == "+sase %w:foo "
 
     def test_extract_project_from_wrapped_image_prompt(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+        from sase_telegram.inbound_handlers.project_context import (
+            _extract_project_from_prompt,
+        )
 
         assert (
             _extract_project_from_prompt(
@@ -3038,7 +2980,7 @@ class TestBeadProjectContext:
         )
 
     def test_records_project_context_for_chat(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         workspace = tmp_path / "zorg"
         workspace.mkdir()
@@ -3071,7 +3013,7 @@ class TestBeadProjectContext:
         from pytest import MonkeyPatch
 
         assert isinstance(monkeypatch, MonkeyPatch)
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         zorg_workspace = tmp_path / "zorg"
         zorg_workspace.mkdir()
@@ -3094,7 +3036,7 @@ class TestBeadProjectContext:
         with (
             patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={
                     "newer": {
                         "prompt": "#gh:sase Newer unrelated prompt",
@@ -3116,7 +3058,7 @@ class TestBeadProjectContext:
         from pytest import MonkeyPatch
 
         assert isinstance(monkeypatch, MonkeyPatch)
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         zorg_workspace = tmp_path / "zorg"
         zorg_workspace.mkdir()
@@ -3132,7 +3074,7 @@ class TestBeadProjectContext:
         with (
             patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={
                     "other-chat-newer": {
                         "prompt": "#gh:sase Newer unrelated prompt",
@@ -3167,7 +3109,7 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={
                     "new": {
                         "prompt": "#gh:sase Fix the bug",
@@ -3180,11 +3122,11 @@ class TestBeadProjectContext:
                 return_value=str(workspace),
             ) as get_workspace_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
-            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+            from sase_telegram.inbound_handlers.beads import _run_bead_command
 
             _run_bead_command(["list"])
 
@@ -3203,7 +3145,7 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={
                     "old": {"prompt": "#gh:other Old task", "created_at": 1},
                     "new": {
@@ -3213,7 +3155,7 @@ class TestBeadProjectContext:
                 },
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                "inbound_namespace.INBOUND._PROJECT_CONTEXT_PATH",
                 tmp_path / "missing_context.json",
             ),
             patch(
@@ -3221,7 +3163,7 @@ class TestBeadProjectContext:
                 return_value=str(workspace),
             ) as get_workspace_mock,
         ):
-            from sase_telegram.scripts.sase_tg_inbound import _resolve_bead_cwd
+            from sase_telegram.inbound_handlers.project_context import _resolve_bead_cwd
 
             assert _resolve_bead_cwd() == str(workspace)
 
@@ -3242,7 +3184,7 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.Path.home",
+                "inbound_namespace.INBOUND.Path.home",
                 return_value=tmp_path,
             ),
             patch(
@@ -3250,7 +3192,7 @@ class TestBeadProjectContext:
                 side_effect=RuntimeError("workspace plugin unavailable"),
             ),
         ):
-            from sase_telegram.scripts.sase_tg_inbound import (
+            from sase_telegram.inbound_handlers.project_context import (
                 _resolve_workspace_for_project,
             )
 
@@ -3272,7 +3214,7 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.Path.home",
+                "inbound_namespace.INBOUND.Path.home",
                 return_value=tmp_path,
             ),
             patch(
@@ -3280,7 +3222,7 @@ class TestBeadProjectContext:
                 side_effect=RuntimeError("workspace plugin unavailable"),
             ),
         ):
-            from sase_telegram.scripts.sase_tg_inbound import (
+            from sase_telegram.inbound_handlers.project_context import (
                 _resolve_workspace_for_project,
             )
 
@@ -3298,11 +3240,11 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={"ctx": {"prompt": "#gh:sase Fix", "created_at": 1}},
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                "inbound_namespace.INBOUND._PROJECT_CONTEXT_PATH",
                 tmp_path / "missing_context.json",
             ),
             patch(
@@ -3310,11 +3252,11 @@ class TestBeadProjectContext:
                 return_value=str(workspace),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
-            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+            from sase_telegram.inbound_handlers.beads import _run_bead_command
 
             _run_bead_command(["show", "sase-13"])
 
@@ -3332,19 +3274,19 @@ class TestBeadProjectContext:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.pending_actions.list_all",
+                "inbound_namespace.INBOUND.pending_actions.list_all",
                 return_value={},
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._PROJECT_CONTEXT_PATH",
+                "inbound_namespace.INBOUND._PROJECT_CONTEXT_PATH",
                 Path("/tmp/missing_sase_telegram_project_context.json"),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
-            from sase_telegram.scripts.sase_tg_inbound import _run_bead_command
+            from sase_telegram.inbound_handlers.beads import _run_bead_command
 
             _run_bead_command(["list"])
 
@@ -3456,8 +3398,8 @@ class TestNormalizeLaunchXpromptAtRefs:
 class TestHandlePhotoMessage:
     """Tests for _handle_photo_message (script module)."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_downloads_highest_res_and_launches_agent(
         self,
         mock_creds: MagicMock,
@@ -3466,9 +3408,7 @@ class TestHandlePhotoMessage:
     ) -> None:
         from types import SimpleNamespace
 
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_photo_message,
-        )
+        from sase_telegram.inbound_handlers.images import _handle_photo_message
 
         mock_creds.get_chat_id.return_value = "12345"
         # download_file should write a file to the destination
@@ -3484,10 +3424,10 @@ class TestHandlePhotoMessage:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
+                "inbound_namespace.INBOUND.IMAGES_DIR",
                 tmp_path,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_photo_message(message)
 
@@ -3501,15 +3441,15 @@ class TestHandlePhotoMessage:
         prompt = mock_launch.call_args[0][0]
         assert "Describe this" in prompt
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_normalizes_caption_before_wrapping_prompt(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_photo_message
+        from sase_telegram.inbound_handlers.images import _handle_photo_message
 
         mock_creds.get_chat_id.return_value = "12345"
         photo = SimpleNamespace(file_id="photo_id_12345678")
@@ -3520,11 +3460,9 @@ class TestHandlePhotoMessage:
         )
 
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR", tmp_path),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND.IMAGES_DIR", tmp_path),
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_photo_message(message)
 
@@ -3533,8 +3471,8 @@ class TestHandlePhotoMessage:
         assert "#gh@sase" not in prompt
         mock_record.assert_called_once_with(prompt, message)
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_download_failure_sends_error(
         self,
         mock_creds: MagicMock,
@@ -3543,9 +3481,7 @@ class TestHandlePhotoMessage:
     ) -> None:
         from types import SimpleNamespace
 
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_photo_message,
-        )
+        from sase_telegram.inbound_handlers.images import _handle_photo_message
 
         mock_creds.get_chat_id.return_value = "12345"
         mock_tg.download_file.side_effect = RuntimeError("Network error")
@@ -3555,10 +3491,10 @@ class TestHandlePhotoMessage:
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR",
+                "inbound_namespace.INBOUND.IMAGES_DIR",
                 tmp_path,
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_photo_message(message)
 
@@ -3569,15 +3505,15 @@ class TestHandlePhotoMessage:
 
 
 class TestHandleDocumentImage:
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_normalizes_caption_before_wrapping_prompt(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_document_image
+        from sase_telegram.inbound_handlers.images import _handle_document_image
 
         mock_creds.get_chat_id.return_value = "12345"
         doc = SimpleNamespace(file_id="doc_id_12345678", file_name="image.png")
@@ -3588,11 +3524,9 @@ class TestHandleDocumentImage:
         )
 
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.IMAGES_DIR", tmp_path),
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._record_project_context"
-            ) as mock_record,
-            patch("sase_telegram.scripts.sase_tg_inbound._launch_agent") as mock_launch,
+            patch("inbound_namespace.INBOUND.IMAGES_DIR", tmp_path),
+            patch("inbound_namespace.INBOUND._record_project_context") as mock_record,
+            patch("inbound_namespace.INBOUND._launch_agent") as mock_launch,
         ):
             _handle_document_image(message)
 
@@ -3605,16 +3539,16 @@ class TestHandleDocumentImage:
 class TestSendKillResult:
     """Tests for _send_kill_result (kill confirmation message)."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_short_prompt_includes_redo_button(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+        from sase_telegram.inbound_handlers.agent_actions import _send_kill_result
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(success=True, message="Killed")
@@ -3628,23 +3562,23 @@ class TestSendKillResult:
         assert keyboard.inline_keyboard[0][0].text == "🔄 Redo"
         assert keyboard.inline_keyboard[0][0].copy_text.text == "short prompt"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_success_humanizes_visible_agent_name_only(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+        from sase_telegram.inbound_handlers.agent_actions import _send_kill_result
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(success=True, message="Killed")
         kill_info = {"prompt": "short prompt", "chat_id": "12345", "message_id": 1}
 
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+            "inbound_namespace.INBOUND.display_cl_name",
             side_effect=lambda name: (
                 "SASE Core_agent" if name == "sase_agent" else name
             ),
@@ -3658,16 +3592,16 @@ class TestSendKillResult:
         assert keyboard.inline_keyboard[0][0].copy_text.text == "short prompt"
         mock_pending.remove.assert_called_once_with("kill-sase_agent")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_long_prompt_uses_callback_redo_button(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _send_kill_result
+        from sase_telegram.inbound_handlers.agent_actions import _send_kill_result
 
         mock_creds.get_chat_id.return_value = "12345"
         result = SimpleNamespace(success=True, message="Killed")
@@ -3690,9 +3624,9 @@ class TestSendKillResult:
         assert btn.text == "🔄 Redo"
         assert btn.callback_data == "retry:a:go"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_artifact_fallback_preserves_existing_name_directive(
         self,
         mock_creds: MagicMock,
@@ -3700,7 +3634,9 @@ class TestSendKillResult:
         mock_pending: MagicMock,
         tmp_path: Path,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_kill_from_callback
+        from sase_telegram.inbound_handlers.agent_actions import (
+            _handle_kill_from_callback,
+        )
 
         (tmp_path / "raw_xprompt.md").write_text(
             "%i:a #gh:gh_sase-org__sase Do work",
@@ -3718,7 +3654,7 @@ class TestSendKillResult:
             ),
             patch("sase.agent.running.kill_named_agent", return_value=result),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                "inbound_namespace.INBOUND.display_vcs_refs_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
@@ -3866,14 +3802,14 @@ def _list_entry(
 
 
 class TestHandleListCommand:
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_empty_result(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         with patch(
@@ -3889,14 +3825,14 @@ class TestHandleListCommand:
         )
         assert mock_tg.send_message.call_args.kwargs["parse_mode"] == "HTML"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_running_group_with_details_and_html_escaping(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
@@ -3930,14 +3866,14 @@ class TestHandleListCommand:
         assert "<blockquote>do &lt;thing&gt; now</blockquote>" in text
         assert kwargs["reply_markup"] is not None
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_project_detail_uses_display_project_name(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [_list_entry("alpha", project="sase-core")]
@@ -3957,14 +3893,14 @@ class TestHandleListCommand:
         assert "SASE &amp; Core · ws#1 · PID 1234" in text
         assert "sase-core · ws#1" not in text
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_prompt_snippet_humanizes_vcs_refs(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [_list_entry("alpha", prompt="#gh:gh_sase-org__sase Fix")]
@@ -3983,14 +3919,14 @@ class TestHandleListCommand:
         text = mock_tg.send_message.call_args.args[1]
         assert "<blockquote>#gh:sase Fix</blockquote>" in text
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_multiple_statuses_use_bucket_order_and_preserve_agent_order(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
@@ -4019,14 +3955,14 @@ class TestHandleListCommand:
         assert needs_idx < running_idx < done_idx
         assert text.index("run-1") < text.index("run-2")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_list_queued_status_counts_and_group_order(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
@@ -4066,14 +4002,14 @@ class TestHandleListCommand:
         waiting_idx = text.index("<b>⏳ Waiting (1)</b>")
         assert running_idx < queued_idx < waiting_idx
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_name_arg_renders_detail_with_buttons(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
@@ -4091,7 +4027,7 @@ class TestHandleListCommand:
                 return_value=agents,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._get_agent_retry_prompt",
+                "inbound_namespace.INBOUND._get_agent_retry_prompt",
                 return_value="Full prompt",
             ),
         ):
@@ -4110,14 +4046,14 @@ class TestHandleListCommand:
         assert buttons[0][1].text == "⏳ Wait"
         assert buttons[1][0].callback_data == "kill:alpha:go"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_project_arg_filters_overview(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_list_command
+        from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [
@@ -4136,14 +4072,14 @@ class TestHandleListCommand:
         assert "alpha" not in text
         assert mock_tg.send_message.call_args.kwargs["reply_markup"] is None
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_refresh_callback_edits_list_message(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         mock_creds.get_chat_id.return_value = "12345"
         callback = SimpleNamespace(
@@ -4172,29 +4108,27 @@ class TestHandleListCommand:
 
 class TestHandleShowCommand:
     def test_dispatches_show_with_message_context(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
         message = SimpleNamespace(chat=SimpleNamespace(id="12345"))
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_show_command"
-        ) as handler:
+        with patch("inbound_namespace.INBOUND._handle_show_command") as handler:
             _handle_command("/show review", message=message)
 
         handler.assert_called_once_with("review", message=message)
 
     def test_show_is_registered_as_slash_command(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _SLASH_COMMANDS
+        from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
 
         assert ("show", "Show an agent, clan, family, or tribe") in _SLASH_COMMANDS
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_bare_show_sends_kinship_index(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.inbound_handlers.agent_show import _handle_show_command
 
         mock_creds.get_chat_id.return_value = "12345"
         with patch(
@@ -4210,16 +4144,16 @@ class TestHandleShowCommand:
         assert "No grouped agents yet" in args[1]
         assert kwargs["parse_mode"] == "HTML"
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_agent_show_uses_enriched_detail_and_jump_buttons(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.inbound_handlers.agent_show import _handle_show_command
         from sase_telegram.show_entities import ShowTarget
 
         mock_creds.get_chat_id.return_value = "12345"
@@ -4242,15 +4176,15 @@ class TestHandleShowCommand:
                 return_value=[entry],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                "inbound_namespace.INBOUND.resolve_show_reference",
                 return_value=target,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._get_agent_retry_prompt",
+                "inbound_namespace.INBOUND._get_agent_retry_prompt",
                 return_value="Full prompt",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                "inbound_namespace.INBOUND.generate_key",
                 side_effect=["clankey", "familykey"],
             ),
         ):
@@ -4271,16 +4205,16 @@ class TestHandleShowCommand:
         assert keyboard.inline_keyboard[-1][1].callback_data == ("show:familykey:open")
         assert mock_pending.add.call_count == 2
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_clan_show_sends_group_view(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         _mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.inbound_handlers.agent_show import _handle_show_command
         from sase_telegram.show_entities import ShowTarget
 
         mock_creds.get_chat_id.return_value = "12345"
@@ -4304,11 +4238,11 @@ class TestHandleShowCommand:
                 return_value=[],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                "inbound_namespace.INBOUND.resolve_show_reference",
                 return_value=target,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                "inbound_namespace.INBOUND.generate_key",
                 side_effect=["refreshkey", "memberkey"],
             ),
         ):
@@ -4323,12 +4257,12 @@ class TestHandleShowCommand:
         )
         assert keyboard.inline_keyboard[0][1].copy_text.text == "#fork:review "
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_open_callback_sends_fresh_message(
         self, mock_tg: MagicMock, mock_pending: MagicMock
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         callback = SimpleNamespace(
             id="cb1",
@@ -4340,7 +4274,7 @@ class TestHandleShowCommand:
         )
         mock_pending.get.return_value = {"action": "show", "ref": "review"}
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._render_show_reference",
+            "inbound_namespace.INBOUND._render_show_reference",
             return_value=(["<b>review</b>"], None),
         ):
             _handle_callback(callback, {})
@@ -4353,12 +4287,12 @@ class TestHandleShowCommand:
         )
         mock_tg.answer_callback_query.assert_called_once_with("cb1", "Opened")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_refresh_callback_edits_single_chunk(
         self, mock_tg: MagicMock, mock_pending: MagicMock
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         callback = SimpleNamespace(
             id="cb1",
@@ -4370,7 +4304,7 @@ class TestHandleShowCommand:
         )
         mock_pending.get.return_value = {"action": "show", "ref": "review"}
         with patch(
-            "sase_telegram.scripts.sase_tg_inbound._render_show_reference",
+            "inbound_namespace.INBOUND._render_show_reference",
             return_value=(["<b>review</b>"], None),
         ):
             _handle_callback(callback, {})
@@ -4384,12 +4318,12 @@ class TestHandleShowCommand:
         )
         mock_tg.answer_callback_query.assert_called_once_with("cb1", "Refreshed")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_expired_callback_is_answered(
         self, mock_tg: MagicMock, mock_pending: MagicMock
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         mock_pending.get.return_value = None
         callback = SimpleNamespace(id="cb1", data="show:expired:open")
@@ -4400,14 +4334,14 @@ class TestHandleShowCommand:
         )
         mock_tg.send_message.assert_not_called()
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_error_path_sends_friendly_failure(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_show_command
+        from sase_telegram.inbound_handlers.agent_show import _handle_show_command
 
         mock_creds.get_chat_id.return_value = "12345"
         with (
@@ -4416,7 +4350,7 @@ class TestHandleShowCommand:
                 return_value=[],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.resolve_show_reference",
+                "inbound_namespace.INBOUND.resolve_show_reference",
                 side_effect=RuntimeError("bad artifact"),
             ),
         ):
@@ -4428,24 +4362,24 @@ class TestHandleShowCommand:
 
 
 class TestHandleKillSelection:
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_humanizes_visible_labels_and_persists_callback_key(
         self,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _show_kill_selection
+        from sase_telegram.inbound_handlers.agent_actions import _show_kill_selection
 
         agents = [_running_agent("sase_agent")]
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                "inbound_namespace.INBOUND.generate_key",
                 return_value="killkey1",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                "inbound_namespace.INBOUND.display_cl_name",
                 side_effect=lambda name: (
                     "SASE Core_agent" if name == "sase_agent" else name
                 ),
@@ -4468,24 +4402,22 @@ class TestHandleKillSelection:
             },
         )
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_long_agent_name_roundtrips_through_persisted_key(
         self,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import (
-            _handle_callback,
-            _show_kill_selection,
-        )
+        from sase_telegram.inbound_handlers.agent_actions import _show_kill_selection
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         long_name = "split_file." + ("very_long_clan_member." * 4)
         agents = [_running_agent(long_name)]
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                "inbound_namespace.INBOUND.generate_key",
                 return_value="longkey1",
             ),
         ):
@@ -4501,22 +4433,20 @@ class TestHandleKillSelection:
             "agent_names": {"longkey1": long_name},
         }
         callback = SimpleNamespace(id="cb1", data=callback_data)
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_kill_from_callback"
-        ) as mock_kill:
+        with patch("inbound_namespace.INBOUND._handle_kill_from_callback") as mock_kill:
             _handle_callback(callback, {})
 
         mock_kill.assert_called_once_with(callback, long_name)
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_bad_button_is_skipped_without_aborting_selection(
         self,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _show_kill_selection
+        from sase_telegram.inbound_handlers.agent_actions import _show_kill_selection
 
         agents = [_running_agent("bad-agent"), _running_agent("good-agent")]
 
@@ -4528,11 +4458,11 @@ class TestHandleKillSelection:
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.generate_key",
+                "inbound_namespace.INBOUND.generate_key",
                 side_effect=["badkey", "goodkey"],
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.encode",
+                "inbound_namespace.INBOUND.encode",
                 side_effect=encode_selection,
             ),
             caplog.at_level("WARNING"),
@@ -4552,20 +4482,18 @@ class TestHandleKillSelection:
         )
         assert "Skipping /kill selection button for agent bad-agent" in caplog.text
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
     def test_expired_selection_is_answered_without_killing(
         self,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+        from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
         mock_pending.get.return_value = None
         callback = SimpleNamespace(id="cb1", data="kill:missing:select")
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_kill_from_callback"
-        ) as mock_kill:
+        with patch("inbound_namespace.INBOUND._handle_kill_from_callback") as mock_kill:
             _handle_callback(callback, {})
 
         mock_kill.assert_not_called()
@@ -4576,14 +4504,14 @@ class TestHandleKillSelection:
 
 
 class TestHandleForkCommand:
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_humanizes_visible_labels_and_copy_vcs_but_keeps_agent_ref_raw(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_fork_command
+        from sase_telegram.inbound_handlers.agent_actions import _handle_fork_command
 
         mock_creds.get_chat_id.return_value = "12345"
         agents = [_running_agent("sase_agent", prompt="#gh:gh_sase-org__sase Fix")]
@@ -4594,13 +4522,13 @@ class TestHandleForkCommand:
                 return_value="#gh:gh_sase-org__sase ",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_cl_name",
+                "inbound_namespace.INBOUND.display_cl_name",
                 side_effect=lambda name: (
                     "SASE Core_agent" if name == "sase_agent" else name
                 ),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_vcs_refs_in_text",
+                "inbound_namespace.INBOUND.display_vcs_refs_in_text",
                 side_effect=lambda text: text.replace("gh_sase-org__sase", "sase"),
             ),
         ):
@@ -4617,16 +4545,18 @@ class TestHandleForkCommand:
 class TestHandleRetryFromCallback:
     """Tests for _handle_retry_from_callback."""
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_sends_prompt_as_message(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
+        from sase_telegram.inbound_handlers.agent_actions import (
+            _handle_retry_from_callback,
+        )
 
         mock_creds.get_chat_id.return_value = "12345"
         prompt = "%i:agent1.r1\n" + ("x" * 500)
@@ -4639,16 +4569,18 @@ class TestHandleRetryFromCallback:
         mock_tg.answer_callback_query.assert_called_once_with("cb1", "Prompt sent")
         mock_pending.remove.assert_called_once_with("retry-agent1")
 
-    @patch("sase_telegram.scripts.sase_tg_inbound.pending_actions")
-    @patch("sase_telegram.scripts.sase_tg_inbound.telegram_client")
-    @patch("sase_telegram.scripts.sase_tg_inbound.credentials")
+    @patch("inbound_namespace.INBOUND.pending_actions")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
     def test_expired_retry_shows_unavailable(
         self,
         mock_creds: MagicMock,
         mock_tg: MagicMock,
         mock_pending: MagicMock,
     ) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_retry_from_callback
+        from sase_telegram.inbound_handlers.agent_actions import (
+            _handle_retry_from_callback,
+        )
 
         mock_pending.get.return_value = None
 
@@ -4686,15 +4618,15 @@ class TestXpromptsCommand:
             ),
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
                 "sase.xprompt.catalog.build_xprompts_catalog",
                 return_value=fake_artifact,
             ) as build_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import (
+            from sase_telegram.inbound_handlers.xprompt_commands import (
                 _handle_xprompts_command,
             )
 
@@ -4713,15 +4645,15 @@ class TestXpromptsCommand:
         from sase.xprompt.catalog import PdfEngineUnavailable
 
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
                 "sase.xprompt.catalog.build_xprompts_catalog",
                 side_effect=PdfEngineUnavailable("no engine"),
             ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import (
+            from sase_telegram.inbound_handlers.xprompt_commands import (
                 _handle_xprompts_command,
             )
 
@@ -4735,7 +4667,7 @@ class TestIterKnownProjectWorkspaces:
     """Tests for _iter_known_project_workspaces (no ambient mocking)."""
 
     def test_builds_from_project_list_json_and_excludes_sibling(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         payload = json.dumps(
             [
@@ -4785,7 +4717,7 @@ class TestIterKnownProjectWorkspaces:
         ]
 
     def test_returns_failure_on_subprocess_failure(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         completed = SimpleNamespace(returncode=1, stdout="", stderr="boom")
         with patch.object(inbound.subprocess, "run", return_value=completed):
@@ -4796,7 +4728,7 @@ class TestIterKnownProjectWorkspaces:
         assert "boom" in discovery.error
 
     def test_returns_failure_on_unparseable_json(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         completed = SimpleNamespace(returncode=0, stdout="not json", stderr="")
         with patch.object(inbound.subprocess, "run", return_value=completed):
@@ -4807,7 +4739,7 @@ class TestIterKnownProjectWorkspaces:
         assert "unparseable JSON" in discovery.error
 
     def test_returns_failure_on_missing_executable(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         with patch.object(inbound.subprocess, "run", side_effect=FileNotFoundError):
             discovery = inbound._iter_known_project_workspaces()
@@ -4817,7 +4749,7 @@ class TestIterKnownProjectWorkspaces:
         assert "could not be started" in discovery.error
 
     def test_returns_failure_on_non_list_json(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         completed = SimpleNamespace(
             returncode=0, stdout='{"project": "sase"}', stderr=""
@@ -4834,14 +4766,14 @@ class TestBeadCommand:
     """Tests for _handle_bead_command."""
 
     def setup_method(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         self._resolve_patcher = patch(
-            "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
+            "inbound_namespace.INBOUND._resolve_bead_cwd",
             return_value=None,
         )
         self._known_projects_patcher = patch(
-            "sase_telegram.scripts.sase_tg_inbound._iter_known_project_workspaces",
+            "inbound_namespace.INBOUND._iter_known_project_workspaces",
             return_value=inbound._ProjectDiscoveryResult(ok=True, projects=[]),
         )
         self._resolve_patcher.start()
@@ -4874,15 +4806,15 @@ class TestBeadCommand:
         )
         completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("")
 
@@ -4918,7 +4850,7 @@ class TestBeadCommand:
         assert isinstance(monkeypatch, MonkeyPatch)
         monkeypatch.setenv("SASE_TELEGRAM_BEAD_PROJECT", "override")
 
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         workspace = tmp_path / "override"
         workspace.mkdir()
@@ -4962,7 +4894,7 @@ class TestBeadCommand:
         assert isinstance(monkeypatch, MonkeyPatch)
         monkeypatch.delenv("SASE_TELEGRAM_BEAD_PROJECT", raising=False)
 
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         closed_workspace = tmp_path / "done"
         sase_workspace = tmp_path / "sase"
@@ -5052,10 +4984,10 @@ class TestBeadCommand:
                     projects=projects,
                 ),
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 side_effect=fake_run,
             ) as run_mock,
         ):
@@ -5079,7 +5011,7 @@ class TestBeadCommand:
 
     def test_duplicate_project_bead_labels_use_display_project_only(self) -> None:
         from sase_telegram.callback_data import decode
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         entries = [
             inbound._ProjectBeadEntry(
@@ -5099,9 +5031,9 @@ class TestBeadCommand:
         ]
 
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                "inbound_namespace.INBOUND.display_project_name",
                 side_effect=lambda project: {
                     "sase": "SASE Core",
                     "zorg": "Zorg App",
@@ -5118,18 +5050,18 @@ class TestBeadCommand:
         assert decode(rows[1][0].callback_data) == ("bead", "zorg/same-1", "show")
 
     def test_project_bead_errors_use_display_project_name(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
         failed = SimpleNamespace(returncode=1, stdout="", stderr="db locked")
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._run_bead_command",
+                "inbound_namespace.INBOUND._run_bead_command",
                 return_value=failed,
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.display_project_name",
+                "inbound_namespace.INBOUND.display_project_name",
                 return_value="SASE Core",
             ),
         ):
@@ -5161,18 +5093,18 @@ class TestBeadCommand:
         )
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_bead_cwd",
+                "inbound_namespace.INBOUND._resolve_bead_cwd",
                 return_value=str(workspace),
             ),
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client"),
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("")
 
@@ -5193,15 +5125,15 @@ class TestBeadCommand:
             stderr="",
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("")
 
@@ -5218,7 +5150,7 @@ class TestBeadCommand:
     def test_missing_arg_project_discovery_failure_does_not_fallback(
         self, error: str
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         with (
             patch.object(
@@ -5247,7 +5179,7 @@ class TestBeadCommand:
         )
 
     def test_detail_project_discovery_failure_does_not_fallback(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         error = "'sase project list' emitted unparseable JSON"
         with (
@@ -5277,7 +5209,7 @@ class TestBeadCommand:
         assert "unparseable JSON" in body
 
     def test_detail_uses_context_before_project_discovery(self, tmp_path: Path) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         workspace = tmp_path / "sase"
         workspace.mkdir()
@@ -5306,12 +5238,12 @@ class TestBeadCommand:
         assert tc_mock.send_message.call_args.kwargs["parse_mode"] == "MarkdownV2"
 
     def test_active_bead_list_args_request_json(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _ACTIVE_BEAD_LIST_ARGS
+        from sase_telegram.inbound_handlers.beads import _ACTIVE_BEAD_LIST_ARGS
 
         assert "--format=json" in _ACTIVE_BEAD_LIST_ARGS
 
     def test_project_bead_entries_collapses_traceback_to_one_line(self) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
         traceback_stderr = (
@@ -5342,7 +5274,7 @@ class TestBeadCommand:
     def test_show_bead_selection_zero_entries_one_error_sends_plain_message(
         self,
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         projects = [inbound._KnownProjectWorkspace("sase", "/tmp/sase")]
         failed = SimpleNamespace(returncode=1, stdout="", stderr="db locked")
@@ -5373,15 +5305,15 @@ class TestBeadCommand:
             returncode=1, stdout="", stderr="Error: db locked\n"
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("")
 
@@ -5400,15 +5332,15 @@ class TestBeadCommand:
             stderr="",
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=show_completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+            from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
             cb = SimpleNamespace(id="cb1", data="bead:sase-13:show")
             _handle_callback(cb, {})
@@ -5428,19 +5360,19 @@ class TestBeadCommand:
             stderr="",
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._resolve_workspace_for_project",
+                "inbound_namespace.INBOUND._resolve_workspace_for_project",
                 return_value=str(workspace),
             ) as resolve_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=show_completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_callback
+            from sase_telegram.inbound_handlers.callbacks import _handle_callback
 
             cb = SimpleNamespace(id="cb1", data="bead:zorg/zorg-1:show")
             _handle_callback(cb, {})
@@ -5461,15 +5393,15 @@ class TestBeadCommand:
         )
         completed = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("sase-13")
 
@@ -5489,15 +5421,15 @@ class TestBeadCommand:
             returncode=1, stdout="", stderr="Error: issue not found: bogus\n"
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client") as tc_mock,
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("bogus")
 
@@ -5516,15 +5448,15 @@ class TestBeadCommand:
             stderr="",
         )
         with (
-            patch("sase_telegram.scripts.sase_tg_inbound.telegram_client"),
-            patch("sase_telegram.scripts.sase_tg_inbound.credentials") as cred_mock,
+            patch("inbound_namespace.INBOUND.telegram_client"),
+            patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.subprocess.run",
+                "inbound_namespace.INBOUND.subprocess.run",
                 return_value=completed,
             ) as run_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.scripts.sase_tg_inbound import _handle_bead_command
+            from sase_telegram.inbound_handlers.beads import _handle_bead_command
 
             _handle_bead_command("  sase-1   extra args\n")
 
@@ -5691,12 +5623,10 @@ def _custom_command(
 
 class TestCustomCommandDispatch:
     def test_dispatches_configured_command_with_raw_remainder(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
         command = _custom_command()
-        with patch(
-            "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
-        ) as handler:
+        with patch("inbound_namespace.INBOUND._handle_custom_command") as handler:
             _handle_command(
                 "/tasks first  second; $(literal) ",
                 custom_commands={"tasks": command},
@@ -5705,16 +5635,12 @@ class TestCustomCommandDispatch:
         handler.assert_called_once_with(command, "first  second; $(literal) ")
 
     def test_builtin_command_wins_over_custom_mapping(self) -> None:
-        from sase_telegram.scripts.sase_tg_inbound import _handle_command
+        from sase_telegram.inbound_handlers.commands import _handle_command
 
         command = _custom_command(name="list")
         with (
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_list_command"
-            ) as builtin,
-            patch(
-                "sase_telegram.scripts.sase_tg_inbound._handle_custom_command"
-            ) as custom,
+            patch("inbound_namespace.INBOUND._handle_list_command") as builtin,
+            patch("inbound_namespace.INBOUND._handle_custom_command") as custom,
         ):
             _handle_command("/list", custom_commands={"list": command})
 
@@ -5724,7 +5650,7 @@ class TestCustomCommandDispatch:
     def test_registration_puts_sorted_custom_commands_before_builtins(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
         custom_commands = {
@@ -5752,7 +5678,7 @@ class TestCustomCommandDispatch:
     def test_configured_first_order_invalidates_recent_old_fingerprint(
         self, tmp_path: Path
     ) -> None:
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         cache_path = tmp_path / "commands_registered_ts"
         custom_commands = {"tasks": _custom_command()}
@@ -5787,7 +5713,7 @@ class TestCustomCommandDispatch:
 class TestCustomCommandDelivery:
     def test_message_output_is_formatted_and_sent(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         with (
             patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
@@ -5807,7 +5733,7 @@ class TestCustomCommandDelivery:
 
     def test_nonzero_exit_sends_bounded_expandable_stderr(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         stderr = "old\n" + "x" * 1200 + "<latest>"
         with (
@@ -5831,7 +5757,7 @@ class TestCustomCommandDelivery:
 
     def test_timeout_reports_configured_duration(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         with (
             patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
@@ -5848,7 +5774,7 @@ class TestCustomCommandDelivery:
 
     def test_empty_stdout_reports_empty_result(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         with (
             patch.object(inbound.credentials, "get_chat_id", return_value="12345"),
@@ -5865,7 +5791,7 @@ class TestCustomCommandDelivery:
 
     def test_pdf_conversion_failure_falls_back_to_markdown(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         stdout = "---\ncaption: Tasks dashboard\nfilename: tasks.pdf\n---\n\n# Tasks\n"
         with (
@@ -5889,7 +5815,7 @@ class TestCustomCommandDelivery:
 
     def test_pdf_output_uses_safe_filename_and_truncated_caption(self) -> None:
         from sase_telegram.custom_commands import CommandResult
-        from sase_telegram.scripts import sase_tg_inbound as inbound
+        from inbound_namespace import INBOUND as inbound
 
         stdout = (
             "---\n"

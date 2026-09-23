@@ -1,7 +1,8 @@
 """Idempotent supervision for the Telegram inbound long-poll receiver.
 
 The receiver itself (the persistent ``getUpdates`` loop) lives in
-``scripts/sase_tg_inbound.py`` next to the update handlers it dispatches to.
+``scripts/sase_tg_inbound.py``, dispatching to the update handlers in
+``inbound_handlers``.
 This module only owns *launching* it: every ~5-second job tick calls
 :func:`ensure_receiver_running`, which is cheap and non-blocking because a
 receiver already active for this bot replays the same durable proc row

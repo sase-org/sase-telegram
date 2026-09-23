@@ -299,6 +299,27 @@ src/sase_telegram/
 ├── show_format.py           # Pure agent/clan/family/tribe HTML renderers
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling
+├── inbound_handlers/        # Telegram update handlers (layered; script only wires run modes)
+│   ├── common.py            # Shared chat/message/callback primitives
+│   ├── project_context.py   # Project tag parsing and workspace resolution
+│   ├── agent_launch.py      # Launching agents from Telegram
+│   ├── questions.py         # User-question callbacks and answers
+│   ├── keyboard_cleanup.py  # Inline-keyboard removal retries
+│   ├── gate_completions.py  # Gate-answer completion delivery
+│   ├── update_command.py    # /update worker and completion delivery
+│   ├── xprompt_commands.py  # /changes and /xprompts
+│   ├── beads.py             # /bead picker, show, and subprocess helpers
+│   ├── images.py            # Photo and album staging and flushing
+│   ├── agent_actions.py     # /kill, kill picker, retry, and /fork
+│   ├── gate_response.py     # Gate response submission and input prompts
+│   ├── agent_list.py        # /list overview, detail, and callbacks
+│   ├── gate_input_steps.py  # Multi-step gate input collection
+│   ├── agent_show.py        # /show rendering and callbacks
+│   ├── gate_callbacks.py    # Gate button entry point and option selection
+│   ├── commands.py          # Slash-command router and command registration
+│   ├── callbacks.py         # Callback-query router and race guard
+│   ├── text_messages.py     # Text-message router and stale feedback cleanup
+│   └── dispatch.py          # Per-update routing and poll-and-dispatch
 ├── receiver.py              # Idempotent ensure/launch of the supervised long-poll receiver proc
 ├── bead_format.py           # Convert `sase bead` output to Markdown for Telegram rendering
 ├── outbound.py              # High-water mark tracking, exclusive lock, unsent detection
@@ -310,7 +331,7 @@ src/sase_telegram/
 └── scripts/
     ├── __init__.py           # Re-exports inbound_main and outbound_main
     ├── sase_tg_outbound.py   # Outbound entry point (--dry-run, --context)
-    └── sase_tg_inbound.py    # Inbound entry point (--once, --receiver, --context)
+    └── sase_tg_inbound.py    # Inbound entry point (--once, --receiver, --context); handlers live in inbound_handlers/
 ```
 
 ## License

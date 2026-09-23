@@ -37,12 +37,10 @@ from sase.sudo.gate import build_sudo_gate_request
 from sase_telegram import inbound, outbound, pending_actions
 from sase_telegram.formatting import format_notification
 from sase_telegram.gate_flow import GateProgress, load_gate_view
-from sase_telegram.scripts.sase_tg_inbound import (
-    _execute_gate_callback_response,
-    _handle_callback,
-    _handle_gate_callback,
-    _handle_text_message,
-)
+from sase_telegram.inbound_handlers.callbacks import _handle_callback
+from sase_telegram.inbound_handlers.gate_callbacks import _handle_gate_callback
+from sase_telegram.inbound_handlers.gate_response import _execute_gate_callback_response
+from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 from sase_telegram.scripts.sase_tg_outbound import _run_outbound
 
 VALID_TALE_PLAN = """---
@@ -104,7 +102,7 @@ def gate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         inbound, "GATE_COMPLETION_PENDING_DIR", tmp_path / "gate_completions"
     )
     monkeypatch.setattr(
-        "sase_telegram.scripts.sase_tg_inbound._GATE_KEYBOARD_CLEANUP_DIR",
+        "inbound_namespace.INBOUND._GATE_KEYBOARD_CLEANUP_DIR",
         tmp_path / "gate_keyboard_cleanup",
     )
     store._LOAD_CACHE.clear()
@@ -494,12 +492,8 @@ def test_task_triage_outbound_renders_tracks_attaches_and_launches(
     assert pending["action"] == "TaskTriage"
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
         patch(
             "sase.bead.task_gate.launch_task_triage",
             return_value=SimpleNamespace(proc_id="task-123"),
@@ -528,14 +522,12 @@ def test_task_triage_close_uses_required_feedback_flow(gate_home: Path) -> None:
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            "inbound_namespace.INBOUND.credentials.get_chat_id",
             return_value="chat-1",
         ),
         patch("sase.bead.task_gate.close_task_triage") as close_task,
@@ -573,14 +565,12 @@ def test_task_triage_launch_collects_optional_feedback(gate_home: Path) -> None:
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            "inbound_namespace.INBOUND.credentials.get_chat_id",
             return_value="chat-1",
         ),
         patch(
@@ -624,12 +614,8 @@ def test_task_triage_launch_tap_still_resolves_without_feedback(
     pending_actions.add(prefix, action)
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
         patch(
             "sase.bead.task_gate.launch_task_triage",
             return_value=SimpleNamespace(task_id="task-789"),
@@ -652,15 +638,11 @@ def test_optional_feedback_callback_submits_expanded_group_selection(
     pending_actions.add(prefix, action)
 
     with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            "inbound_namespace.INBOUND.credentials.get_chat_id",
             return_value="chat-1",
         ),
     ):
@@ -695,7 +677,7 @@ def test_disabled_feedback_branch_has_no_feedback_button(gate_home: Path) -> Non
     assert f"gate:{prefix}:f1" not in _button_data(keyboard)
 
     with patch(
-        "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+        "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
     ) as answer:
         _handle_callback(_callback(f"gate:{prefix}:f1", "nofeedback"), {prefix: action})
 
@@ -833,7 +815,7 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
         }
         if not adapter.branch_actionable:
             with patch(
-                "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+                "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
             ) as answer:
                 _handle_gate_callback(callback, {"registry": action})
             answer.assert_called_once_with("callback", "This request has expired")
@@ -841,19 +823,19 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
 
         with (
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.load_gate_view",
+                "inbound_namespace.INBOUND.load_gate_view",
                 return_value=view,
             ) as load_view,
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.load_gate_progress",
+                "inbound_namespace.INBOUND.load_gate_progress",
                 return_value=GateProgress(),
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound.feedback_mode",
+                "inbound_namespace.INBOUND.feedback_mode",
                 return_value="disabled",
             ),
             patch(
-                "sase_telegram.scripts.sase_tg_inbound._execute_gate_callback_response"
+                "inbound_namespace.INBOUND._execute_gate_callback_response"
             ) as execute_response,
         ):
             _handle_gate_callback(callback, {"registry": action})
@@ -887,19 +869,19 @@ def test_gate_callback_acknowledges_before_durable_submission(
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query",
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query",
             side_effect=answer,
         ),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound._resolve_response",
+            "inbound_namespace.INBOUND._resolve_response",
             side_effect=resolve,
         ),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound._dismiss_gate_callback",
+            "inbound_namespace.INBOUND._dismiss_gate_callback",
             side_effect=lambda *_args: events.append(("dismiss", None)),
         ),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.clear_gate_progress",
+            "inbound_namespace.INBOUND.clear_gate_progress",
             side_effect=lambda *_args: events.append(("clear", None)),
         ),
     ):
@@ -931,13 +913,11 @@ def test_gate_callback_submission_error_sends_chat_message_after_ack(
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
+        patch("inbound_namespace.INBOUND.telegram_client.send_message") as send_message,
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"
-        ) as send_message,
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound._resolve_response",
+            "inbound_namespace.INBOUND._resolve_response",
             side_effect=GateError("submission_failed", "registry", "proc store busy"),
         ),
     ):
@@ -973,9 +953,9 @@ def test_sudo_approve_selection_is_rejected_before_submission(
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
-        patch("sase_telegram.scripts.sase_tg_inbound._resolve_response") as resolve,
+        patch("inbound_namespace.INBOUND._resolve_response") as resolve,
     ):
         _handle_gate_callback(callback, {prefix: action})
 
@@ -1005,12 +985,8 @@ def test_group_selection_matrix_executes_options_in_query_order(
     pending_actions.add(prefix, action)
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
     ):
         for token in toggle_tokens:
             _handle_callback(_callback(f"gate:{prefix}:{token}"), {prefix: action})
@@ -1037,14 +1013,12 @@ def test_required_feedback_uses_generic_two_step_text_flow(gate_home: Path) -> N
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            "inbound_namespace.INBOUND.credentials.get_chat_id",
             return_value="chat-1",
         ),
     ):
@@ -1080,12 +1054,8 @@ def test_hitl_uses_the_same_renderer_and_executor(gate_home: Path) -> None:
     assert _button_data(keyboard) == [f"gate:{prefix}:c0"]
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
 
@@ -1135,13 +1105,9 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
     action = _pending(notification)
     pending_actions.add(prefix, action)
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c1"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:i0k"), {prefix: action})
@@ -1392,12 +1358,8 @@ def test_tale_plan_pins_five_control_layout_and_submits_selected_options(
     ]
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
         # This fixture names no project, so the required host plan archive cannot run;
         # this test pins Telegram layout and submitted option ids, not archiving.
         patch(
@@ -1524,14 +1486,10 @@ def test_declared_input_step_flow_collects_values_in_order(gate_home: Path) -> N
         return message
 
     with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message",
+            "inbound_namespace.INBOUND.telegram_client.send_message",
             side_effect=_fake_send_message,
         ),
     ):
@@ -1595,13 +1553,9 @@ def test_and_group_members_receive_only_their_own_declared_inputs(
     pending_actions.add(prefix, action)
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:s0"), {prefix: action})
@@ -1647,14 +1601,10 @@ def test_invalid_answer_reprompts_same_field_and_leaves_gate_pending(
         return SimpleNamespace(message_id=300 + len(sent))
 
     with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message",
+            "inbound_namespace.INBOUND.telegram_client.send_message",
             side_effect=_fake_send_message,
         ),
     ):
@@ -1686,12 +1636,10 @@ def test_skip_omits_optional_field_and_is_refused_on_required_field(
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:i0k"), {prefix: action})
@@ -1730,13 +1678,9 @@ def test_repeatable_enum_accumulates_toggles_and_submits_on_done(
     pending_actions.add(prefix, action)
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:i0v0"), {prefix: action})
@@ -1767,12 +1711,10 @@ def test_cancel_clears_input_block_and_leaves_gate_answerable(gate_home: Path) -
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
         _handle_callback(_callback(f"gate:{prefix}:i0c"), {prefix: action})
@@ -1815,11 +1757,9 @@ def test_secret_field_is_refused_with_pointed_message(gate_home: Path) -> None:
 
     with (
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
+            "inbound_namespace.INBOUND.telegram_client.answer_callback_query"
         ) as answer,
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
 
@@ -1837,12 +1777,8 @@ def test_gate_without_declared_inputs_still_submits_immediately(
     pending_actions.add(prefix, action)
 
     with (
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
     ):
         _handle_callback(_callback(f"gate:{prefix}:c0"), {prefix: action})
 
@@ -1870,15 +1806,11 @@ def test_optional_feedback_with_inputs_collects_both_and_submits(
     pending_actions.add(prefix, action)
 
     with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
         patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.answer_callback_query"
-        ),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.telegram_client.edit_message_reply_markup"
-        ),
-        patch("sase_telegram.scripts.sase_tg_inbound.telegram_client.send_message"),
-        patch(
-            "sase_telegram.scripts.sase_tg_inbound.credentials.get_chat_id",
+            "inbound_namespace.INBOUND.credentials.get_chat_id",
             return_value="chat-1",
         ),
     ):

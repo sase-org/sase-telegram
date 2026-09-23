@@ -72,8 +72,8 @@ pdf_convert.py
   updates cannot mix old extension bindings with new Python. Re-exec preserves the
   single `getUpdates` consumer; offset handoff stays lossless because the offset
   advances only after a successful or explicitly skipped dispatch.
-- **Pure logic separation**: `inbound.py` contains no API calls — all logic is independently testable. The entry point
-  script handles I/O and wiring.
+- **Pure logic separation**: `inbound.py` contains no API calls — all logic is independently testable. The Telegram
+  update handlers live in `inbound_handlers/` and the entry point script only wires the run modes.
 - **High-water mark**: The outbound process tracks the timestamp of the last sent notification rather than individual
   notification IDs. It is initialized to "now" on first run to avoid dumping historical backlog, then advanced after
   each successful send.
