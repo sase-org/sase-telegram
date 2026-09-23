@@ -2904,6 +2904,48 @@ class TestBuildPhotoPrompt:
         assert "respond to the user's request" in result
 
 
+@pytest.fixture()
+def _fake_tag_catalog():
+    """Warm the tag-catalog seams with a fake single-project catalog.
+
+    Routes catalog loads at a fake ``sase`` target (real core bindings, so
+    tag grammar and casefold resolution are genuine), warms the peek
+    snapshot the display humanizer reads, and provides a non-empty display
+    map so the humanizer reaches tagify. Uses the ``git`` workflow because
+    that is the workspace provider sase core ships itself. Everything is
+    restored afterwards so the cold-catalog ``#`` assertions elsewhere keep
+    passing.
+    """
+    import sase.project_display_names as display_names_module
+    import sase.project_tags.catalog as tag_catalog_module
+    from sase.project_tags.catalog import ProjectTagCatalog, ProjectTagTarget
+
+    fake = ProjectTagCatalog(
+        targets=(
+            ProjectTagTarget(
+                key="sase",
+                name="sase",
+                tag="+sase",
+                workflow_type="git",
+                vcs_ref="#git:sase",
+                provider_display="Git (bare)",
+                state="enabled",
+            ),
+        ),
+        accent_palette=(),
+    )
+    with (
+        patch.object(tag_catalog_module, "load_project_tag_catalog", return_value=fake),
+        patch.object(tag_catalog_module, "peek_project_tag_catalog", return_value=fake),
+        patch.object(
+            display_names_module,
+            "_project_display_name_map_cached",
+            return_value={"sase": "sase"},
+        ),
+    ):
+        yield fake
+
+
 class TestBeadProjectContext:
     """Tests for resolving the project context used by /bead."""
 
@@ -2920,6 +2962,64 @@ class TestBeadProjectContext:
         assert _extract_project_from_prompt("#sase__research #gh:zorg Fix") == "zorg"
         assert _extract_project_from_prompt("#gh:@foo Continue work") is None
         assert _extract_project_from_prompt("plain prompt") is None
+
+    def test_extract_project_from_tag_prompt(self, _fake_tag_catalog) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt
+
+        assert _extract_project_from_prompt("+sase Fix the bug") == "sase"
+        # Mobile keyboards auto-capitalize: resolution is case-insensitive.
+        assert _extract_project_from_prompt("+Sase Fix the bug") == "sase"
+        assert _extract_project_from_prompt("%i:a +Sase Fix the bug") == "sase"
+        # Unknown tags stay plain text; ``#`` reads still apply behind them.
+        assert _extract_project_from_prompt("+unknown Fix the bug") is None
+        assert _extract_project_from_prompt("+unknown #git:zorg Fix the bug") == "zorg"
+
+    def test_records_project_context_for_tag_prompt(
+        self, _fake_tag_catalog, tmp_path: Path
+    ) -> None:
+        from sase_telegram.scripts import sase_tg_inbound as inbound
+
+        workspace = tmp_path / "sase"
+        workspace.mkdir()
+        context_path = tmp_path / "project_context.json"
+        message = SimpleNamespace(chat=SimpleNamespace(id=12345))
+
+        with (
+            patch.object(inbound, "_PROJECT_CONTEXT_PATH", context_path),
+            patch.object(inbound.time, "time", return_value=1777770889.0),
+            patch.object(
+                inbound, "_resolve_workspace_for_project", return_value=str(workspace)
+            ) as resolve_workspace,
+        ):
+            inbound._record_project_context("+Sase Fix the bug", message)
+
+        resolve_workspace.assert_called_once_with("sase", "launch_prompt")
+        payload = json.loads(context_path.read_text())
+        assert payload == {
+            "12345": {
+                "project": "sase",
+                "workspace": str(workspace),
+                "updated_at": 1777770889.0,
+                "source": "launch_prompt",
+            }
+        }
+
+    def test_fork_wait_copy_text_uses_tag_form(self, _fake_tag_catalog) -> None:
+        from sase_telegram.scripts.sase_tg_inbound import (
+            _build_agent_action_keyboard,
+        )
+
+        keyboard = _build_agent_action_keyboard(
+            "foo",
+            prompt_for_vcs="+Sase Fix the bug",
+            retry_source_prompt=None,
+            include_kill=False,
+        )
+        buttons = keyboard.inline_keyboard
+        assert buttons[0][0].text == "🍴 Fork"
+        assert buttons[0][0].copy_text.text == "+sase #fork:foo "
+        assert buttons[0][1].text == "⏳ Wait"
+        assert buttons[0][1].copy_text.text == "+sase %w:foo "
 
     def test_extract_project_from_wrapped_image_prompt(self, tmp_path: Path) -> None:
         from sase_telegram.scripts.sase_tg_inbound import _extract_project_from_prompt

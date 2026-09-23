@@ -187,9 +187,9 @@ def build_fork_copy_text(
     resolved_vcs_tag = vcs_tag if isinstance(vcs_tag, str) and vcs_tag.strip() else ""
 
     if isinstance(prompt, str) and prompt:
-        from sase.xprompt import extract_vcs_workflow_tag
+        from sase.project_tags import effective_vcs_workflow_tag
 
-        resolved_vcs_tag = extract_vcs_workflow_tag(prompt) or resolved_vcs_tag
+        resolved_vcs_tag = effective_vcs_workflow_tag(prompt) or resolved_vcs_tag
 
     if resolved_vcs_tag:
         from sase.xprompt import replace_ref_in_vcs_tag

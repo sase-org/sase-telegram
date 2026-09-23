@@ -6,6 +6,9 @@ import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from sase.notifications.models import Notification
 import sase_telegram.formatting as formatting
@@ -124,6 +127,51 @@ class TestDisplayHumanizers:
 
 
 class TestBuildForkCopyText:
+    @pytest.fixture()
+    def _fake_tag_catalog(self):
+        """Warm the tag-catalog seams with a fake single-project catalog.
+
+        Routes catalog loads at a fake ``sase`` target (real core bindings,
+        so tag grammar and casefold resolution are genuine), warms the peek
+        snapshot the display humanizer reads, and provides a non-empty
+        display map so the humanizer reaches tagify. Uses the ``git``
+        workflow because that is the workspace provider sase core ships
+        itself. Everything is restored afterwards so the cold-catalog ``#``
+        assertions elsewhere keep passing.
+        """
+        import sase.project_display_names as display_names_module
+        import sase.project_tags.catalog as tag_catalog_module
+        from sase.project_tags.catalog import ProjectTagCatalog, ProjectTagTarget
+
+        fake = ProjectTagCatalog(
+            targets=(
+                ProjectTagTarget(
+                    key="sase",
+                    name="sase",
+                    tag="+sase",
+                    workflow_type="git",
+                    vcs_ref="#git:sase",
+                    provider_display="Git (bare)",
+                    state="enabled",
+                ),
+            ),
+            accent_palette=(),
+        )
+        with (
+            patch.object(
+                tag_catalog_module, "load_project_tag_catalog", return_value=fake
+            ),
+            patch.object(
+                tag_catalog_module, "peek_project_tag_catalog", return_value=fake
+            ),
+            patch.object(
+                display_names_module,
+                "_project_display_name_map_cached",
+                return_value={"sase": "sase"},
+            ),
+        ):
+            yield fake
+
     def test_returns_none_without_agent_name(self) -> None:
         assert build_fork_copy_text(None) is None
         assert build_fork_copy_text("  ") is None
@@ -150,6 +198,12 @@ class TestBuildForkCopyText:
                 cl_name="actual_cl",
             )
             == "#gh:actual_cl #fork:plan.agent "
+        )
+
+    def test_tag_prompt_renders_tag_form(self, _fake_tag_catalog) -> None:
+        assert (
+            build_fork_copy_text("plan.agent", prompt="+Sase Fix the bug")
+            == "+sase #fork:plan.agent "
         )
 
 

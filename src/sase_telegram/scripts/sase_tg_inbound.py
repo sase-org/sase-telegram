@@ -325,14 +325,8 @@ def _telegram_agent_launches_disabled() -> bool:
     return _LAUNCH_AGENTS_DISABLED_ENV in os.environ
 
 
-def _extract_project_from_prompt(prompt: str) -> str | None:
-    """Extract a project name from the first VCS workflow tag in *prompt*."""
-    text = normalize_launch_xprompt_at_refs(prompt).lstrip()
-    directive_match = _DIRECTIVE_PREFIX_RE.match(text)
-    if directive_match:
-        text = text[directive_match.end() :]
-
-    match = _VCS_PROJECT_RE.search(text)
+def _project_from_vcs_match(match: re.Match[str] | None) -> str | None:
+    """Return the project ref carried by a VCS tag regex match."""
     if not match:
         return None
 
@@ -340,6 +334,30 @@ def _extract_project_from_prompt(prompt: str) -> str | None:
     if not project or project.startswith("@"):
         return None
     return project
+
+
+def _extract_project_from_prompt(prompt: str) -> str | None:
+    """Extract a project name from the first VCS workflow tag in *prompt*."""
+    text = normalize_launch_xprompt_at_refs(prompt).lstrip()
+    directive_match = _DIRECTIVE_PREFIX_RE.match(text)
+    if directive_match:
+        text = text[directive_match.end() :]
+
+    # Tag-aware read: a leading ``+<project>`` tag expands to its canonical
+    # VCS ref first, so mobile prompts like ``+Sase …`` resolve. Falls back
+    # to the legacy ``#`` scan for non-leading tags and ``#``-only spellings.
+    try:
+        from sase.project_tags import effective_vcs_workflow_tag
+
+        vcs_tag = effective_vcs_workflow_tag(text)
+    except Exception:
+        vcs_tag = None
+    if vcs_tag:
+        project = _project_from_vcs_match(_VCS_PROJECT_RE.search(vcs_tag))
+        if project:
+            return project
+
+    return _project_from_vcs_match(_VCS_PROJECT_RE.search(text))
 
 
 def _message_chat_id(message: Any | None) -> str | None:
@@ -2555,9 +2573,10 @@ def _launch_provider_model_label(directives: Any | None) -> str:
 def _agent_vcs_prefix(prompt: str | None, agent_name: str) -> str:
     if not prompt:
         return ""
-    from sase.xprompt import extract_vcs_workflow_tag, replace_ref_in_vcs_tag
+    from sase.project_tags import effective_vcs_workflow_tag
+    from sase.xprompt import replace_ref_in_vcs_tag
 
-    vcs_tag = extract_vcs_workflow_tag(prompt)
+    vcs_tag = effective_vcs_workflow_tag(prompt)
     if not vcs_tag:
         return ""
     if _prompt_has_pr_xprompt(prompt):
@@ -3742,7 +3761,7 @@ def _handle_show_callback(callback_query: Any, selection_key: str, choice: str) 
 def _handle_fork_command() -> None:
     """Handle /fork — show copy buttons to fork currently-running agents."""
     from sase.agent.running import list_running_agents
-    from sase.xprompt import extract_vcs_workflow_tag
+    from sase.project_tags import effective_vcs_workflow_tag
 
     chat_id = credentials.get_chat_id()
 
@@ -3756,7 +3775,7 @@ def _handle_fork_command() -> None:
     for a, name in named_agents:
         vcs_prefix = ""
         if a.prompt:
-            vcs_tag = extract_vcs_workflow_tag(a.prompt)
+            vcs_tag = effective_vcs_workflow_tag(a.prompt)
             if vcs_tag:
                 vcs_prefix = display_vcs_refs_in_text(vcs_tag)
         # #fork:<name> implies %w:<name>; no explicit wait directive needed.

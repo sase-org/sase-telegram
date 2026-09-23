@@ -190,12 +190,15 @@ or file download, so disabled hosts do not call Telegram's file API or create lo
 When a text message or photo triggers an agent launch:
 
 - **XPrompt expansion**: References like `#mentor` or `#gh(...)` in the message are expanded
-- **VCS shorthand**: Telegram launch prompts can use `#gh@sase`; it is normalized to `#gh:sase` before launch
+- **Project tags**: Telegram launch prompts target a project with `+<project>` (for example `+sase`), resolved
+  case-insensitively just like every other SASE surface. The `#gh:`/`#git:` spellings keep working unchanged
+- **VCS shorthand**: Telegram launch prompts can use `#gh@<patch>` for Patch refs; it is normalized to `#gh:<patch>`
+  before launch
 - **Multi-model directives**: `%{%m:opus | %m:sonnet}` launches the prompt across multiple models
 - **Auto-naming**: Agents launched from Telegram are automatically assigned names
 - **Code reconstruction**: Telegram strips backtick formatting from messages; `reconstruct_code_markers()` re-inserts
   them using Telegram's entity metadata
-- **Project context**: If the launch prompt contains a VCS project tag like `#gh:sase`, the bot remembers that
+- **Project context**: If the launch prompt names a project (`+sase` or `#gh:sase`), the bot remembers that
   chat-scoped project in `~/.sase/telegram/project_context.json` for later `/bead` commands
 - **Launch confirmation**: A message is sent back with Fork and Wait copy-text buttons, plus Kill and Retry controls
 
