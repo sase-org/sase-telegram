@@ -83,3 +83,20 @@ def _no_service_owned_receiver(monkeypatch: pytest.MonkeyPatch) -> None:
         "sase.service.config.load_service_config",
         lambda: SimpleNamespace(get=lambda _name: None),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git_remote_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite off the network: no test may run ``ssh -T git@github.com``.
+
+    sase's plan-gate preflight (``preflight_plan_archive_credential``) asks the
+    git remote whether this host's credential works before accepting a plan
+    approval that selects ``commit``. On CI runners without an SSH key that
+    answers ``denied`` and refuses the answer, while developer machines answer
+    ``ok``. Consumers resolve ``probe_git_remote_auth`` through its module at
+    call time, so answering ``unknown`` (never a refusal) here makes every test
+    hermetic.
+    """
+    monkeypatch.setattr(
+        "sase.service.ssh_agent.probe_git_remote_auth", lambda _env: "unknown"
+    )

@@ -19,6 +19,7 @@ confirm the submission is built correctly, not re-verify settlement.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -28,8 +29,8 @@ import pytest
 from sase.axe.run_agent_helpers_artifacts import update_meta_field
 from sase.gate_shell.member import create_gate_shell_member
 from sase.notification_gates.model_shell import GateShellSpec
+from sase.notification_gates.models import GateError, GateSpec
 from sase.notification_gates.service import create_gate
-from sase.notification_gates.models import GateError
 from sase_telegram import inbound
 
 from .test_custom_gates import gate_home
@@ -41,7 +42,7 @@ _ECHO_COMMAND = (
 )
 
 
-def _spec(request_id: str, *, shell: bool) -> dict[str, Any]:
+def _spec(request_id: str, *, shell: bool) -> dict[str, Any] | GateSpec:
     spec: dict[str, Any] = {
         "schema_version": 3,
         "request_id": request_id,
@@ -64,6 +65,10 @@ def _spec(request_id: str, *, shell: bool) -> dict[str, Any]:
     }
     if shell:
         spec["shell"] = {}
+        # This test establishes the gate-shell row itself with
+        # ``_make_gate_shell_member``: mark the spec the way the production
+        # transaction does so the shell-row guard accepts the setup.
+        return replace(GateSpec.from_mapping(spec), shell_row_managed=True)
     return spec
 
 
