@@ -16,7 +16,7 @@ from sase_telegram.show_entities import (
 from sase_telegram.show_format import (
     format_agent_show,
     format_clan_show,
-    format_family_show,
+    format_agent_session_show,
     format_show_index,
     format_show_not_found,
     format_tribe_show,
@@ -30,7 +30,7 @@ def _entry(
     bucket: str = "Running",
     terminal: bool = False,
     clan: str | None = None,
-    family: str | None = None,
+    session: str | None = None,
     role: str | None = None,
     tribe: str | None = None,
     activity: str | None = None,
@@ -61,8 +61,8 @@ def _entry(
         agent_clan_generation="generation-12345678" if clan else None,
         clan_tribe=tribe if clan else None,
         tribe=tribe,
-        agent_family=family,
-        agent_family_role=role,
+        agent_session=session,
+        agent_session_role=role,
         parent_agent_name="parent" if name == "<alpha>&" else None,
         wait=SimpleNamespace(has_wait=False),
         retry=SimpleNamespace(has_retry=False, retry_attempt=None),
@@ -114,7 +114,7 @@ def test_agent_view_escapes_html_and_includes_kinship_rows_and_jumps() -> None:
     entry = _entry(
         "<alpha>&",
         clan="review",
-        family="migrate",
+        session="migrate",
         role="planner",
         tribe="perf",
         prompt="Do <work>&",
@@ -133,13 +133,13 @@ def test_agent_view_escapes_html_and_includes_kinship_rows_and_jumps() -> None:
     assert "&lt;alpha&gt;&amp;" in text
     assert "Clan" in text and "⛺ review · gen 12345678" in text
     assert "Tribe" in text and "@perf" in text
-    assert "Family" in text and "migrate · planner" in text
+    assert "Session" in text and "migrate · planner" in text
     assert "Parent" in text and "Children" in text
     assert "Do &lt;work&gt;&amp;" in text
     assert "/show @&lt;alpha&gt;&amp;" in text
     assert [button.label for button in view.button_rows[0]] == [
         "⛺ Clan",
-        "🧬 Family",
+        "🧬 Session",
     ]
 
 
@@ -220,7 +220,7 @@ def test_incomplete_large_clan_omits_fork_and_chunks_with_explicit_truncation() 
     assert len(pack_html_blocks(list(view.blocks))) > 1
 
 
-def test_family_view_marks_active_member_and_shows_activity_prompt_and_outcome() -> (
+def test_session_view_marks_active_member_and_shows_activity_prompt_and_outcome() -> (
     None
 ):
     members = (
@@ -230,17 +230,17 @@ def test_family_view_marks_active_member_and_shows_activity_prompt_and_outcome()
     )
     active = _entry(
         "migrate--coder",
-        family="migrate",
+        session="migrate",
         role="coder",
         activity="writing tests",
         prompt="Implement the migration",
     )
-    family = SimpleNamespace(base_name="migrate", members=members)
-    view = format_family_show(
+    agent_session = SimpleNamespace(base_name="migrate", members=members)
+    view = format_agent_session_show(
         ShowTarget(
-            kind="family",
+            kind="session",
             name="migrate",
-            family=family,
+            agent_session=agent_session,
             entries=(active,),
         )
     )
@@ -253,11 +253,11 @@ def test_family_view_marks_active_member_and_shows_activity_prompt_and_outcome()
     assert "<blockquote>Implement the migration</blockquote>" in text
 
 
-def test_tribe_view_groups_clans_families_and_standalone_agents() -> None:
+def test_tribe_view_groups_clans_sessions_and_standalone_agents() -> None:
     entries = (
         _entry("review.a", clan="review", tribe="perf", terminal=True),
         _entry("review.b", clan="review", tribe="perf"),
-        _entry("migrate--one", family="migrate", tribe="perf"),
+        _entry("migrate--one", session="migrate", tribe="perf"),
         _entry("solo", tribe="perf"),
     )
     view = format_tribe_show(ShowTarget(kind="tribe", name="perf", entries=entries))
@@ -273,7 +273,7 @@ def test_tribe_view_groups_clans_families_and_standalone_agents() -> None:
 def test_index_and_not_found_views_produce_mobile_open_specs() -> None:
     index = KinshipIndex(
         clans=(KinshipIndexItem("clan", "review", "review", 2, 1),),
-        families=(KinshipIndexItem("family", "migrate", "migrate", 3, 3),),
+        agent_sessions=(KinshipIndexItem("session", "migrate", "migrate", 3, 3),),
         tribes=(KinshipIndexItem("tribe", "perf", "@perf", 5, 2),),
     )
     index_view = format_show_index(index)

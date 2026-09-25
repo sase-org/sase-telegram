@@ -3,7 +3,7 @@
 Regression coverage for the gap R6 of sase's ``gate-fork-cli`` phase found:
 ``inbound.resolve_gate_response`` called the shared executor directly with no
 awareness of gate shells at all, so a shell gate answered from Telegram was
-answered (``response.json`` written) but its family member stayed pending
+answered (``response.json`` written) but its session member stayed pending
 forever and its recorded follow-up never launched.
 
 sase-zr.4 fixed this at the root, not by teaching Telegram more about gate
@@ -79,7 +79,7 @@ def _make_gate_shell_member(request_id: str, bundle_path: Path) -> str:
     )
     artifacts_dir = create_gate_shell_member(
         "proj",
-        {"name": "lane--0", "agent_family": "lane", "model": "gpt-5"},
+        {"name": "lane--0", "agent_session": "lane", "model": "gpt-5"},
         lane="lane",
         suffix="--gate",
         prev_artifacts_timestamp="20260812120000",

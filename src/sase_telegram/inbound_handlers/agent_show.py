@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 
 def _handle_show_command(args: str = "", message: Any | None = None) -> None:
-    """Handle ``/show`` for agents, clans, families, tribes, and the index."""
+    """Handle ``/show`` for agents, clans, sessions, tribes, and the index."""
     chat_id = _message_chat_id(message) or credentials.get_chat_id()
     try:
         entries = _load_list_entries()

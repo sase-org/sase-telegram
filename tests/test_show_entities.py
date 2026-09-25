@@ -12,6 +12,8 @@ from sase_telegram.show_entities import (
     ClanAttributes,
     InvalidShowReference,
     ShowNotFound,
+    _default_find_agent_session,
+    _entry_agent_session_attr,
     build_kinship_index,
     resolve_clan_attributes,
     resolve_show_reference,
@@ -23,7 +25,7 @@ def _entry(
     *,
     tribe: str | None = None,
     clan: str | None = None,
-    family: str | None = None,
+    session: str | None = None,
     terminal: bool = False,
 ) -> SimpleNamespace:
     return SimpleNamespace(
@@ -31,7 +33,7 @@ def _entry(
         tribe=tribe,
         agent_clan=clan,
         agent_clan_generation="gen-1" if clan else None,
-        agent_family=family,
+        agent_session=session,
         is_terminal=terminal,
         status_bucket="Done" if terminal else "Running",
     )
@@ -46,7 +48,7 @@ def _lookups() -> tuple[MagicMock, MagicMock, MagicMock]:
 
 
 def test_forced_tribe_is_casefolded_and_bypasses_other_lookups() -> None:
-    find_agent, find_clan, find_family = _lookups()
+    find_agent, find_clan, find_agent_session = _lookups()
     entries = [_entry("alpha", tribe="Perf")]
 
     target = resolve_show_reference(
@@ -54,7 +56,7 @@ def test_forced_tribe_is_casefolded_and_bypasses_other_lookups() -> None:
         entries,
         find_agent=find_agent,
         find_clan=find_clan,
-        find_family=find_family,
+        find_agent_session=find_agent_session,
     )
 
     assert target.kind == "tribe"
@@ -62,7 +64,7 @@ def test_forced_tribe_is_casefolded_and_bypasses_other_lookups() -> None:
     assert target.entries == tuple(entries)
     find_agent.assert_not_called()
     find_clan.assert_not_called()
-    find_family.assert_not_called()
+    find_agent_session.assert_not_called()
 
 
 def test_invalid_forced_tribe_raises_friendly_domain_error() -> None:
@@ -79,7 +81,7 @@ def test_exact_agent_wins_and_detects_also_a_tribe() -> None:
         [entry],
         find_agent=lambda _name: named,
         find_clan=lambda _name: SimpleNamespace(name="review"),
-        find_family=lambda _name: SimpleNamespace(base_name="review"),
+        find_agent_session=lambda _name: SimpleNamespace(base_name="review"),
     )
 
     assert target.kind == "agent"
@@ -88,7 +90,7 @@ def test_exact_agent_wins_and_detects_also_a_tribe() -> None:
     assert target.also_tribe is True
 
 
-def test_exact_entry_fallback_resolves_clan_and_family_members_as_agents() -> None:
+def test_exact_entry_fallback_resolves_clan_and_session_members_as_agents() -> None:
     for name in ("review.worker", "migrate--planner"):
         entry = _entry(name)
         target = resolve_show_reference(
@@ -96,21 +98,21 @@ def test_exact_entry_fallback_resolves_clan_and_family_members_as_agents() -> No
             [entry],
             find_agent=lambda _name: None,
             find_clan=lambda _name: None,
-            find_family=lambda _name: None,
+            find_agent_session=lambda _name: None,
         )
         assert target.kind == "agent"
         assert target.entry is entry
 
 
-def test_clan_then_family_precedence() -> None:
+def test_clan_then_session_precedence() -> None:
     clan = SimpleNamespace(name="review", generation="g", members=())
-    family_lookup = MagicMock(return_value=SimpleNamespace(base_name="review"))
+    session_lookup = MagicMock(return_value=SimpleNamespace(base_name="review"))
     target = resolve_show_reference(
         "review",
         [],
         find_agent=lambda _name: None,
         find_clan=lambda _name: clan,
-        find_family=family_lookup,
+        find_agent_session=session_lookup,
         clan_attribute_resolver=lambda _clan: ClanAttributes(
             tribe="perf", summary="Audit the hot path"
         ),
@@ -120,18 +122,18 @@ def test_clan_then_family_precedence() -> None:
     assert target.clan is clan
     assert target.clan_tribe == "perf"
     assert target.clan_summary == "Audit the hot path"
-    family_lookup.assert_not_called()
+    session_lookup.assert_not_called()
 
-    family = SimpleNamespace(base_name="migrate", members=())
+    agent_session = SimpleNamespace(base_name="migrate", members=())
     target = resolve_show_reference(
         "migrate",
         [],
         find_agent=lambda _name: None,
         find_clan=lambda _name: None,
-        find_family=lambda _name: family,
+        find_agent_session=lambda _name: agent_session,
     )
-    assert target.kind == "family"
-    assert target.family is family
+    assert target.kind == "session"
+    assert target.agent_session is agent_session
 
 
 def test_bare_known_tribe_resolves_after_group_lookups() -> None:
@@ -141,7 +143,7 @@ def test_bare_known_tribe_resolves_after_group_lookups() -> None:
         [entry],
         find_agent=lambda _name: None,
         find_clan=lambda _name: None,
-        find_family=lambda _name: None,
+        find_agent_session=lambda _name: None,
     )
     assert target.kind == "tribe"
     assert target.name == "Perf"
@@ -150,21 +152,21 @@ def test_bare_known_tribe_resolves_after_group_lookups() -> None:
 def test_not_found_suggestions_cover_each_kind_and_are_limited() -> None:
     entries = [
         _entry("review.worker", clan="review", tribe="reviewers"),
-        _entry("review--planner", family="review-flow"),
+        _entry("review--planner", session="review-flow"),
     ]
     result = resolve_show_reference(
         "rev",
         entries,
         find_agent=lambda _name: None,
         find_clan=lambda _name: None,
-        find_family=lambda _name: None,
+        find_agent_session=lambda _name: None,
     )
 
     assert isinstance(result, ShowNotFound)
     assert {suggestion.kind for suggestion in result.suggestions} == {
         "agent",
         "clan",
-        "family",
+        "session",
         "tribe",
     }
     assert len(result.suggestions) <= 6
@@ -174,7 +176,7 @@ def test_kinship_index_counts_unique_members_and_progress() -> None:
     entries = [
         _entry("review.a", clan="review", tribe="perf", terminal=True),
         _entry("review.b", clan="review", tribe="perf"),
-        _entry("migrate--one", family="migrate", tribe="perf", terminal=True),
+        _entry("migrate--one", session="migrate", tribe="perf", terminal=True),
     ]
 
     index = build_kinship_index(entries)
@@ -182,7 +184,7 @@ def test_kinship_index_counts_unique_members_and_progress() -> None:
     assert [
         (item.name, item.member_count, item.done_count) for item in index.clans
     ] == [("review", 2, 1)]
-    assert [item.name for item in index.families] == ["migrate"]
+    assert [item.name for item in index.agent_sessions] == ["migrate"]
     assert [
         (item.name, item.member_count, item.done_count) for item in index.tribes
     ] == [("perf", 3, 2)]
@@ -223,3 +225,36 @@ def test_clan_attribute_wiring_uses_member_metadata() -> None:
     )
 
     assert result == ClanAttributes(tribe="perf", summary="Find regressions")
+
+
+def test_default_agent_session_lookup_delegates_to_installed_sase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default /show session lookup must bind to the installed sase."""
+    import sase.agent.names as names
+
+    if not hasattr(names, "find_agent_session"):
+        pytest.skip("installed sase predates the agent-session rename")
+    sentinel = SimpleNamespace(base_name="migrate")
+    monkeypatch.setattr(names, "find_agent_session", lambda _name: sentinel)
+    assert _default_find_agent_session("migrate") is sentinel
+
+
+def test_default_agent_session_lookup_raises_instead_of_silently_disabling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without any sase session lookup, /show must fail loudly, not miss."""
+    import sase.agent.names as names
+
+    monkeypatch.delattr(names, "find_agent_session", raising=False)
+    monkeypatch.delattr(names, "find_agent_family", raising=False)
+    with pytest.raises(ImportError):
+        _default_find_agent_session("migrate")
+
+
+def test_legacy_agent_family_entry_still_indexes_and_suggests() -> None:
+    """Entries from a pre-rename sase keep resolving through the one helper."""
+    legacy = SimpleNamespace(name="migrate--one", agent_family="migrate")
+    assert _entry_agent_session_attr(legacy, "agent_session") == "migrate"
+    index = build_kinship_index([legacy])
+    assert [item.name for item in index.agent_sessions] == ["migrate"]

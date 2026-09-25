@@ -16,6 +16,7 @@ from sase_telegram.formatting import (
     display_cl_names_in_text,
     display_project_name,
 )
+from sase_telegram.show_entities import _entry_agent_session_attr
 
 HTML_CHUNK_LIMIT = 3900
 
@@ -186,12 +187,12 @@ def entry_context_parts(entry: Any) -> list[str]:
     parent_agent_name = getattr(entry, "parent_agent_name", None)
     if isinstance(parent_agent_name, str) and parent_agent_name:
         parts.append(f"fork of {display_cl_name(parent_agent_name)}")
-    agent_family = getattr(entry, "agent_family", None)
-    agent_family_role = getattr(entry, "agent_family_role", None)
-    if isinstance(agent_family, str) and agent_family:
-        label = f"family {display_cl_name(agent_family)}"
-        if isinstance(agent_family_role, str) and agent_family_role:
-            label += f"·{agent_family_role}"
+    agent_session = _entry_agent_session_attr(entry, "agent_session")
+    agent_session_role = _entry_agent_session_attr(entry, "agent_session_role")
+    if isinstance(agent_session, str) and agent_session:
+        label = f"session {display_cl_name(agent_session)}"
+        if isinstance(agent_session_role, str) and agent_session_role:
+            label += f"·{agent_session_role}"
         parts.append(label)
     retry = getattr(entry, "retry", None)
     retry_attempt = getattr(retry, "retry_attempt", None)
@@ -309,13 +310,13 @@ def _append_kinship_rows(rows: list[tuple[str, str]], entry: Any) -> None:
     if isinstance(tribe, str) and tribe:
         _append_row(rows, "Tribe", f"@{tribe}")
 
-    family = getattr(entry, "agent_family", None)
-    if isinstance(family, str) and family:
-        value = display_cl_name(family)
-        role = getattr(entry, "agent_family_role", None)
+    agent_session = _entry_agent_session_attr(entry, "agent_session")
+    if isinstance(agent_session, str) and agent_session:
+        value = display_cl_name(agent_session)
+        role = _entry_agent_session_attr(entry, "agent_session_role")
         if isinstance(role, str) and role:
             value += f" · {role}"
-        _append_row(rows, "Family", value)
+        _append_row(rows, "Session", value)
 
     parent = getattr(entry, "parent_agent_name", None)
     if isinstance(parent, str) and parent:

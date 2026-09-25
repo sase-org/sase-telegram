@@ -10,8 +10,13 @@ import re
 from typing import Any, Literal
 
 
-ShowKind = Literal["agent", "clan", "family", "tribe"]
+ShowKind = Literal["agent", "clan", "session", "tribe"]
 _TRIBE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+_LEGACY_AGENT_FAMILY_ATTRS = {
+    "agent_session": "agent_family",
+    "agent_session_role": "agent_family_role",
+}
 
 
 class InvalidShowReference(ValueError):
@@ -37,7 +42,7 @@ class ShowTarget:
     entry: Any | None = None
     named_agent: Any | None = None
     clan: Any | None = None
-    family: Any | None = None
+    agent_session: Any | None = None
     clan_tribe: str | None = None
     clan_summary: str | None = None
     also_tribe: bool = False
@@ -53,7 +58,7 @@ class ShowNotFound:
 
 @dataclass(frozen=True)
 class KinshipIndexItem:
-    kind: Literal["clan", "family", "tribe"]
+    kind: Literal["clan", "session", "tribe"]
     name: str
     ref: str
     member_count: int
@@ -63,7 +68,7 @@ class KinshipIndexItem:
 @dataclass(frozen=True)
 class KinshipIndex:
     clans: tuple[KinshipIndexItem, ...] = ()
-    families: tuple[KinshipIndexItem, ...] = ()
+    agent_sessions: tuple[KinshipIndexItem, ...] = ()
     tribes: tuple[KinshipIndexItem, ...] = ()
 
 
@@ -83,10 +88,10 @@ def resolve_show_reference(
     *,
     find_agent: AgentLookup | None = None,
     find_clan: AgentLookup | None = None,
-    find_family: AgentLookup | None = None,
+    find_agent_session: AgentLookup | None = None,
     clan_attribute_resolver: Callable[[Any], ClanAttributes] | None = None,
 ) -> ShowTarget | ShowNotFound:
-    """Resolve *ref* with agent > clan > family > bare-tribe precedence."""
+    """Resolve *ref* with agent > clan > session > bare-tribe precedence."""
     query = ref.strip()
     all_entries = tuple(entries)
     if not query:
@@ -106,7 +111,7 @@ def resolve_show_reference(
 
     find_agent = find_agent or _default_find_agent
     find_clan = find_clan or _default_find_clan
-    find_family = find_family or _default_find_family
+    find_agent_session = find_agent_session or _default_find_agent_session
 
     exact_entry = next(
         (entry for entry in all_entries if getattr(entry, "name", None) == query),
@@ -146,13 +151,13 @@ def resolve_show_reference(
             also_tribe=query.casefold() in known_tribes,
         )
 
-    family = find_family(query)
-    if family is not None:
+    agent_session = find_agent_session(query)
+    if agent_session is not None:
         return ShowTarget(
-            kind="family",
+            kind="session",
             name=query,
-            entries=_family_entries(family, all_entries),
-            family=family,
+            entries=_agent_session_entries(agent_session, all_entries),
+            agent_session=agent_session,
             also_tribe=query.casefold() in known_tribes,
         )
 
@@ -171,7 +176,7 @@ def build_kinship_index(entries: Iterable[Any]) -> KinshipIndex:
     all_entries = tuple(entries)
     return KinshipIndex(
         clans=_index_items("clan", all_entries, "agent_clan"),
-        families=_index_items("family", all_entries, "agent_family"),
+        agent_sessions=_index_items("session", all_entries, "agent_session"),
         tribes=_index_items("tribe", all_entries, "tribe"),
     )
 
@@ -198,9 +203,9 @@ def suggest_show_references(
         clan = getattr(entry, "agent_clan", None)
         if isinstance(clan, str) and clan:
             add("clan", clan, clan)
-        family = getattr(entry, "agent_family", None)
-        if isinstance(family, str) and family:
-            add("family", family, family)
+        agent_session = _entry_agent_session_attr(entry, "agent_session")
+        if isinstance(agent_session, str) and agent_session:
+            add("session", agent_session, agent_session)
         tribe = getattr(entry, "tribe", None)
         if isinstance(tribe, str) and tribe:
             add("tribe", tribe, f"@{tribe}")
@@ -316,12 +321,42 @@ def _default_find_clan(name: str) -> Any | None:
     return find_agent_clan(name)
 
 
-def _default_find_family(name: str) -> Any | None:
-    try:
-        from sase.agent.names import find_agent_family
-    except ImportError:
-        return None
-    return find_agent_family(name)
+def _entry_agent_session_attr(entry: Any, name: str) -> str | None:
+    """Read a renamed ``agent_session*`` entry attribute with legacy fallback.
+
+    The telegram ``sase>=`` floor predates the rename, so entries built by an
+    older installed sase still carry ``agent_family*`` attributes. This is the
+    only place that may read the legacy spellings.
+    """
+    value = getattr(entry, name, None)
+    if isinstance(value, str) and value:
+        return value
+    legacy_name = _LEGACY_AGENT_FAMILY_ATTRS[name]
+    legacy = getattr(entry, legacy_name, None)
+    if isinstance(legacy, str) and legacy:
+        return legacy
+    return None
+
+
+def _default_find_agent_session(name: str) -> Any | None:
+    """Resolve an agent session through the installed sase.
+
+    Prefers the renamed ``find_agent_session`` and falls back to the legacy
+    ``find_agent_family`` for sase floors that predate the rename. Raises
+    ImportError instead of returning None when neither exists, so a missing
+    import can no longer silently disable ``/show`` session resolution.
+    """
+    from sase.agent import names as _sase_names
+
+    find = getattr(_sase_names, "find_agent_session", None)
+    if find is None:
+        find = getattr(_sase_names, "find_agent_family", None)
+    if find is None:
+        raise ImportError(
+            "sase.agent.names provides neither find_agent_session nor "
+            "find_agent_family; cannot resolve /show agent sessions"
+        )
+    return find(name)
 
 
 def _read_json_dict(path: Path) -> Mapping[str, Any] | None:
@@ -403,29 +438,34 @@ def _clan_entries(clan: Any, entries: tuple[Any, ...]) -> tuple[Any, ...]:
     )
 
 
-def _family_entries(family: Any, entries: tuple[Any, ...]) -> tuple[Any, ...]:
+def _agent_session_entries(
+    agent_session: Any, entries: tuple[Any, ...]
+) -> tuple[Any, ...]:
     member_names = {
         getattr(member, "name", None)
-        for member in tuple(getattr(family, "members", ()) or ())
+        for member in tuple(getattr(agent_session, "members", ()) or ())
     }
-    base_name = getattr(family, "base_name", None)
+    base_name = getattr(agent_session, "base_name", None)
     return tuple(
         entry
         for entry in entries
         if getattr(entry, "name", None) in member_names
-        or getattr(entry, "agent_family", None) == base_name
+        or _entry_agent_session_attr(entry, "agent_session") == base_name
     )
 
 
 def _index_items(
-    kind: Literal["clan", "family", "tribe"],
+    kind: Literal["clan", "session", "tribe"],
     entries: tuple[Any, ...],
     attribute: str,
 ) -> tuple[KinshipIndexItem, ...]:
     grouped: dict[str, list[Any]] = {}
     canonical_names: dict[str, str] = {}
     for entry in entries:
-        value = getattr(entry, attribute, None)
+        if kind == "session":
+            value = _entry_agent_session_attr(entry, "agent_session")
+        else:
+            value = getattr(entry, attribute, None)
         if not isinstance(value, str) or not value:
             continue
         key = value.casefold() if kind == "tribe" else value

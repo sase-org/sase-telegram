@@ -1069,7 +1069,7 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
     result = create_launch_approval_request(
         {
             "schema_version": 1,
-            "prompt": "%i(telegram_launch, family=reviewer)\nReview this change",
+            "prompt": "%i(telegram_launch, session=reviewer)\nReview this change",
             "reason": "Verify the Telegram launch controls",
             "approval": "required",
             "max_slots": 1,

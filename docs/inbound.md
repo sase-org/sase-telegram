@@ -152,8 +152,8 @@ Text messages are dispatched in priority order:
    - `/list all` — Includes recently finished and failed agents
    - `/list <name>` — Shows a detail view for one agent with Fork/Wait/Kill/Retry buttons
    - `/list <project>` — Filters the overview to one project (agent names win when a name and project match)
-   - `/show` — Shows a mobile-friendly index of known clans, families, and tribes
-   - `/show <ref>` — Shows a rich detail view for an agent, clan, family, or tribe
+   - `/show` — Shows a mobile-friendly index of known clans, sessions, and tribes
+   - `/show <ref>` — Shows a rich detail view for an agent, clan, session, or tribe
    - `/show @<tribe>` — Forces tribe interpretation when a name is shared with another entity
    - `/kill` — Shows an inline keyboard of running agents with rich descriptions
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
@@ -245,15 +245,15 @@ fingerprint so deploys with command changes re-register immediately instead of w
 ## Agent Kinship Views
 
 `/show <ref>` resolves references in a deterministic order: an `@name` is always a tribe; otherwise an exact agent
-name wins, followed by a clan, a family, and finally a case-insensitive bare tribe name. Agent members such as
-`review.worker` and family members such as `migrate--planner` are ordinary exact agent names. If a non-tribe target
+name wins, followed by a clan, a session, and finally a case-insensitive bare tribe name. Agent members such as
+`review.worker` and session members such as `migrate--planner` are ordinary exact agent names. If a non-tribe target
 shares its name with a tribe, the response includes a `/show @name` hint. Unknown references offer up to six matching
-agent, clan, family, or tribe buttons.
+agent, clan, session, or tribe buttons.
 
-Agent views reuse `/list <name>` details and add Clan, Tribe, Family, Parent, and Children rows when available. Clan
-views show generation progress, an effective tribe and summary, status rollups, and member drill-downs. Family views
+Agent views reuse `/list <name>` details and add Clan, Tribe, Session, Parent, and Children rows when available. Clan
+views show generation progress, an effective tribe and summary, status rollups, and member drill-downs. Session views
 show the sequential launch chain, current phase activity, and the active prompt. Tribe views group effective members by
-clan, family, and standalone agent. Bare `/show` provides an index over every group represented by live or recent
+clan, session, and standalone agent. Bare `/show` provides an index over every group represented by live or recent
 entries.
 
 Every open or refresh button stores the full reference in `pending_actions.json` and puts only a short generated key in

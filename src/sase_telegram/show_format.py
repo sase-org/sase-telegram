@@ -24,6 +24,7 @@ from sase_telegram.show_entities import (
     KinshipIndexItem,
     ShowNotFound,
     ShowTarget,
+    _entry_agent_session_attr,
 )
 
 _DRILLDOWN_LIMIT = 12
@@ -52,8 +53,8 @@ def format_show_target(target: ShowTarget, *, prompt: str | None = None) -> Show
         return format_agent_show(target, prompt=prompt)
     if target.kind == "clan":
         return format_clan_show(target)
-    if target.kind == "family":
-        return format_family_show(target)
+    if target.kind == "session":
+        return format_agent_session_show(target)
     return format_tribe_show(target)
 
 
@@ -81,9 +82,9 @@ def format_agent_show(target: ShowTarget, *, prompt: str | None = None) -> ShowV
         clan = getattr(entry, "agent_clan", None)
         if isinstance(clan, str) and clan:
             jump_buttons.append(ShowButtonSpec("⛺ Clan", "open", clan))
-        family = getattr(entry, "agent_family", None)
-        if isinstance(family, str) and family:
-            jump_buttons.append(ShowButtonSpec("🧬 Family", "open", family))
+        agent_session = _entry_agent_session_attr(entry, "agent_session")
+        if isinstance(agent_session, str) and agent_session:
+            jump_buttons.append(ShowButtonSpec("🧬 Session", "open", agent_session))
     _append_also_tribe_hint(blocks, target)
     button_rows = (tuple(jump_buttons),) if jump_buttons else ()
     return ShowView(tuple(blocks), button_rows)
@@ -170,9 +171,9 @@ def format_clan_show(target: ShowTarget) -> ShowView:
     return ShowView(tuple(blocks), tuple(rows))
 
 
-def format_family_show(target: ShowTarget) -> ShowView:
-    family = target.family
-    members = tuple(getattr(family, "members", ()) or ())
+def format_agent_session_show(target: ShowTarget) -> ShowView:
+    agent_session = target.agent_session
+    members = tuple(getattr(agent_session, "members", ()) or ())
     done_count = sum(getattr(member, "outcome", None) is not None for member in members)
     successful = (
         all(
@@ -184,7 +185,7 @@ def format_family_show(target: ShowTarget) -> ShowView:
     )
     progress = "✓ complete" if successful else f"{done_count}/{len(members)} done"
     blocks = [
-        f"🧬 <b>{html_escape(display_cl_name(target.name))}</b> — family · "
+        f"🧬 <b>{html_escape(display_cl_name(target.name))}</b> — session · "
         f"{len(members)} members · {progress}"
     ]
     entries_by_name = _entries_by_name(target.entries)
@@ -205,7 +206,7 @@ def format_family_show(target: ShowTarget) -> ShowView:
         outcome = getattr(member, "outcome", None)
         if member is active_member:
             glyph = "▶"
-            status = _active_family_status(entry)
+            status = _active_agent_session_status(entry)
         elif outcome in {"completed", "done", "success"}:
             glyph = "✓"
             status = "done"
@@ -221,7 +222,11 @@ def format_family_show(target: ShowTarget) -> ShowView:
         parts = [
             f"{index}. {glyph} <b>{html_escape(display_cl_name(name))}</b>",
         ]
-        role = getattr(entry, "agent_family_role", None) if entry is not None else None
+        role = (
+            _entry_agent_session_attr(entry, "agent_session_role")
+            if entry is not None
+            else None
+        )
         if isinstance(role, str) and role:
             parts.append(html_escape(role))
         parts.append(html_escape(status))
@@ -271,18 +276,18 @@ def format_family_show(target: ShowTarget) -> ShowView:
 def format_tribe_show(target: ShowTarget) -> ShowView:
     entries = tuple(target.entries)
     clan_groups: dict[str, list[Any]] = {}
-    family_groups: dict[str, list[Any]] = {}
+    agent_session_groups: dict[str, list[Any]] = {}
     standalone: list[Any] = []
     for entry in entries:
         clan = getattr(entry, "agent_clan", None)
-        family = getattr(entry, "agent_family", None)
+        agent_session = _entry_agent_session_attr(entry, "agent_session")
         if isinstance(clan, str) and clan:
             clan_groups.setdefault(clan, []).append(entry)
-        elif isinstance(family, str) and family:
-            family_groups.setdefault(family, []).append(entry)
+        elif isinstance(agent_session, str) and agent_session:
+            agent_session_groups.setdefault(agent_session, []).append(entry)
         else:
             standalone.append(entry)
-    entity_count = len(clan_groups) + len(family_groups) + len(standalone)
+    entity_count = len(clan_groups) + len(agent_session_groups) + len(standalone)
     blocks = [
         f"🏷️ <b>@{html_escape(target.name)}</b> — tribe · "
         f"{entity_count} {_plural('entity', entity_count)} · "
@@ -303,10 +308,10 @@ def format_tribe_show(target: ShowTarget) -> ShowView:
                 f"⛺ <b>{html_escape(display_cl_name(name))}</b> · "
                 f"{done}/{len(unique)} done"
             )
-    if family_groups:
-        blocks.append("<b>Families</b>")
+    if agent_session_groups:
+        blocks.append("<b>Sessions</b>")
         for name, members in sorted(
-            family_groups.items(), key=lambda item: item[0].casefold()
+            agent_session_groups.items(), key=lambda item: item[0].casefold()
         ):
             unique = tuple(_entries_by_name(members).values())
             done = sum(_entry_is_done(entry) for entry in unique)
@@ -335,7 +340,7 @@ def format_tribe_show(target: ShowTarget) -> ShowView:
     ]
     buttons.extend(
         ShowButtonSpec(f"🧬 {display_cl_name(name)}", "open", name)
-        for name in sorted(family_groups, key=str.casefold)
+        for name in sorted(agent_session_groups, key=str.casefold)
     )
     buttons.extend(
         ShowButtonSpec(entry_display_name(entry), "open", str(entry.name))
@@ -356,7 +361,7 @@ def format_show_index(index: KinshipIndex) -> ShowView:
     all_items: list[KinshipIndexItem] = []
     for title, glyph, items in (
         ("Clans", "⛺", index.clans),
-        ("Families", "🧬", index.families),
+        ("Sessions", "🧬", index.agent_sessions),
         ("Tribes", "🏷️", index.tribes),
     ):
         if not items:
@@ -397,7 +402,7 @@ def format_show_index(index: KinshipIndex) -> ShowView:
 def format_show_not_found(not_found: ShowNotFound) -> ShowView:
     query = not_found.query or "(empty)"
     blocks = [
-        f"No agent, clan, family, or tribe named <code>{html_escape(query)}</code>."
+        f"No agent, clan, session, or tribe named <code>{html_escape(query)}</code>."
     ]
     if not_found.suggestions:
         blocks.append("Did you mean one of these?")
@@ -455,7 +460,7 @@ def _status_without_glyph(status: str) -> str:
     )
 
 
-def _active_family_status(entry: Any) -> str:
+def _active_agent_session_status(entry: Any) -> str:
     status = str(getattr(entry, "status", "") or "").strip()
     if status == "RUNNING":
         return "running"
@@ -469,13 +474,13 @@ def _index_progress(item: KinshipIndexItem) -> str:
 
 
 def _index_button_label(item: KinshipIndexItem) -> str:
-    glyph = {"clan": "⛺", "family": "🧬", "tribe": "🏷️"}[item.kind]
+    glyph = {"clan": "⛺", "session": "🧬", "tribe": "🏷️"}[item.kind]
     name = f"@{item.name}" if item.kind == "tribe" else display_cl_name(item.name)
     return f"{glyph} {name}"
 
 
 def _suggestion_label(kind: str, name: str) -> str:
-    glyph = {"agent": "🤖", "clan": "⛺", "family": "🧬", "tribe": "🏷️"}[kind]
+    glyph = {"agent": "🤖", "clan": "⛺", "session": "🧬", "tribe": "🏷️"}[kind]
     visible = f"@{name}" if kind == "tribe" else display_cl_name(name)
     return f"{glyph} {visible}"
 

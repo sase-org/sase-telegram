@@ -197,7 +197,7 @@ def _handle_command(
 _SLASH_COMMANDS = [
     ("kill", "Terminate a running agent"),
     ("list", "Show agents; supports all, name, or project"),
-    ("show", "Show an agent, clan, family, or tribe"),
+    ("show", "Show an agent, clan, session, or tribe"),
     ("fork", "Copy fork text for an agent"),
     ("changes", "Copy Patch workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),

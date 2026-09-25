@@ -3723,8 +3723,8 @@ def _list_entry(
     agent_clan: str | None = None,
     agent_clan_generation: str | None = None,
     clan_tribe: str | None = None,
-    agent_family: str | None = None,
-    agent_family_role: str | None = None,
+    agent_session: str | None = None,
+    agent_session_role: str | None = None,
     parent_agent_name: str | None = None,
 ) -> SimpleNamespace:
     wait_info = wait or SimpleNamespace(
@@ -3770,8 +3770,8 @@ def _list_entry(
         agent_clan=agent_clan,
         agent_clan_generation=agent_clan_generation,
         clan_tribe=clan_tribe,
-        agent_family=agent_family,
-        agent_family_role=agent_family_role,
+        agent_session=agent_session,
+        agent_session_role=agent_session_role,
         parent_agent_name=parent_agent_name,
         plan=False,
         plan_approved=False,
@@ -4119,7 +4119,7 @@ class TestHandleShowCommand:
     def test_show_is_registered_as_slash_command(self) -> None:
         from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
 
-        assert ("show", "Show an agent, clan, family, or tribe") in _SLASH_COMMANDS
+        assert ("show", "Show an agent, clan, session, or tribe") in _SLASH_COMMANDS
 
     @patch("inbound_namespace.INBOUND.telegram_client")
     @patch("inbound_namespace.INBOUND.credentials")
@@ -4162,8 +4162,8 @@ class TestHandleShowCommand:
             tribe="perf",
             agent_clan="review",
             agent_clan_generation="generation-12345678",
-            agent_family="migrate",
-            agent_family_role="planner",
+            agent_session="migrate",
+            agent_session_role="planner",
             parent_agent_name="parent",
             children_count=2,
             children_status_counts=(("Running", 1), ("Done", 1)),
@@ -4185,7 +4185,7 @@ class TestHandleShowCommand:
             ),
             patch(
                 "inbound_namespace.INBOUND.generate_key",
-                side_effect=["clankey", "familykey"],
+                side_effect=["clankey", "sessionkey"],
             ),
         ):
             _handle_show_command("alpha")
@@ -4193,16 +4193,16 @@ class TestHandleShowCommand:
         text = mock_tg.send_message.call_args.args[1]
         assert "Clan       ⛺ review · gen 12345678" in text
         assert "Tribe      @perf" in text
-        assert "Family     migrate · planner" in text
+        assert "Session    migrate · planner" in text
         assert "Parent     parent" in text
         assert "Children   2 · 1 running, 1 done" in text
         keyboard = mock_tg.send_message.call_args.kwargs["reply_markup"]
         assert [button.text for button in keyboard.inline_keyboard[-1]] == [
             "⛺ Clan",
-            "🧬 Family",
+            "🧬 Session",
         ]
         assert keyboard.inline_keyboard[-1][0].callback_data == "show:clankey:open"
-        assert keyboard.inline_keyboard[-1][1].callback_data == ("show:familykey:open")
+        assert keyboard.inline_keyboard[-1][1].callback_data == ("show:sessionkey:open")
         assert mock_pending.add.call_count == 2
 
     @patch("inbound_namespace.INBOUND.pending_actions")

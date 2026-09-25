@@ -87,7 +87,7 @@ for existing SASE configurations.
 - **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and Patch buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — built-in agent-management commands plus user-defined commands from `telegram.commands`, all registered with `set_my_commands` so they show up in the chat input UI
-- **Kinship views** — `/show` indexes clans, families, and tribes; `/show <ref>` opens rich agent or group status with mobile drill-down and refresh buttons
+- **Kinship views** — `/show` indexes clans, sessions, and tribes; `/show <ref>` opens rich agent or group status with mobile drill-down and refresh buttons
 - **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
   matching Telegram send method, with GIF/video document fallback and one preferred motion-media representation per
   same-directory filename stem
@@ -199,7 +199,7 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|family|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|session|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
 - **Configured slash commands** — execute the matching `telegram.commands` entry and deliver its Markdown stdout as a message or PDF
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
@@ -214,8 +214,8 @@ starts.
 Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
 messages include Fork and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 
-`/show` opens a compact index of clans, sequential agent families, and effective tribes represented by live or recent
-agents. `/show <ref>` resolves exact agents before clans and families, then bare tribe names; `/show @<tribe>` forces a
+`/show` opens a compact index of clans, sequential agent sessions, and effective tribes represented by live or recent
+agents. `/show <ref>` resolves exact agents before clans and sessions, then bare tribe names; `/show @<tribe>` forces a
 tribe lookup. The resulting HTML views include progress and status rollups, group-specific context, persisted
 drill-down/refresh callbacks, and explicit truncation notes for large groups.
 
@@ -296,7 +296,7 @@ src/sase_telegram/
 ├── credentials.py           # Bot token sources, chat ID, and username
 ├── agent_format.py          # Shared pure HTML formatting for agent list/detail views
 ├── show_entities.py         # /show reference resolution and kinship index models
-├── show_format.py           # Pure agent/clan/family/tribe HTML renderers
+├── show_format.py           # Pure agent/clan/session/tribe HTML renderers
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
 ├── inbound.py               # Pure logic: callback decoding, two-step feedback, photo handling
 ├── inbound_handlers/        # Telegram update handlers (layered; script only wires run modes)
