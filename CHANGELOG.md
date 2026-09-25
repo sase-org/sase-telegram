@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.20](https://github.com/sase-org/sase-telegram/compare/v0.4.19...v0.4.20) (2026-09-25)
+
+
+### Features
+
+* **telegram:** adopt project tags for inbound reads and copy-text buttons ([aff9a23](https://github.com/sase-org/sase-telegram/commit/aff9a23e85f7fa080426d1cf20063905c1124a46))
+* **telegram:** cut /show over to agent-session APIs ([5daae9d](https://github.com/sase-org/sase-telegram/commit/5daae9d0639daf994db2a894aac64b3051c603af))
+* **tool:** add check catalog and recipe guard ([5b7f583](https://github.com/sase-org/sase-telegram/commit/5b7f5834e6b8d317dbdefb138ac2b2a8179010c8))
+
+
+### Bug Fixes
+
+* **ci:** route sase through a uv overrides file to the local checkout ([1bee68f](https://github.com/sase-org/sase-telegram/commit/1bee68f43e9db6795726ee5c4aed7497bdb93b6e))
+* Give the service-host Telegram receiver its bot identity and fail closed without it ([76431fc](https://github.com/sase-org/sase-telegram/commit/76431fc2efa5e7d895130d57a93aa5646718c879))
+* **receiver:** stop consulting the service_host flag in the rearm check ([f99521c](https://github.com/sase-org/sase-telegram/commit/f99521c8e285bf16133db2ca67cbed0ad2dd52c6))
+* **telegram:** retry credential loss with EX_TEMPFAIL instead of clean exit ([fbe6d1a](https://github.com/sase-org/sase-telegram/commit/fbe6d1acc46eeb6e27c8f0dcd0e7d3fa59b7e160))
+
 ## [0.4.19](https://github.com/sase-org/sase-telegram/compare/v0.4.18...v0.4.19) (2026-09-20)
 
 
