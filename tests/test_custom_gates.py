@@ -43,6 +43,8 @@ from sase_telegram.inbound_handlers.gate_response import _execute_gate_callback_
 from sase_telegram.inbound_handlers.text_messages import _handle_text_message
 from sase_telegram.scripts.sase_tg_outbound import _run_outbound
 
+from .gate_turn_compat import gate_turn_creation_of
+
 VALID_TALE_PLAN = """---
 tier: tale
 title: Telegram plan approval
@@ -1076,7 +1078,7 @@ def test_launch_approval_uses_the_same_singleton_renderer(gate_home: Path) -> No
         },
         source_surface="telegram-test",
     )
-    assert result.gate_shell_creation is None
+    assert gate_turn_creation_of(result) is None
     notification = _notification(
         SimpleNamespace(
             bundle_path=result.response_dir,

@@ -388,10 +388,10 @@ def submit_gate_response(
     same batch. The re-invoked proc runs the identical fast
     decision-acceptance boundary (which durably records the decision and
     dismisses the notification independent of how long execution takes)
-    and, for a shell-backed gate, the same
-    ``bind_gate_shell_execution_callbacks`` -> ``settle_gate_shell``
+    and, for a turn-backed gate, the same
+    ``bind_gate_turn_execution_callbacks`` -> ``settle_gate_turn``
     sequence ``sase gate answer`` already runs -- so Telegram no longer
-    needs its own gate-shell settlement glue.
+    needs its own gate-turn settlement glue.
 
     Only shallow (option-id, adapter, bundle, already-answered/cancelled)
     validation happens here, so a malformed or stale callback fails fast

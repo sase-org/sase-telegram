@@ -2,15 +2,15 @@
 
 Regression coverage for the gap R6 of sase's ``gate-fork-cli`` phase found:
 ``inbound.resolve_gate_response`` called the shared executor directly with no
-awareness of gate shells at all, so a shell gate answered from Telegram was
+awareness of gate turns at all, so a turn-backed gate answered from Telegram was
 answered (``response.json`` written) but its session member stayed pending
 forever and its recorded follow-up never launched.
 
 sase-zr.4 fixed this at the root, not by teaching Telegram more about gate
-shells: Telegram no longer executes or settles gates itself at all. It
+turns: Telegram no longer executes or settles gates itself at all. It
 submits ``sase gate answer --id ... --kind ... --no-detach --json`` as a
 supervised background proc, exactly the request ``sase gate answer
---detach`` already submits for a gate-shell-backed gate (see
+--detach`` already submits for a gate-turn-backed gate (see
 ``test_gate_cli_answer_detach.py`` in sase). Settlement is the reinvoked
 CLI process's own, already-tested responsibility, identical regardless of
 which surface submitted the answer -- so Telegram's own tests only need to
@@ -19,7 +19,6 @@ confirm the submission is built correctly, not re-verify settlement.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -27,12 +26,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from sase.axe.run_agent_helpers_artifacts import update_meta_field
-from sase.gate_shell.member import create_gate_shell_member
-from sase.notification_gates.model_shell import GateShellSpec
 from sase.notification_gates.models import GateError, GateSpec
 from sase.notification_gates.service import create_gate
 from sase_telegram import inbound
 
+from .gate_turn_compat import (
+    TURN_SPEC_KEY,
+    GateTurnSpec,
+    make_gate_turn_member,
+    mark_turn_row_managed,
+)
 from .test_custom_gates import gate_home
 
 __all__ = ["gate_home"]
@@ -42,7 +45,7 @@ _ECHO_COMMAND = (
 )
 
 
-def _spec(request_id: str, *, shell: bool) -> dict[str, Any] | GateSpec:
+def _spec(request_id: str, *, turn: bool) -> dict[str, Any] | GateSpec:
     spec: dict[str, Any] = {
         "schema_version": 3,
         "request_id": request_id,
@@ -63,21 +66,21 @@ def _spec(request_id: str, *, shell: bool) -> dict[str, Any] | GateSpec:
             {"path": "commands/cleanup", "role": "command", "content": _ECHO_COMMAND}
         ],
     }
-    if shell:
-        spec["shell"] = {}
-        # This test establishes the gate-shell row itself with
-        # ``_make_gate_shell_member``: mark the spec the way the production
-        # transaction does so the shell-row guard accepts the setup.
-        return replace(GateSpec.from_mapping(spec), shell_row_managed=True)
+    if turn:
+        spec[TURN_SPEC_KEY] = {}
+        # This test establishes the gate-turn row itself with
+        # ``_make_gate_turn_member``: mark the spec the way the production
+        # transaction does so the turn-row guard accepts the setup.
+        return mark_turn_row_managed(GateSpec.from_mapping(spec))
     return spec
 
 
-def _make_gate_shell_member(request_id: str, bundle_path: Path) -> str:
-    shell = GateShellSpec.from_mapping(
+def _make_gate_turn_member(request_id: str, bundle_path: Path) -> str:
+    turn = GateTurnSpec.from_mapping(
         {"pending_status": "GATE", "settled_status": "GATED"},
         branches=(("cleanup",),),
     )
-    artifacts_dir = create_gate_shell_member(
+    artifacts_dir = make_gate_turn_member(
         "proj",
         {"name": "lane--0", "agent_session": "lane", "model": "gpt-5"},
         lane="lane",
@@ -91,7 +94,7 @@ def _make_gate_shell_member(request_id: str, bundle_path: Path) -> str:
         creator_agent="lane--0",
         timeout_seconds=86400.0,
         request_fingerprint=None,
-        shell=shell,
+        turn_spec=turn,
     )
     update_meta_field(artifacts_dir, "gate_bundle_path", str(bundle_path))
     return artifacts_dir
@@ -124,19 +127,19 @@ def _action(request_id: str, bundle_path: Path) -> dict[str, Any]:
     }
 
 
-def test_telegram_submits_a_shell_backed_gate(
+def test_telegram_submits_a_turn_backed_gate(
     gate_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Telegram submits the shared proc; it never touches the gate shell."""
+    """Telegram submits the shared proc; it never touches the gate turn."""
     del gate_home
     sase_cli = _mock_sase_cli(monkeypatch)
     mock = _mock_submit(monkeypatch)
-    gate = create_gate(_spec("tg-shell-1", shell=True))
-    _make_gate_shell_member("tg-shell-1", gate.bundle_path)
+    gate = create_gate(_spec("tg-turn-1", turn=True))
+    _make_gate_turn_member("tg-turn-1", gate.bundle_path)
 
     response = inbound.ResponseAction(
         action_type="gate",
-        notif_id_prefix="tgshell1",
+        notif_id_prefix="tgturn1",
         response_path=gate.bundle_path / "response.json",
         response_data={},
         answer_text=None,
@@ -144,7 +147,7 @@ def test_telegram_submits_a_shell_backed_gate(
     )
 
     message = inbound.resolve_gate_response(
-        response, _action("tg-shell-1", gate.bundle_path)
+        response, _action("tg-turn-1", gate.bundle_path)
     )
 
     assert message == "Gate answer submitted (cleanup)"
@@ -155,7 +158,7 @@ def test_telegram_submits_a_shell_backed_gate(
         "gate",
         "answer",
         "--id",
-        "tg-shell-1",
+        "tg-turn-1",
         "--kind",
         "custom",
         "--no-detach",
@@ -173,11 +176,11 @@ def test_telegram_submits_a_shell_backed_gate(
 def test_telegram_submits_an_ordinary_gate_identically(
     gate_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A non-shell gate submits through the exact same path -- no branching."""
+    """A non-turn gate submits through the exact same path -- no branching."""
     del gate_home
     sase_cli = _mock_sase_cli(monkeypatch)
     mock = _mock_submit(monkeypatch)
-    gate = create_gate(_spec("tg-plain-1", shell=False))
+    gate = create_gate(_spec("tg-plain-1", turn=False))
 
     response = inbound.ResponseAction(
         action_type="gate",
@@ -216,7 +219,7 @@ def test_telegram_rejects_a_gate_already_answered(
     """A stale tap on an already-answered gate never spawns a proc."""
     del gate_home
     mock = _mock_submit(monkeypatch)
-    gate = create_gate(_spec("tg-answered-1", shell=False))
+    gate = create_gate(_spec("tg-answered-1", turn=False))
     gate.response_path.write_text("{}", encoding="utf-8")
 
     response = inbound.ResponseAction(
