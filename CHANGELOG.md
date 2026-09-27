@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.21](https://github.com/sase-org/sase-telegram/compare/v0.4.20...v0.4.21) (2026-09-27)
+
+
+### Bug Fixes
+
+* **turn-rename:** reword require_tool_run refusal from agent shell to SASE agent ([111d0c7](https://github.com/sase-org/sase-telegram/commit/111d0c74e71d8b488b7801f31afc291f1812d9b6))
+
 ## [0.4.20](https://github.com/sase-org/sase-telegram/compare/v0.4.19...v0.4.20) (2026-09-25)
 
 
