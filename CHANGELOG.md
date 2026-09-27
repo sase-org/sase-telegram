@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.22](https://github.com/sase-org/sase-telegram/compare/v0.4.21...v0.4.22) (2026-09-27)
+
+
+### Features
+
+* Add new /usage slash commaand ([c386148](https://github.com/sase-org/sase-telegram/commit/c386148f59b88cadb30ee009ca24e3a6b806678c))
+
+
+### Bug Fixes
+
+* **usage:** finish Telegram /usage refresh flow, ordering, and headline gaps ([4db22de](https://github.com/sase-org/sase-telegram/commit/4db22de1ae689e24cb0b23c33c8833e5d89cf8da))
+
 ## [0.4.21](https://github.com/sase-org/sase-telegram/compare/v0.4.20...v0.4.21) (2026-09-27)
 
 
