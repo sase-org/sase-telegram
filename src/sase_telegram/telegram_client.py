@@ -260,6 +260,15 @@ def edit_message_reply_markup(
     )
 
 
+def _is_message_not_modified(exc: BaseException) -> bool:
+    """Return whether *exc* is Telegram's not-modified BadRequest."""
+    message = str(exc)
+    chained = exc.__cause__ or exc.__context__
+    if chained is not None:
+        message += f" {chained}"
+    return "message is not modified" in message.lower()
+
+
 @_with_retry
 def edit_message_text(
     chat_id: str,
@@ -279,7 +288,9 @@ def edit_message_text(
                 parse_mode=parse_mode,
             )
         )
-    except Exception:
+    except Exception as exc:
+        if _is_message_not_modified(exc):
+            return True
         if parse_mode:
             log.warning(
                 "Failed to edit with parse_mode=%s, falling back to plain text",

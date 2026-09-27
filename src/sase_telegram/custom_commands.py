@@ -33,6 +33,7 @@ RESERVED_COMMAND_NAMES = frozenset(
         "list",
         "show",
         "update",
+        "usage",
         "xprompts",
     }
 )

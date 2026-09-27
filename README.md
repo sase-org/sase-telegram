@@ -199,7 +199,7 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|session|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, and SASE updates
+- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|session|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/usage [provider]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, usage windows, and SASE updates
 - **Configured slash commands** — execute the matching `telegram.commands` entry and deliver its Markdown stdout as a message or PDF
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
@@ -245,6 +245,10 @@ projects from `sase project list`; discovery failures stop that broad lookup ins
 path. The worker runs the built-in `sase update --json` engine, using SASE's normal managed-vs-dev update routing, then
 ensures axe is running afterward. After the worker exits, the next inbound run sends a completion message that reports
 the worker's update summary or the fallback failure exit code and includes the worker log path.
+
+`/usage [provider]` shows every usage window for the configured LLM providers as capacity-left bars with attention
+dots, reset times, and a health headline. The message carries a 🔄 Refresh button that starts a real provider refresh
+and updates the same message in place when the refresh completes.
 
 Slash command registration is cached in `~/.sase/telegram/commands_registered_ts`, but the cache includes a fingerprint
 of the command list so renamed commands are registered immediately after deployment.
@@ -295,6 +299,7 @@ src/sase_telegram/
 ├── custom_commands.py       # Config loading, subprocess execution, and stdout metadata
 ├── credentials.py           # Bot token sources, chat ID, and username
 ├── agent_format.py          # Shared pure HTML formatting for agent list/detail views
+├── usage_format.py          # Pure HTML rendering for /usage windows
 ├── show_entities.py         # /show reference resolution and kinship index models
 ├── show_format.py           # Pure agent/clan/session/tribe HTML renderers
 ├── formatting.py            # Notification → Telegram MarkdownV2 formatting + inline keyboards
@@ -315,6 +320,7 @@ src/sase_telegram/
 │   ├── agent_list.py        # /list overview, detail, and callbacks
 │   ├── gate_input_steps.py  # Multi-step gate input collection
 │   ├── agent_show.py        # /show rendering and callbacks
+│   ├── usage_command.py     # /usage rendering, refresh, and tick delivery
 │   ├── gate_callbacks.py    # Gate button entry point and option selection
 │   ├── commands.py          # Slash-command router and command registration
 │   ├── callbacks.py         # Callback-query router and race guard

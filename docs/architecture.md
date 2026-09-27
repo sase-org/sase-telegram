@@ -57,7 +57,7 @@ pdf_convert.py
    only after that update finishes (successfully or with a caught, logged handler
    error). An update fetched across a runtime refresh is not saved, so the fresh
    interpreter fetches it again rather than acknowledging it as processed:
-   - **Callback query** → decodes button press, handles notification responses or agent/bead callbacks
+   - **Callback query** → decodes button press, handles notification responses or agent/bead/usage callbacks
    - **Text message** → completes a matching two-step feedback flow, dispatches a slash command, or launches an agent
    - **Photo/image document** → downloads file, builds agent prompt with image path
 

@@ -29,6 +29,7 @@ from sase_telegram.inbound_handlers.keyboard_cleanup import (
 )
 from sase_telegram.inbound_handlers.gate_completions import _send_ready_gate_completions
 from sase_telegram.inbound_handlers.update_command import _send_ready_update_completions
+from sase_telegram.inbound_handlers.usage_command import _finish_ready_usage_refreshes
 from sase_telegram.inbound_handlers.images import _flush_ready_media_groups
 from sase_telegram.inbound_handlers.commands import _register_commands_if_needed
 from sase_telegram.inbound_handlers.dispatch import (
@@ -140,7 +141,9 @@ def _run_pre_poll_cleanup(
     _register_commands_if_needed(custom_commands)
     stale_pending = pending_actions.cleanup_stale()
     ready_completions_sent = (
-        _send_ready_update_completions() + _send_ready_gate_completions()
+        _send_ready_update_completions()
+        + _send_ready_gate_completions()
+        + _finish_ready_usage_refreshes()
     )
     # Retry any inline-keyboard removal whose Telegram API edit durably
     # failed on an earlier tick, independent of this tick's own updates.

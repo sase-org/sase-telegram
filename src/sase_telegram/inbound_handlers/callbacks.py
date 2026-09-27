@@ -18,6 +18,7 @@ from sase_telegram.inbound_handlers.agent_actions import (
 from sase_telegram.inbound_handlers.agent_list import _handle_list_callback
 from sase_telegram.inbound_handlers.agent_show import _handle_show_callback
 from sase_telegram.inbound_handlers.gate_callbacks import _handle_gate_callback
+from sase_telegram.inbound_handlers.usage_command import _handle_usage_callback
 
 import logging
 
@@ -115,6 +116,9 @@ def _handle_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             return
         if cb.action_type == "show":
             _handle_show_callback(callback_query, cb.notif_id_prefix, cb.choice)
+            return
+        if cb.action_type == "usage":
+            _handle_usage_callback(callback_query, cb.notif_id_prefix, cb.choice)
             return
     except ValueError:
         pass

@@ -161,6 +161,7 @@ Text messages are dispatched in priority order:
    - `/changes [project]` — Shows copy buttons for active Patch workflow tags, optionally filtered by exact project name
    - `/xprompts` — Builds the xprompts catalog PDF and reports its path
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
+   - `/usage [provider]` — Shows every usage window for configured providers with capacity bars and resets
    - `/update` — Starts the detached SASE update worker and replies with its log path
 3. **Configured slash commands** — A command in `telegram.commands` runs its executable and returns Markdown as a message or PDF
 4. **Other slash commands** — Unknown commands (e.g. `/start`) are silently ignored
@@ -238,6 +239,22 @@ managed-vs-dev update routing, then ensures axe is running afterward. When the d
 completion record, the next inbound run sends a second message with the worker's update summary when present, falling
 back to the failure exit code, and includes the same worker log path. Pending completion deliveries live under
 `~/.sase/telegram/update_completions/` and are retried until Telegram accepts the message.
+
+## Usage windows
+
+`/usage [provider]` renders one HTML message with every usage window SASE tracks for the configured LLM providers:
+capacity-left bars, attention dots, reset times, and a health headline naming the tightest window. An optional provider
+filter matches the provider key or display name case-insensitively; unknown filters suggest the configured provider
+keys. The message carries a 🔄 Refresh button.
+
+Tapping Refresh calls the `sase.integrations.usage_windows` facade, which submits an explicit chat-origin refresh and
+returns immediately. The handler edits the message to a `⏳ Refreshing …` state with a busy keyboard, then persists a
+pending record under `~/.sase/telegram/usage_refreshes/{chat_id}_{message_id}.json`. The 5-second job tick delivers
+completions via `_finish_ready_usage_refreshes()`: while refresh operations are still live and the deadline has not
+passed the record waits for a later tick, otherwise the original message is edited in place with a `✅ Refreshed` or
+timeout status line. Records are deleted only after a successful edit; failed edits retry on later ticks, and malformed
+or more than 10-minutes-past-deadline records are deleted with a log warning. The refresh timeout is
+`USAGE_WINDOWS_REFRESH_TIMEOUT_SECONDS` (`USAGE_REFRESH_BATCH_DEADLINE_SECONDS + 30`).
 
 Command registration is cached in `~/.sase/telegram/commands_registered_ts`; the cache includes a command-list
 fingerprint so deploys with command changes re-register immediately instead of waiting for the hourly refresh.

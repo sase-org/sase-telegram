@@ -31,6 +31,7 @@ from sase_telegram.inbound_handlers.agent_actions import (
 )
 from sase_telegram.inbound_handlers.agent_list import _handle_list_command
 from sase_telegram.inbound_handlers.agent_show import _handle_show_command
+from sase_telegram.inbound_handlers.usage_command import _handle_usage_command
 
 import logging
 
@@ -188,6 +189,8 @@ def _handle_command(
         _handle_xprompts_command()
     elif command in {"bead", "beads"}:
         _handle_bead_command(args, message=message)
+    elif command == "usage":
+        _handle_usage_command(args, message=message)
     elif command == "update":
         _handle_update_command()
     elif custom_commands and command in custom_commands:
@@ -202,6 +205,7 @@ _SLASH_COMMANDS = [
     ("changes", "Copy Patch workflow tags"),
     ("xprompts", "Export the xprompts catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
+    ("usage", "Show LLM usage windows and resets"),
     ("update", "Update SASE and restart axe"),
 ]
 
