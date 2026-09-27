@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from sase_telegram.agent_format import html_escape, pack_html_blocks
@@ -204,8 +204,14 @@ def format_reset_text(window: Any, *, now: float, tzinfo: Any) -> str | None:
         return None
 
 
-def _window_sort_key(window: Any) -> tuple:
-    return (str(getattr(window, "key", "") or ""),)
+def _remaining_for_tightest(window: Any) -> float:
+    try:
+        value = float(getattr(window, "remaining_percent", 100.0))
+    except (TypeError, ValueError):
+        return 100.0
+    if not math.isfinite(value):
+        return 100.0
+    return value
 
 
 def format_provider_header(provider: Any, *, now: float) -> str:
@@ -272,7 +278,7 @@ def render_headline(windows: list[tuple[Any, Any]]) -> str | None:
     count = len(at_level)
     tightest_provider, tightest_window = min(
         at_level,
-        key=lambda item: float(getattr(item[1], "remaining_percent", 100.0) or 100.0),
+        key=lambda item: _remaining_for_tightest(item[1]),
     )
     emoji = getattr(tightest_provider, "emoji", None) or "•"
     label = format_window_label(tightest_window)
@@ -368,18 +374,16 @@ def build_usage_blocks(
     blocks = [title + (f"\n{headline}" if headline else "")]
     for provider in providers:
         lines = [format_provider_header(provider, now=now)]
-        windows_sorted = sorted(
-            getattr(provider, "windows", ()) or (), key=_window_sort_key
-        )
+        vendor_windows = tuple(getattr(provider, "windows", ()) or ())
         problem = _provider_has_problem(provider)
         collector_state = getattr(provider, "collector_state", None)
         retry_label = getattr(provider, "retry_label", None)
-        if windows_sorted and collector_state in {"degraded", "failing"}:
+        if vendor_windows and collector_state in {"degraded", "failing"}:
             retry = f" · {html_escape(str(retry_label))}" if retry_label else ""
             lines.append(f"⚠️ Collector {html_escape(str(collector_state))}{retry}")
-        if not windows_sorted:
+        if not vendor_windows:
             lines.append(_format_no_window_row(provider))
-        for window in windows_sorted:
+        for window in vendor_windows:
             lines.append(
                 _format_window_line(
                     window, now=now, tzinfo=tzinfo, provider_problem=problem

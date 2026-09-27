@@ -300,6 +300,14 @@ class TestEditMessageText:
         retry_kwargs = mock_bot.edit_message_text.await_args_list[1].kwargs
         assert "parse_mode" not in retry_kwargs
 
+    def test_not_modified_returns_true_without_retry(self, mock_bot: MagicMock) -> None:
+        mock_bot.edit_message_text.side_effect = BadRequest("Message is not modified")
+        assert (
+            telegram_client.edit_message_text("7", 42, "<b>hi</b>", parse_mode="HTML")
+            is True
+        )
+        assert mock_bot.edit_message_text.await_count == 1
+
 
 class TestSetMyCommands:
     def test_registers_bot_commands(self, mock_bot: MagicMock) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +23,43 @@ from sase_telegram.inbound_handlers.common import (
     _send_html_chunks,
 )
 from sase_telegram.usage_format import build_usage_chunks
-from datetime import UTC
 
 log = logging.getLogger(__name__)
 
 _USAGE_REFRESH_PENDING_DIR = Path.home() / ".sase" / "telegram" / "usage_refreshes"
 
 _USAGE_REFRESH_STALE_DELETE_SECONDS = 600.0
+
+_USAGE_FACADE_MODULES = frozenset(
+    {"sase.integrations", "sase.integrations.usage_windows"}
+)
+
+_USAGE_FACADE_SYMBOLS = frozenset(
+    {
+        "USAGE_WINDOWS_REFRESH_TIMEOUT_SECONDS",
+        "live_usage_refresh_operations",
+        "request_usage_windows_refresh",
+        "resolve_usage_provider",
+        "usage_windows_report",
+    }
+)
+
+
+class _UsageFacadeUnavailableError(ImportError):
+    """Installed sase does not provide the usage-windows facade."""
+
+
+def _is_facade_missing_error(exc: ImportError) -> bool:
+    """Return True when an ImportError means the facade itself is absent."""
+    if isinstance(exc, _UsageFacadeUnavailableError):
+        return True
+    missing_name = getattr(exc, "name", None)
+    if missing_name in _USAGE_FACADE_MODULES:
+        return True
+    message = str(exc)
+    if any(symbol in message for symbol in _USAGE_FACADE_SYMBOLS):
+        return True
+    return any(module in message for module in _USAGE_FACADE_MODULES)
 
 
 def _usage_facade() -> Any:
@@ -50,9 +81,14 @@ def _usage_facade() -> Any:
             _usage_report,
         )
     except ImportError as exc:
-        missing = getattr(exc, "name", "") or str(exc)
-        if "usage_windows" in str(missing) or "usage_windows" in str(exc):
-            raise
+        missing_name = getattr(exc, "name", None)
+        message = str(exc)
+        if missing_name in _USAGE_FACADE_MODULES:
+            raise _UsageFacadeUnavailableError(message) from exc
+        if any(symbol in message for symbol in _USAGE_FACADE_SYMBOLS):
+            raise _UsageFacadeUnavailableError(message) from exc
+        if any(module in message for module in _USAGE_FACADE_MODULES):
+            raise _UsageFacadeUnavailableError(message) from exc
         raise
     return facade
 
@@ -63,8 +99,6 @@ def _usage_timezone() -> Any:
 
         return get_timezone()
     except Exception:
-        from datetime import timezone
-
         return UTC
 
 
@@ -135,15 +169,47 @@ def _render_report_chunks(
     return chunks, report
 
 
+def _render_usage_view(
+    facade: Any,
+    scope: str,
+    *,
+    now: float,
+    status_line: str | None = None,
+) -> tuple[list[str], bool]:
+    """Render usage chunks, mapping store-read failures to one warning chunk."""
+    try:
+        chunks, _report = _render_report_chunks(
+            facade, scope, now=now, status_line=status_line
+        )
+    except Exception as exc:
+        try:
+            from sase.llm_provider.usage.errors import ProviderUsageStateError
+
+            state_error = isinstance(exc, ProviderUsageStateError)
+        except Exception:
+            state_error = False
+        if state_error or isinstance(exc, OSError):
+            return (
+                [f"⚠️ Couldn't read usage data: {html_escape(str(exc))}"],
+                True,
+            )
+        raise
+    return chunks, False
+
+
 def _handle_usage_command(args: str = "", message: Any | None = None) -> None:
     """Handle /usage and /usage <provider>."""
     chat_id = _message_chat_id(message) or credentials.get_chat_id()
     try:
         facade = _usage_facade()
-    except ImportError:
-        telegram_client.send_message(
-            chat_id, "Installed sase doesn't support /usage yet — run /update."
-        )
+    except ImportError as exc:
+        if _is_facade_missing_error(exc):
+            telegram_client.send_message(
+                chat_id, "Installed sase doesn't support /usage yet — run /update."
+            )
+            return
+        log.exception("Failed to load usage facade")
+        telegram_client.send_message(chat_id, "Failed to build /usage view.")
         return
     raw = args.strip().split(None, 1)[0] if args.strip() else ""
     scope = "all"
@@ -173,25 +239,7 @@ def _handle_usage_command(args: str = "", message: Any | None = None) -> None:
             return
         scope = resolved
     try:
-        chunks, _report = _render_report_chunks(facade, scope, now=time.time())
-    except (OSError, RuntimeError, AttributeError, ImportError, ValueError) as exc:
-        try:
-            from sase.llm_provider.usage.errors import ProviderUsageStateError
-
-            state_error = isinstance(exc, ProviderUsageStateError)
-        except Exception:
-            state_error = False
-        if state_error or isinstance(exc, OSError):
-            telegram_client.send_message(
-                chat_id,
-                f"⚠️ Couldn't read usage data: {html_escape(str(exc))}",
-                parse_mode="HTML",
-                reply_markup=_build_usage_keyboard(scope),
-            )
-            return
-        log.exception("Failed to build /usage view")
-        telegram_client.send_message(chat_id, "Failed to build /usage view.")
-        return
+        chunks, _unreadable = _render_usage_view(facade, scope, now=time.time())
     except Exception:
         log.exception("Failed to build /usage view")
         telegram_client.send_message(chat_id, "Failed to build /usage view.")
@@ -213,17 +261,21 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
     if choice == "refresh-view":
         try:
             facade = _usage_facade()
-        except ImportError:
-            _answer_callback(
-                callback_query, "Installed sase doesn't support /usage yet"
-            )
+        except ImportError as exc:
+            if _is_facade_missing_error(exc):
+                _answer_callback(
+                    callback_query, "Installed sase doesn't support /usage yet"
+                )
+                return
+            log.exception("Failed to load usage facade")
+            _answer_callback(callback_query, "Failed to build /usage view")
             return
         chat_id = _callback_chat_id(callback_query, None)
         if chat_id is None:
             _answer_callback(callback_query, "Could not resolve Telegram chat")
             return
         try:
-            chunks, _report = _render_report_chunks(facade, scope, now=time.time())
+            chunks, _unreadable = _render_usage_view(facade, scope, now=time.time())
         except Exception:
             log.exception("Failed to build /usage view")
             _answer_callback(callback_query, "Failed to build /usage view")
@@ -251,8 +303,14 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
         return
     try:
         facade = _usage_facade()
-    except ImportError:
-        _answer_callback(callback_query, "Installed sase doesn't support /usage yet")
+    except ImportError as exc:
+        if _is_facade_missing_error(exc):
+            _answer_callback(
+                callback_query, "Installed sase doesn't support /usage yet"
+            )
+            return
+        log.exception("Failed to load usage facade")
+        _answer_callback(callback_query, "Failed to build /usage view")
         return
     chat_id = _callback_chat_id(callback_query, None)
     message_id = _callback_origin_message_id(callback_query, None)
@@ -274,7 +332,7 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
     started_providers = tuple(getattr(refresh, "providers", ()) or ())
     if not operation_ids:
         try:
-            chunks, _report = _render_report_chunks(
+            chunks, _unreadable = _render_usage_view(
                 facade, scope, now=time.time(), status_line=toast
             )
         except Exception:
@@ -297,7 +355,7 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
         return
     providers_label = ", ".join(started_providers) if started_providers else scope
     try:
-        chunks, _report = _render_report_chunks(
+        chunks, unreadable = _render_usage_view(
             facade,
             scope,
             now=time.time(),
@@ -306,8 +364,27 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
     except Exception:
         log.exception("Failed to build /usage view")
         return
-    try:
-        if len(chunks) == 1:
+    if unreadable:
+        try:
+            if len(chunks) == 1:
+                telegram_client.edit_message_text(
+                    chat_id,
+                    message_id,
+                    chunks[0],
+                    reply_markup=_build_usage_keyboard(scope),
+                    parse_mode="HTML",
+                )
+            else:
+                _send_html_chunks(
+                    chat_id, chunks, reply_markup=_build_usage_keyboard(scope)
+                )
+        except Exception:
+            log.warning("Failed to edit /usage unreadable state", exc_info=True)
+        return
+    if len(chunks) != 1:
+        pass
+    else:
+        try:
             telegram_client.edit_message_text(
                 chat_id,
                 message_id,
@@ -315,14 +392,9 @@ def _handle_usage_callback(callback_query: Any, scope: str, choice: str) -> None
                 reply_markup=_build_refreshing_keyboard(scope),
                 parse_mode="HTML",
             )
-        else:
-            _send_html_chunks(
-                chat_id, chunks, reply_markup=_build_refreshing_keyboard(scope)
-            )
+        except Exception:
+            log.warning("Failed to edit /usage refreshing state", exc_info=True)
             return
-    except Exception:
-        log.warning("Failed to edit /usage refreshing state", exc_info=True)
-        return
     submitted_at = time.time()
     try:
         timeout = float(getattr(facade, "USAGE_WINDOWS_REFRESH_TIMEOUT_SECONDS", 75.0))
@@ -355,7 +427,9 @@ def _finish_ready_usage_refreshes() -> int:
         return sent_count
     try:
         facade = _usage_facade()
-    except ImportError:
+    except ImportError as exc:
+        if not _is_facade_missing_error(exc):
+            log.warning("Failed to load usage facade for tick", exc_info=True)
         return sent_count
     now = time.time()
     for pending_path in pending_paths:
@@ -420,7 +494,7 @@ def _finish_ready_usage_refreshes() -> int:
         else:
             status_line = "✅ Refreshed"
         try:
-            chunks, _report = _render_report_chunks(
+            chunks, _unreadable = _render_usage_view(
                 facade, str(record["scope"]), now=now, status_line=status_line
             )
         except Exception:

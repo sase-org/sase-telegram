@@ -244,9 +244,57 @@ def test_html_escaping_of_hostile_labels() -> None:
     provider = _provider(
         "codex",
         display_name="<b>evil</b>",
-        windows=(_window(label="<script>Weekly</script>"),),
+        windows=(
+            _window(label="<script>Weekly</script>", period="unknown"),
+            _window(
+                key="other",
+                label="Other",
+                period="weekly",
+                scope="unknown",
+                scope_vendor_label="<script>scope</script>",
+            ),
+        ),
     )
     blocks = build_usage_blocks(_report(provider), now=FROZEN_NOW, tzinfo=TZ)
     assert "<script>" not in blocks[1]
     assert "&lt;script&gt;" in blocks[1]
     assert "<b>evil</b>" not in blocks[1]
+
+
+def test_windows_keep_vendor_order() -> None:
+    provider = _provider(
+        "codex",
+        windows=(
+            _window(key="weekly", label="Weekly", period="weekly"),
+            _window(key="session", label="Session", period="session"),
+        ),
+    )
+    blocks = build_usage_blocks(_report(provider), now=FROZEN_NOW, tzinfo=TZ)
+    assert blocks[1].index("Weekly") < blocks[1].index("5h")
+
+
+def test_headline_names_zero_percent_tightest() -> None:
+    provider = _provider(
+        "codex",
+        windows=(
+            _window(
+                key="a",
+                label="Alpha",
+                period="unknown",
+                attention="rejected",
+                remaining_percent=5.0,
+                remaining_text="5% left",
+            ),
+            _window(
+                key="b",
+                label="Beta",
+                period="unknown",
+                attention="rejected",
+                remaining_percent=0.0,
+                remaining_text="0% left",
+            ),
+        ),
+    )
+    blocks = build_usage_blocks(_report(provider), now=FROZEN_NOW, tzinfo=TZ)
+    assert "Beta" in blocks[0]
+    assert "0%" in blocks[0]
