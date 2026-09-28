@@ -129,7 +129,12 @@ The chat target and bot username are required separately:
 | `SASE_TELEGRAM_BOT_USERNAME` | Bot username                |
 
 When the receiver runs as the service-host `telegram_receiver` proc it does **not** inherit AXE routine `env:`. Give it
-its own copy of the bot identity:
+its own copy of the bot identity. The long-poll receiver itself registers
+the bot command menu and runs inbound housekeeping (completion delivery,
+`/usage` refresh finishing, media-group flushing, stale/handled button
+cleanup) under a shared lock, so the AXE `tg_inbound` tick is optional there
+(it remains supported for the legacy durable-proc receiver, where it also
+re-arms the receiver every tick):
 
 ```yaml
 service:

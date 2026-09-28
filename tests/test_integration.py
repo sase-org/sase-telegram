@@ -1176,6 +1176,528 @@ class TestReceiverLoop:
         assert mock_tg.get_updates.call_count == 2
 
 
+class TestReceiverHousekeeping:
+    """The receiver registers commands and runs tick-only housekeeping."""
+
+    @pytest.fixture(autouse=True)
+    def _stable_runtime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        generation = _runtime_generation()
+        monkeypatch.setattr(
+            "inbound_namespace.INBOUND.observe_runtime_generation",
+            lambda: generation,
+        )
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_registers_commands_before_first_poll(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """set_my_commands runs before the first get_updates, with usage."""
+        from inbound_namespace import INBOUND as inbound
+        from sase_telegram.custom_commands import CustomCommand
+        from sase_telegram.inbound_handlers import commands as commands_mod
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        mock_tg.get_updates.return_value = []
+        mock_tg.set_my_commands.return_value = True
+
+        command = CustomCommand(
+            name="tasks",
+            description="Tasks dashboard",
+            argv=("tg_cmd_tasks",),
+            output="message",
+            timeout_seconds=60,
+        )
+        gate_dir = tmp_path / "gate"
+        usage_dir = tmp_path / "usage"
+        update_dir = tmp_path / "update"
+        kb_dir = tmp_path / "kb"
+        for d in (gate_dir, usage_dir, update_dir, kb_dir):
+            d.mkdir()
+        media_file = tmp_path / "media.json"
+
+        with (
+            patch.object(inbound, "GATE_COMPLETION_PENDING_DIR", gate_dir),
+            patch.object(inbound, "_USAGE_REFRESH_PENDING_DIR", usage_dir),
+            patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", update_dir),
+            patch.object(inbound, "_GATE_KEYBOARD_CLEANUP_DIR", kb_dir),
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", media_file),
+            patch.object(
+                inbound, "load_custom_commands", return_value={"tasks": command}
+            ),
+        ):
+            assert inbound._run_receiver() == 0
+
+        expected = [("tasks", "Tasks dashboard"), *commands_mod._SLASH_COMMANDS]
+        assert ("usage", "Show LLM usage windows and resets") in expected
+        mock_tg.set_my_commands.assert_called_once_with(expected)
+        kinds = [str(c) for c in mock_tg.mock_calls]
+        set_idx = next(i for i, c in enumerate(kinds) if "set_my_commands" in c)
+        get_idx = next(i for i, c in enumerate(kinds) if "get_updates" in c)
+        assert set_idx < get_idx
+        payload = json.loads(commands_mod._COMMANDS_REGISTERED_PATH.read_text())
+        assert payload["fingerprint"] == commands_mod._slash_commands_fingerprint(
+            expected
+        )
+
+    @patch("inbound_namespace.INBOUND._launch_agent")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_delivers_gate_and_flushes_media(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+        mock_launch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A ready gate record and a quiet media group finish in the receiver."""
+        from inbound_namespace import INBOUND as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        mock_tg.get_updates.return_value = []
+        mock_tg.set_my_commands.return_value = True
+
+        def _download(file_id: str, dest: Path) -> None:
+            Path(dest).write_text("image")
+
+        mock_tg.download_file.side_effect = _download
+
+        gate_dir = tmp_path / "gate"
+        gate_dir.mkdir()
+        bundle_dir = tmp_path / "bundle"
+        bundle_dir.mkdir()
+        (bundle_dir / "response.json").write_text(
+            json.dumps({"selected_option_ids": ["accept"]})
+        )
+        (gate_dir / "proc-1.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "abc12345",
+                    "proc_id": "proc-1",
+                    "request_id": "req-1",
+                    "kind": "custom",
+                    "bundle_path": str(bundle_dir),
+                    "chat_id": "12345",
+                    "created_at": 1.0,
+                }
+            )
+        )
+        usage_dir = tmp_path / "usage"
+        update_dir = tmp_path / "update"
+        kb_dir = tmp_path / "kb"
+        images_dir = tmp_path / "images"
+        for d in (usage_dir, update_dir, kb_dir, images_dir):
+            d.mkdir()
+        media_file = tmp_path / "media_groups.json"
+        media_file.write_text(
+            json.dumps(
+                {
+                    "12345:album-1": {
+                        "chat_id": "12345",
+                        "media_group_id": "album-1",
+                        "caption": "Compare these",
+                        "first_seen_at": 0.0,
+                        "last_seen_at": 0.0,
+                        "items": [
+                            {
+                                "message_id": 10,
+                                "kind": "photo",
+                                "file_id": "album_one_12345678",
+                                "file_name": None,
+                            },
+                            {
+                                "message_id": 11,
+                                "kind": "photo",
+                                "file_id": "album_two_12345678",
+                                "file_name": None,
+                            },
+                        ],
+                    }
+                }
+            )
+        )
+
+        with (
+            patch.object(inbound, "GATE_COMPLETION_PENDING_DIR", gate_dir),
+            patch.object(inbound, "_USAGE_REFRESH_PENDING_DIR", usage_dir),
+            patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", update_dir),
+            patch.object(inbound, "_GATE_KEYBOARD_CLEANUP_DIR", kb_dir),
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", media_file),
+            patch.object(inbound, "IMAGES_DIR", images_dir),
+        ):
+            assert inbound._run_receiver() == 0
+
+        mock_tg.send_message.assert_called_once_with(
+            "12345", "✅ Gate custom/req-1 answered with accept"
+        )
+        mock_launch.assert_called_once()
+        prompt = mock_launch.call_args.args[0]
+        assert "Compare these" in prompt
+        assert not (gate_dir / "proc-1.json").exists()
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_runs_pre_before_poll_and_post_after(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        """Pre-poll runs before get_updates; post-poll runs after dispatch."""
+        from inbound_namespace import INBOUND as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        order: list[str] = []
+
+        def _pre(custom_commands: object = None) -> tuple[int, int]:
+            order.append("pre")
+            return (0, 0)
+
+        def _post() -> int:
+            order.append("post")
+            return 0
+
+        def _get(*args: object, **kwargs: object) -> list[object]:
+            order.append("get")
+            return []
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                side_effect=_pre,
+            ),
+            patch(
+                "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                side_effect=_post,
+            ),
+        ):
+            mock_tg.get_updates.side_effect = _get
+            assert inbound._run_receiver() == 0
+
+        assert order == ["pre", "get", "post"]
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_housekeeping_failure_still_polls(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A raising pre-poll cleanup is logged and polling continues."""
+        from inbound_namespace import INBOUND as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        mock_tg.get_updates.return_value = []
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
+                "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                return_value=0,
+            ) as mock_post,
+            caplog.at_level("WARNING"),
+        ):
+            assert inbound._run_receiver() == 0
+
+        mock_tg.get_updates.assert_called_once()
+        mock_post.assert_called_once()
+        assert "pre-poll housekeeping failed" in caplog.text
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_skips_housekeeping_when_locked(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+    ) -> None:
+        """A held housekeeping lock skips cleanup but still polls."""
+        import fcntl
+        import os
+
+        from inbound_namespace import INBOUND as inbound
+        from sase_telegram.scripts import sase_tg_inbound as tg_script
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        mock_tg.get_updates.return_value = []
+
+        lock_path = tg_script._HOUSEKEEPING_LOCK_FILE
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (
+                patch("inbound_namespace.INBOUND._run_pre_poll_cleanup") as mock_pre,
+                patch("inbound_namespace.INBOUND._run_post_poll_cleanup") as mock_post,
+            ):
+                assert inbound._run_receiver() == 0
+            mock_pre.assert_not_called()
+            mock_post.assert_not_called()
+            mock_tg.get_updates.assert_called_once()
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_uses_fast_poll_when_fresh(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A fresh follow-up record selects the 5 s poll timeout."""
+        from inbound_namespace import INBOUND as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_enabled.side_effect = [True, False]
+        mock_tg.get_updates.return_value = []
+
+        gate_dir = tmp_path / "gate"
+        usage_dir = tmp_path / "usage"
+        update_dir = tmp_path / "update"
+        kb_dir = tmp_path / "kb"
+        for d in (gate_dir, usage_dir, update_dir, kb_dir):
+            d.mkdir()
+        (gate_dir / "fresh.json").write_text("{}")
+        media_file = tmp_path / "media.json"
+
+        with (
+            patch.object(inbound, "GATE_COMPLETION_PENDING_DIR", gate_dir),
+            patch.object(inbound, "_USAGE_REFRESH_PENDING_DIR", usage_dir),
+            patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", update_dir),
+            patch.object(inbound, "_GATE_KEYBOARD_CLEANUP_DIR", kb_dir),
+            patch.object(inbound, "_MEDIA_GROUPS_PATH", media_file),
+            patch(
+                "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                return_value=(0, 0),
+            ),
+            patch(
+                "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                return_value=0,
+            ),
+        ):
+            assert inbound._run_receiver() == 0
+
+        assert mock_tg.get_updates.call_args.kwargs["timeout"] == 5
+        assert (
+            mock_tg.get_updates.call_args.kwargs["timeout"]
+            == inbound._RECEIVER_FOLLOWUP_POLL_TIMEOUT_SECONDS
+        )
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.is_telegram_enabled")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_receiver_uses_slow_poll_when_none_or_stale(
+        self,
+        mock_creds: MagicMock,
+        mock_enabled: MagicMock,
+        mock_tg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """No records, or only records older than the window, use 30 s."""
+        import os
+        import time
+
+        from inbound_namespace import INBOUND as inbound
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+
+        gate_dir = tmp_path / "gate"
+        usage_dir = tmp_path / "usage"
+        update_dir = tmp_path / "update"
+        kb_dir = tmp_path / "kb"
+        for d in (gate_dir, usage_dir, update_dir, kb_dir):
+            d.mkdir()
+        media_file = tmp_path / "media.json"
+
+        def _run_once_receiver() -> None:
+            mock_enabled.side_effect = [True, False]
+            mock_tg.get_updates.return_value = []
+            with (
+                patch.object(inbound, "GATE_COMPLETION_PENDING_DIR", gate_dir),
+                patch.object(inbound, "_USAGE_REFRESH_PENDING_DIR", usage_dir),
+                patch.object(inbound, "_UPDATE_COMPLETION_PENDING_DIR", update_dir),
+                patch.object(inbound, "_GATE_KEYBOARD_CLEANUP_DIR", kb_dir),
+                patch.object(inbound, "_MEDIA_GROUPS_PATH", media_file),
+                patch(
+                    "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                    return_value=(0, 0),
+                ),
+                patch(
+                    "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                    return_value=0,
+                ),
+            ):
+                assert inbound._run_receiver() == 0
+
+        _run_once_receiver()
+        assert mock_tg.get_updates.call_args.kwargs["timeout"] == 30
+        assert (
+            mock_tg.get_updates.call_args.kwargs["timeout"]
+            == inbound._RECEIVER_POLL_TIMEOUT_SECONDS
+        )
+
+        mock_tg.reset_mock()
+        stale = gate_dir / "old.json"
+        stale.write_text("{}")
+        old = time.time() - 700
+        os.utime(stale, (old, old))
+        _run_once_receiver()
+        assert mock_tg.get_updates.call_args.kwargs["timeout"] == 30
+
+    @patch("inbound_namespace.INBOUND.ensure_receiver_running")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_tick_and_once_run_cleanup_when_unlocked(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_ensure: MagicMock,
+    ) -> None:
+        """Tick and --once run cleanup when the lock is free."""
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_tg.get_updates.return_value = []
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                return_value=(1, 2),
+            ) as mock_pre,
+            patch(
+                "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                return_value=3,
+            ) as mock_post,
+        ):
+            assert inbound_main([]) == 0
+            assert mock_pre.call_count == 1
+            assert mock_post.call_count == 1
+            mock_ensure.assert_called_once_with()
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND._run_pre_poll_cleanup",
+                return_value=(0, 0),
+            ) as mock_pre_once,
+            patch(
+                "inbound_namespace.INBOUND._run_post_poll_cleanup",
+                return_value=0,
+            ) as mock_post_once,
+        ):
+            assert inbound_main(["--once"]) == 0
+            mock_pre_once.assert_called_once()
+            mock_post_once.assert_called_once()
+
+    @patch("inbound_namespace.INBOUND.ensure_receiver_running")
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_tick_and_once_skip_cleanup_when_locked(
+        self,
+        mock_creds: MagicMock,
+        mock_tg: MagicMock,
+        mock_ensure: MagicMock,
+    ) -> None:
+        """Tick and --once skip cleanup when the lock is held, but proceed."""
+        import fcntl
+        import os
+
+        from sase_telegram.scripts import sase_tg_inbound as tg_script
+
+        mock_creds.get_bot_token.return_value = "token"
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_tg.get_updates.return_value = []
+
+        lock_path = tg_script._HOUSEKEEPING_LOCK_FILE
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (
+                patch("inbound_namespace.INBOUND._run_pre_poll_cleanup") as mock_pre,
+                patch("inbound_namespace.INBOUND._run_post_poll_cleanup") as mock_post,
+            ):
+                assert inbound_main([]) == 0
+                mock_pre.assert_not_called()
+                mock_post.assert_not_called()
+                mock_ensure.assert_called_once_with()
+
+            with (
+                patch(
+                    "inbound_namespace.INBOUND._run_pre_poll_cleanup"
+                ) as mock_pre_once,
+                patch(
+                    "inbound_namespace.INBOUND._run_post_poll_cleanup"
+                ) as mock_post_once,
+            ):
+                assert inbound_main(["--once"]) == 0
+                mock_pre_once.assert_not_called()
+                mock_post_once.assert_not_called()
+                mock_tg.get_updates.assert_called()
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
+
+    @patch("inbound_namespace.INBOUND.telegram_client")
+    @patch("inbound_namespace.INBOUND.credentials")
+    def test_once_leaves_real_registration_cache_untouched(
+        self, mock_creds: MagicMock, mock_tg: MagicMock
+    ) -> None:
+        """--once never writes the real-home registration cache file."""
+        from sase_telegram.inbound_handlers import commands as commands_mod
+
+        real_path = Path.home() / ".sase" / "telegram" / "commands_registered_ts"
+        existed = real_path.exists()
+        before = real_path.stat().st_mtime_ns if existed else None
+
+        mock_creds.get_chat_id.return_value = "12345"
+        mock_tg.get_updates.return_value = []
+        mock_tg.set_my_commands.return_value = True
+
+        assert inbound_main(["--once"]) == 0
+        assert commands_mod._COMMANDS_REGISTERED_PATH != real_path
+        if existed:
+            assert real_path.exists()
+            assert real_path.stat().st_mtime_ns == before
+        else:
+            assert not real_path.exists()
+
+
 class _ExecReplaced(Exception):
     """Sentinel raised by a mocked ``os.execvp`` that would have replaced us."""
 

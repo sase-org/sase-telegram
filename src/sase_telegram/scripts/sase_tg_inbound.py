@@ -10,6 +10,9 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from sase_telegram import credentials, pending_actions, telegram_client
 from sase_telegram.credentials import TelegramCredentialError
 from sase_telegram.enabled import is_telegram_enabled
@@ -45,6 +48,124 @@ log = logging.getLogger(__name__)
 #: automatically (Bot.get_updates), so this does not need a matching
 #: telegram_client change.
 _RECEIVER_POLL_TIMEOUT_SECONDS = 30
+
+
+#: Short getUpdates timeout while durable follow-up work is pending.
+#: Receiver-run housekeeping would otherwise run only once per 30 s idle
+#: long poll; the fast cadence keeps completion delivery, usage-refresh
+#: finishing, and media-group flushing responsive.
+_RECEIVER_FOLLOWUP_POLL_TIMEOUT_SECONDS = 5
+
+
+#: A follow-up record counts as "recent" (and selects the fast poll
+#: timeout) when its mtime is within this window. The window is required:
+#: gate-completion records have no expiry, so without it one stuck record
+#: would pin the receiver in 5 s polling forever.
+_FOLLOWUP_FAST_POLL_WINDOW_SECONDS = 600
+
+
+#: Shared housekeeping lock: the tick, --once, and the persistent receiver
+#: all run the same pre/post-poll cleanup. When the lock is busy another
+#: process is already doing that work, so the caller skips it instead of
+#: delivering duplicate completion messages.
+_HOUSEKEEPING_LOCK_FILE = (
+    Path.home() / ".sase" / "telegram" / "inbound_housekeeping.lock"
+)
+
+
+@contextmanager
+def _housekeeping_lock() -> Iterator[bool]:
+    """Hold the shared inbound-housekeeping lock, non-blocking.
+
+    Yields True when the lock was acquired and the caller should run
+    housekeeping, False when another process already holds it and the
+    caller should skip (treating the counts as 0).
+    """
+    import fcntl
+
+    try:
+        _HOUSEKEEPING_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        yield False
+        return
+    try:
+        fd = os.open(str(_HOUSEKEEPING_LOCK_FILE), os.O_CREAT | os.O_WRONLY, 0o644)
+    except OSError:
+        yield False
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        os.close(fd)
+
+
+def _has_recent_pending_followups(now: float | None = None) -> bool:
+    """Return True when fresh durable follow-up work is waiting.
+
+    Reads the directory and file constants from their owning modules at
+    call time (not through copied constants) so test patches through
+    ``inbound_namespace.INBOUND`` reach them. ``OSError`` while scanning
+    counts as "no pending follow-ups".
+    """
+    try:
+        if now is None:
+            now = time.time()
+        window = _FOLLOWUP_FAST_POLL_WINDOW_SECONDS
+
+        def _dir_has_recent(dir_path: Path) -> bool:
+            try:
+                paths = sorted(dir_path.glob("*.json"))
+            except OSError:
+                return False
+            for candidate in paths:
+                try:
+                    mtime = candidate.stat().st_mtime
+                except OSError:
+                    continue
+                if now - mtime <= window:
+                    return True
+            return False
+
+        from sase_telegram.inbound_handlers import (
+            gate_completions as gate_completions_mod,
+            images as images_mod,
+            keyboard_cleanup as keyboard_cleanup_mod,
+            update_command as update_command_mod,
+            usage_command as usage_command_mod,
+        )
+
+        if _dir_has_recent(gate_completions_mod.GATE_COMPLETION_PENDING_DIR):
+            return True
+        if _dir_has_recent(usage_command_mod._USAGE_REFRESH_PENDING_DIR):
+            return True
+        if _dir_has_recent(update_command_mod._UPDATE_COMPLETION_PENDING_DIR):
+            return True
+        if _dir_has_recent(keyboard_cleanup_mod._GATE_KEYBOARD_CLEANUP_DIR):
+            return True
+        try:
+            groups = images_mod._load_media_groups()
+        except Exception:
+            return False
+        if not groups:
+            return False
+        try:
+            media_mtime = images_mod._MEDIA_GROUPS_PATH.stat().st_mtime
+        except OSError:
+            return False
+        return now - media_mtime <= window
+    except Exception:
+        return False
 
 
 #: Backoff before retrying the receiver's poll loop after an unexpected
@@ -228,12 +349,20 @@ def _notify_receiver_chat_id_missing() -> None:
 def _run_once(custom_commands: dict[str, CustomCommand] | None) -> int:
     """Poll once (no long-polling) and exit -- diagnostics/tests (--once)."""
     credentials.get_chat_id()
-    stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
+    with _housekeeping_lock() as acquired:
+        if acquired:
+            stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
+        else:
+            stale_count, ready_completions_sent = 0, 0
     offset = get_last_offset()
     result = _poll_and_dispatch_updates(
         offset, timeout=0, custom_commands=custom_commands
     )
-    handled_count = _run_post_poll_cleanup()
+    with _housekeeping_lock() as acquired:
+        if acquired:
+            handled_count = _run_post_poll_cleanup()
+        else:
+            handled_count = 0
     _print_inbound_summary(
         offset=offset,
         next_offset=result.next_offset,
@@ -257,15 +386,25 @@ def _run_chop_tick(custom_commands: dict[str, CustomCommand] | None) -> int:
     this short-lived tick, so this keeps the existing five-second cleanup
     cadence (pending-action cleanup, keyboard-removal retries, completion
     delivery) fully independent of however long the receiver's long poll is
-    currently waiting. Raises :class:`TelegramCredentialError` exactly as
+    currently waiting. In service-host mode the long-poll receiver runs the
+    same housekeeping itself under the shared lock, so this tick is optional
+    there. Raises :class:`TelegramCredentialError` exactly as
     the old always-polling ``main`` did (via ``get_updates``), so the
     disabled-credential contract ``scripts.inbound_main`` relies on is
     unchanged.
     """
     credentials.get_bot_token()
     credentials.get_chat_id()
-    stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
-    handled_count = _run_post_poll_cleanup()
+    with _housekeeping_lock() as acquired:
+        if acquired:
+            stale_count, ready_completions_sent = _run_pre_poll_cleanup(custom_commands)
+        else:
+            stale_count, ready_completions_sent = 0, 0
+    with _housekeeping_lock() as acquired:
+        if acquired:
+            handled_count = _run_post_poll_cleanup()
+        else:
+            handled_count = 0
     ensure_receiver_running()
     _print_inbound_summary(
         offset=None,
@@ -293,6 +432,13 @@ def _run_receiver() -> int:
     Telegram or rotating/removing its credentials. Reloads custom commands
     each iteration (unlike ``load_custom_commands`` being loaded once by the
     short-lived job tick), since this process can run for a long time.
+
+    The receiver itself registers the bot command menu and runs inbound
+    housekeeping (completion delivery, ``/usage`` refresh finishing,
+    media-group flushing, stale/handled button cleanup) under the shared
+    housekeeping lock on every iteration, so the AXE ``tg_inbound`` tick is
+    optional under the service host. A housekeeping failure is logged and
+    never stops polling or changes the exit code.
 
     The loop is generation-aware: if the installed SASE, plugin, or native
     runtime changes, the process re-execs the canonical
@@ -336,11 +482,29 @@ def _run_receiver() -> int:
             return _refresh_receiver_runtime()
 
         custom_commands = load_custom_commands()
+        try:
+            with _housekeeping_lock() as _acquired:
+                if _acquired:
+                    stale_count, ready_completions_sent = _run_pre_poll_cleanup(
+                        custom_commands
+                    )
+                else:
+                    stale_count, ready_completions_sent = 0, 0
+        except Exception:
+            log.warning(
+                "Receiver pre-poll housekeeping failed; continuing", exc_info=True
+            )
+            stale_count, ready_completions_sent = 0, 0
         offset = get_last_offset()
         try:
-            updates = telegram_client.get_updates(
-                offset=offset, timeout=_RECEIVER_POLL_TIMEOUT_SECONDS
-            )
+            if _has_recent_pending_followups():
+                poll_timeout = _RECEIVER_FOLLOWUP_POLL_TIMEOUT_SECONDS
+            else:
+                poll_timeout = _RECEIVER_POLL_TIMEOUT_SECONDS
+        except Exception:
+            poll_timeout = _RECEIVER_POLL_TIMEOUT_SECONDS
+        try:
+            updates = telegram_client.get_updates(offset=offset, timeout=poll_timeout)
         except Exception:
             log.warning("Receiver poll failed; retrying", exc_info=True)
             time.sleep(_RECEIVER_ERROR_BACKOFF_SECONDS)
@@ -357,6 +521,17 @@ def _run_receiver() -> int:
         result = _dispatch_fetched_updates(
             updates, offset=offset, custom_commands=custom_commands
         )
+        try:
+            with _housekeeping_lock() as _acquired:
+                if _acquired:
+                    handled_count = _run_post_poll_cleanup()
+                else:
+                    handled_count = 0
+        except Exception:
+            log.warning(
+                "Receiver post-poll housekeeping failed; continuing", exc_info=True
+            )
+            handled_count = 0
         if result.updates:
             _print_inbound_summary(
                 offset=offset,
@@ -367,8 +542,8 @@ def _run_receiver() -> int:
                 photo_count=result.counts["photo"],
                 document_count=result.counts["document"],
                 unsupported_count=result.counts["unsupported"],
-                ready_completions_sent=0,
-                pending_actions_cleaned=0,
+                ready_completions_sent=ready_completions_sent,
+                pending_actions_cleaned=stale_count + handled_count,
                 reason=None,
             )
 

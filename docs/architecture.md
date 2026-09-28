@@ -46,12 +46,16 @@ pdf_convert.py
 
 ### Inbound
 
-1. `sase_job_tg_inbound --receiver` is a long-lived process. Before each `getUpdates`
-   long poll, and again after the poll returns, it compares the installed SASE /
-   `sase-telegram` / `sase_core_rs` generation to the fingerprint captured at start.
-   A changed or unsettled generation re-execs the canonical
-   `sase_job_tg_inbound --receiver` argv in the same process slot instead of
-   dispatching with mixed imports.
+1. `sase_job_tg_inbound --receiver` is a long-lived process. It registers the
+   bot command menu and runs inbound housekeeping (completion delivery,
+   `/usage` refresh finishing, media-group flushing, stale/handled button
+   cleanup) under a shared lock before each `getUpdates` long poll and again
+   after dispatch, so the AXE `tg_inbound` tick is optional under the service
+   host. Before each poll, and again after the poll returns, it compares the
+   installed SASE / `sase-telegram` / `sase_core_rs` generation to the
+   fingerprint captured at start. A changed or unsettled generation re-execs
+   the canonical `sase_job_tg_inbound --receiver` argv in the same process
+   slot instead of dispatching with mixed imports.
 2. `getUpdates` fetches the currently pending Telegram updates from the stored offset
 3. Each update is dispatched by type, and the offset in `update_offset.txt` is saved
    only after that update finishes (successfully or with a caught, logged handler

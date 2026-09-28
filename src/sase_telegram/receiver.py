@@ -2,14 +2,18 @@
 
 The receiver itself (the persistent ``getUpdates`` loop) lives in
 ``scripts/sase_tg_inbound.py``, dispatching to the update handlers in
-``inbound_handlers``.
+``inbound_handlers``. That loop registers the bot command menu and runs
+inbound housekeeping (completion delivery, ``/usage`` refresh finishing,
+media-group flushing, stale/handled button cleanup) under a shared lock,
+so under the service host the AXE ``tg_inbound`` tick is optional.
 This module only owns *launching* it: every ~5-second job tick calls
 :func:`ensure_receiver_running`, which is cheap and non-blocking because a
 receiver already active for this bot replays the same durable proc row
 instead of spawning a second one -- see ``request_fingerprint`` below. SASE's
 proc supervisor does not auto-relaunch a crashed supervised proc, so this
 per-tick re-arm from the still-ticking job is what gives the receiver its
-restart resilience.
+restart resilience. The tick remains supported for the legacy durable-proc
+receiver, where it also re-arms the receiver every tick.
 """
 
 from __future__ import annotations

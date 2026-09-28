@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,33 @@ def _no_service_owned_receiver(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sase.service.config.load_service_config",
         lambda: SimpleNamespace(get=lambda _name: None),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telegram_registration_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep tests off the real ~/.sase/telegram registration cache and lock.
+
+    Integration tests that call ``inbound_main(["--once"])`` with a mocked
+    telegram client would otherwise write the real
+    ``~/.sase/telegram/commands_registered_ts`` and lock file. Tests that
+    patch ``_COMMANDS_REGISTERED_PATH`` themselves keep working because
+    their patch applies on top of this one.
+    """
+    import sase_telegram.inbound_handlers.commands as _commands
+    import sase_telegram.scripts.sase_tg_inbound as _tg_inbound
+
+    monkeypatch.setattr(
+        _commands,
+        "_COMMANDS_REGISTERED_PATH",
+        tmp_path / "commands_registered_ts",
+    )
+    monkeypatch.setattr(
+        _tg_inbound,
+        "_HOUSEKEEPING_LOCK_FILE",
+        tmp_path / "inbound_housekeeping.lock",
     )
 
 

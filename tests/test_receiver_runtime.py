@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,22 @@ def _write(path: Path, content: str = "x") -> None:
 def _write_executable(path: Path, content: str = "#!/bin/sh\nexit 0\n") -> None:
     _write(path, content)
     path.chmod(0o755)
+
+
+def _rewrite(path: Path, content: str) -> None:
+    """Rewrite a file, forcing a distinct mtime.
+
+    The generation digest keys on (relative path, size, mtime_ns). Rapid
+    same-size rewrites can share an mtime tick on coarse filesystems, so
+    assign an explicit, strictly increasing mtime after each rewrite.
+    """
+    _write(path, content)
+    try:
+        current_ns = path.stat().st_mtime_ns
+    except OSError:
+        current_ns = time.time_ns()
+    stamp_ns = max(time.time_ns(), current_ns) + 2_000_000
+    os.utime(path, ns=(stamp_ns, stamp_ns))
 
 
 def _runtime_tree(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
@@ -59,15 +77,17 @@ def test_host_plugin_and_native_changes_each_new_generation(tmp_path: Path) -> N
     executable, roots = _runtime_tree(tmp_path)
     baseline = _observe(executable, roots)
 
-    _write(roots["sase"] / "api.py", "def run() -> None:\n    return None\n# changed\n")
+    _rewrite(
+        roots["sase"] / "api.py", "def run() -> None:\n    return None\n# changed\n"
+    )
     host_changed = _observe(executable, roots)
     assert host_changed.digest != baseline.digest
 
-    _write(roots["sase_telegram"] / "inbound.py", "VALUE = 2\n")
+    _rewrite(roots["sase_telegram"] / "inbound.py", "VALUE = 2\n")
     plugin_changed = _observe(executable, roots)
     assert plugin_changed.digest != host_changed.digest
 
-    _write(roots["sase_core_rs"], "native-extension-v2")
+    _rewrite(roots["sase_core_rs"], "native-extension-v2")
     native_changed = _observe(executable, roots)
     assert native_changed.digest != plugin_changed.digest
 
@@ -90,7 +110,7 @@ def test_executable_replacement_changes_generation(tmp_path: Path) -> None:
     executable, roots = _runtime_tree(tmp_path)
     baseline = _observe(executable, roots)
 
-    _write_executable(executable, "#!/bin/sh\nexit 1\n")
+    _rewrite(executable, "#!/bin/sh\nexit 1\n")
     replaced = _observe(executable, roots)
     assert replaced.digest != baseline.digest
 

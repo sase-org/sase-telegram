@@ -18,17 +18,33 @@ sase_job_tg_inbound --receiver   # Run the persistent long-poll receiver loop (i
 sase_job_tg_inbound --context X  # Pass context string for logging
 ```
 
+The long-poll receiver itself registers the bot command menu and runs
+inbound housekeeping (completion delivery, `/usage` refresh finishing,
+media-group flushing, stale/handled button cleanup) under a shared lock.
+Under the service host the AXE `tg_inbound` tick is therefore optional. It
+remains supported for the legacy durable-proc receiver, where it also
+re-arms the receiver every tick.
+
 ## Long-Poll Receiver
 
 Telegram updates are fetched by one persistent, supervised long-poll receiver per
-configured bot, not by the five-second job tick itself. Each tick calls
+configured bot, not by the five-second job tick itself. The receiver itself
+registers the bot command menu and runs inbound housekeeping (completion
+delivery, `/usage` refresh finishing, media-group flushing, stale/handled
+button cleanup) under a shared lock on every iteration, so under the service
+host the AXE `tg_inbound` tick is optional. Each tick calls
 `ensure_receiver_running`, an idempotent, non-blocking durable-proc submission
 (`sase.procs.submit_proc_request` with a fingerprint/concurrency key derived from the
 configured chat id): a receiver already active for that bot replays the same proc row,
 so re-arming on every tick never spawns a second `getUpdates` consumer. Because SASE's
 proc supervisor does not auto-relaunch a crashed supervised proc, this per-tick re-arm
 is also how a killed or crashed receiver comes back — within one tick interval, not
-after a manual restart.
+after a manual restart — for the legacy durable-proc receiver.
+
+While follow-up work is pending the receiver shortens its `getUpdates`
+long-poll timeout from 30 s to 5 s so completions, refreshes, and albums land
+promptly; only records modified within the last 10 minutes select the fast
+cadence, so a stuck record cannot pin fast polling forever.
 
 The receiver self-terminates (rather than waiting for an external stop signal) once it
 notices Telegram has been disabled (`~/.sase/telegram_is_enabled` removed) or its
@@ -249,7 +265,7 @@ keys. The message carries a 🔄 Refresh button.
 
 Tapping Refresh calls the `sase.integrations.usage_windows` facade, which submits an explicit chat-origin refresh and
 returns immediately. The handler edits the message to a `⏳ Refreshing …` state with a busy keyboard, then persists a
-pending record under `~/.sase/telegram/usage_refreshes/{chat_id}_{message_id}.json`. The 5-second job tick delivers
+pending record under `~/.sase/telegram/usage_refreshes/{chat_id}_{message_id}.json`. The long-poll receiver and the 5-second job tick deliver
 completions via `_finish_ready_usage_refreshes()`: while refresh operations are still live and the deadline has not
 passed the record waits for a later tick, otherwise the original message is edited in place with a `✅ Refreshed` or
 timeout status line. Records are deleted only after a successful edit; failed edits retry on later ticks, and malformed
