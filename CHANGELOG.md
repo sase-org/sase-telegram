@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.23](https://github.com/sase-org/sase-telegram/compare/v0.4.22...v0.4.23) (2026-09-28)
+
+
+### Features
+
+* **receiver:** run inbound housekeeping in service-host receiver with adaptive polling ([f06ef98](https://github.com/sase-org/sase-telegram/commit/f06ef988555d56536d649bc9d69ce65fd979ee1f))
+
 ## [0.4.22](https://github.com/sase-org/sase-telegram/compare/v0.4.21...v0.4.22) (2026-09-27)
 
 
