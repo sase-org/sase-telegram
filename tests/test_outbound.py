@@ -19,13 +19,16 @@ from sase_telegram.outbound import (
 )
 from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
+    _audio_size_exceeds_limit,
     _is_animation_file,
+    _is_audio_file,
     _is_diff_file,
     _is_image_file,
     _is_pdf_file,
     _is_video_file,
     _make_response_only_file,
     _prepend_commit_message_to_markdown,
+    _read_audio_metadata,
     _run_outbound,
 )
 
@@ -274,6 +277,53 @@ class TestIsVideoFile:
     def test_non_video_extension(self):
         assert not _is_video_file("/path/to/file.gif")
         assert not _is_video_file("/path/to/file.pdf")
+
+
+class TestIsAudioFile:
+    def test_known_extensions(self):
+        assert _is_audio_file("/path/to/episode.mp3")
+        assert _is_audio_file("/path/to/episode.m4a")
+
+    def test_case_insensitive(self):
+        assert _is_audio_file("/path/to/episode.MP3")
+        assert _is_audio_file("/path/to/episode.M4A")
+
+    def test_non_audio_extension(self):
+        assert not _is_audio_file("/path/to/file.mp4")
+        assert not _is_audio_file("/path/to/file.pdf")
+        assert not _is_audio_file("/path/to/file.wav")
+
+
+class TestReadAudioMetadata:
+    def test_reads_id3_title_and_performer(self, tmp_path: Path) -> None:
+        mutagen_id3 = pytest.importorskip("mutagen.id3")
+        mp3_path = tmp_path / "episode.mp3"
+        mp3_path.write_bytes(b"\x00")
+        tags = mutagen_id3.ID3()
+        tags.add(mutagen_id3.TIT2(encoding=3, text="Episode Title"))
+        tags.add(mutagen_id3.TPE1(encoding=3, text="Narrator"))
+        tags.save(str(mp3_path))
+
+        assert _read_audio_metadata(str(mp3_path)) == (
+            "Episode Title",
+            "Narrator",
+            None,
+        )
+
+    def test_missing_file_returns_nones(self, tmp_path: Path) -> None:
+        assert _read_audio_metadata(str(tmp_path / "nope.mp3")) == (None, None, None)
+
+    def test_garbage_file_returns_nones(self, tmp_path: Path) -> None:
+        pytest.importorskip("mutagen")
+        junk = tmp_path / "junk.mp3"
+        junk.write_bytes(b"not audio at all")
+        assert _read_audio_metadata(str(junk)) == (None, None, None)
+
+    def test_size_limit_boundary(self, tmp_path: Path) -> None:
+        small = tmp_path / "small.mp3"
+        small.write_bytes(b"\x00" * 16)
+        assert _audio_size_exceeds_limit(str(small)) is False
+        assert _audio_size_exceeds_limit(str(tmp_path / "missing.mp3")) is None
 
 
 class TestIsPdfFile:
@@ -676,6 +726,163 @@ class TestRunOutboundAttachments:
         md_to_pdf.assert_not_called()
 
         Path(video_path).unlink()
+
+    def test_workflow_complete_mp3_sends_audio_with_metadata(self):
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio:
+            audio.write(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+            audio_path = audio.name
+
+        notification = Notification(
+            id="aud00000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: audio-update"],
+            files=[audio_path],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound._read_audio_metadata",
+                return_value=("Episode Title", "Narrator", 960),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_audio") as send_audio,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_audio.assert_called_once_with(
+            "chat-1",
+            audio_path,
+            title="Episode Title",
+            performer="Narrator",
+            duration=960,
+        )
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+
+        Path(audio_path).unlink()
+
+    def test_audio_failure_falls_back_to_document(self, tmp_path: Path):
+        audio_path = tmp_path / "episode.m4a"
+        audio_path.write_bytes(b"\x00\x00\x00\x18ftypM4A ")
+
+        notification = Notification(
+            id="audfb000-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: audio-fallback"],
+            files=[str(audio_path)],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_audio",
+                side_effect=RuntimeError("codec rejected"),
+            ) as send_audio,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_audio.assert_called_once()
+        send_document.assert_called_once_with("chat-1", str(audio_path))
+        md_to_pdf.assert_not_called()
+
+    def test_oversize_audio_sends_note_not_upload(self, tmp_path: Path):
+        audio_path = tmp_path / "huge-episode.mp3"
+        audio_path.write_bytes(b"\x00" * 64)
+
+        notification = Notification(
+            id="audbig00-0000-0000-0000-000000000000",
+            timestamp=datetime.now(UTC).isoformat(),
+            sender="user-agent",
+            notes=["Agent completed: oversize-audio"],
+            files=[str(audio_path)],
+        )
+
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=[notification],
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_message",
+                return_value=SimpleNamespace(message_id=123),
+            ) as send_message,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound._audio_size_exceeds_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.send_audio") as send_audio,
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.send_document"
+            ) as send_document,
+            patch("sase_telegram.scripts.sase_tg_outbound.md_to_pdf") as md_to_pdf,
+        ):
+            result = _run_outbound(argparse.Namespace(dry_run=False))
+
+        assert result == 0
+        send_audio.assert_not_called()
+        send_document.assert_not_called()
+        md_to_pdf.assert_not_called()
+        # One call for the notification plus one oversize note.
+        assert send_message.call_count == 2
+        note = send_message.call_args_list[1].args[1]
+        assert "50 MB" in note
+        assert str(audio_path) in note
 
     def test_selected_media_failure_falls_back_to_document(self, tmp_path: Path):
         video_path = tmp_path / "fallback-update.webm"

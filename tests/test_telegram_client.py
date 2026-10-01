@@ -33,6 +33,7 @@ def mock_bot(mocker: MockerFixture) -> MagicMock:
     bot.send_photo = AsyncMock()
     bot.send_animation = AsyncMock()
     bot.send_video = AsyncMock()
+    bot.send_audio = AsyncMock()
     bot.get_updates = AsyncMock(return_value=[])
     bot.answer_callback_query = AsyncMock(return_value=True)
     bot.edit_message_reply_markup = AsyncMock()
@@ -231,6 +232,41 @@ class TestSendVideo:
         telegram_client.send_video("chat-1", "/tmp/x.mp4", caption="hi")
         mock_bot.send_video.assert_awaited_once_with(
             chat_id="chat-1", video="/tmp/x.mp4", caption="hi"
+        )
+
+
+class TestSendAudio:
+    def test_delegates_to_bot_with_metadata(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_audio.return_value = MagicMock(message_id=1)
+        telegram_client.send_audio(
+            "chat-1",
+            "/tmp/x.mp3",
+            caption="hi",
+            title="Episode",
+            performer="Narrator",
+            duration=960,
+        )
+        mock_bot.send_audio.assert_awaited_once_with(
+            chat_id="chat-1",
+            audio="/tmp/x.mp3",
+            caption="hi",
+            title="Episode",
+            performer="Narrator",
+            duration=960,
+            write_timeout=120,
+        )
+
+    def test_defaults_to_no_metadata(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_audio.return_value = MagicMock(message_id=1)
+        telegram_client.send_audio("chat-1", "/tmp/x.m4a")
+        mock_bot.send_audio.assert_awaited_once_with(
+            chat_id="chat-1",
+            audio="/tmp/x.m4a",
+            caption=None,
+            title=None,
+            performer=None,
+            duration=None,
+            write_timeout=120,
         )
 
 

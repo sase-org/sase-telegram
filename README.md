@@ -88,9 +88,10 @@ for existing SASE configurations.
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
 - **Slash commands** — built-in agent-management commands plus user-defined commands from `telegram.commands`, all registered with `set_my_commands` so they show up in the chat input UI
 - **Kinship views** — `/show` indexes clans, sessions, and tribes; `/show <ref>` opens rich agent or group status with mobile drill-down and refresh buttons
-- **Media attachments** — workflow completion attachments route static images, GIFs, videos, and PDFs through the
-  matching Telegram send method, with GIF/video document fallback and one preferred motion-media representation per
-  same-directory filename stem
+- **Media attachments** — workflow completion attachments route static images, GIFs, videos, audio (MP3/M4A), and
+  PDFs through the matching Telegram send method, with GIF/video/audio document fallback and one preferred
+  motion-media representation per same-directory filename stem. Audio carries ID3 title/performer/duration metadata,
+  and files over the 50 MB bot limit get a size note instead of an upload
 - **PDF attachments** — Markdown attachments are rendered to PDF through the shared SASE renderer when possible
 - **Large content handling** — keeps short plan properties open, makes metadata-heavy property cards expandable, and truncates oversized property values/body previews with an attachment fallback
 - **Message splitting** — messages exceeding Telegram's 4096-character limit are automatically split
@@ -191,8 +192,10 @@ detailed `phases[].size` values remain visible in Properties, while legacy missi
 validation or the required SASE capability is unavailable, the summary is quietly omitted without affecting delivery.
 Chat
 file attachments are trimmed to just the response portion, with commit messages and diffs embedded into the response
-PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, and PDFs as documents; GIFs
-and videos retry as documents if Telegram rejects inline media delivery. Workflow completions coalesce same-stem motion
+PDF when possible. Static images are sent as photos, GIFs as animations, videos as videos, MP3/M4A files as audio
+(landing in Telegram's music player with ID3 title/performer/duration metadata), and PDFs as documents; GIFs, videos,
+and audio retry as documents if Telegram rejects inline media delivery. Audio files over the 50 MB bot limit are
+skipped with a short text note carrying the size and path. Workflow completions coalesce same-stem motion
 media variants in one directory for delivery while retaining the complete underlying SASE artifact inventory.
 Actionable notifications (plan approvals, HITL requests, user questions) are saved as pending actions for the inbound
 script to match against.

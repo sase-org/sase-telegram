@@ -128,8 +128,12 @@ The visible plan **✅ Approve** button maps to the internal `run` payload for c
 - **Diff sections**: Diffs from chat files and commit messages are embedded into the response PDF
 - **Research files**: Detected research files in diffs are mentioned in the notification
 - **Digest files**: Error digest files are sent as document attachments
-- **Media and PDFs**: Static images are sent inline as photos, GIFs as animations, videos as videos, and existing PDFs
-  as documents without conversion. If Telegram rejects a GIF or video as inline media, outbound retries that file as a
-  document. Workflow completions send one motion-media representation for files with the same normalized directory and
+- **Media and PDFs**: Static images are sent inline as photos, GIFs as animations, videos as videos, MP3/M4A files
+  as audio (via `sendAudio`, so episodes land in Telegram's music player), and existing PDFs
+  as documents without conversion. If Telegram rejects a GIF, video, or audio file as inline media, outbound retries
+  that file as a document.
+- **Audio metadata and size guard**: MP3/M4A attachments carry ID3 title (TIT2), performer (TPE1), and duration
+  metadata read with `mutagen`; any read failure falls back to no metadata. Files over the 50 MB bot limit skip the
+  upload and get a short text note with the size and path instead. Workflow completions send one motion-media representation for files with the same normalized directory and
   filename stem, preferring GIF, MP4, M4V, MOV, then WEBM. Other artifacts remain separate, and every discovered file
   remains available in the underlying SASE notification and artifact inventory.

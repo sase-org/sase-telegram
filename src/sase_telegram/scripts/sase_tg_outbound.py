@@ -19,6 +19,7 @@ from sase_telegram.formatting import display_safe_stem, format_notification
 from sase_telegram.outbound import get_unsent_notifications, mark_sent
 from sase_telegram.telegram_client import (
     send_animation,
+    send_audio,
     send_document,
     send_message,
     send_photo,
@@ -144,6 +145,82 @@ def _is_video_file(file_path: str) -> bool:
     return Path(file_path).suffix.lower() in {".mp4", ".m4v", ".mov", ".webm"}
 
 
+def _is_audio_file(file_path: str) -> bool:
+    """Check if a file path points to a Telegram music-player audio format."""
+    return Path(file_path).suffix.lower() in {".mp3", ".m4a"}
+
+
+# Telegram Bot API limit for audio sent via sendAudio.
+_AUDIO_SIZE_LIMIT_BYTES = 50 * 1024 * 1024
+
+
+def _read_audio_metadata(file_path: str) -> tuple[str | None, str | None, int | None]:
+    """Read (title, performer, duration) tags from an audio file.
+
+    Any read failure falls back to ``None`` so the send still proceeds
+    without metadata.
+    """
+    title: str | None = None
+    performer: str | None = None
+    duration: int | None = None
+    try:
+        from mutagen import File as _open_audio
+        from mutagen.id3 import ID3
+    except ImportError:
+        return None, None, None
+    try:
+        audio = _open_audio(file_path, easy=True)
+    except Exception:
+        audio = None
+    if audio is not None:
+        try:
+            values = audio.get("title")
+            if values:
+                title = str(values[0]) or None
+        except Exception:
+            pass
+        try:
+            values = audio.get("artist")
+            if values:
+                performer = str(values[0]) or None
+        except Exception:
+            pass
+        try:
+            length = getattr(audio.info, "length", None)
+            if length is not None:
+                duration = int(length)
+        except Exception:
+            pass
+    if (title is None or performer is None) and Path(
+        file_path
+    ).suffix.lower() == ".mp3":
+        try:
+            tags = ID3(file_path)
+            if title is None:
+                frame = tags.get("TIT2")
+                if frame is not None and frame.text:
+                    title = str(frame.text[0]) or None
+            if performer is None:
+                frame = tags.get("TPE1")
+                if frame is not None and frame.text:
+                    performer = str(frame.text[0]) or None
+        except Exception:
+            pass
+    return title, performer, duration
+
+
+def _audio_size_exceeds_limit(file_path: str) -> bool | None:
+    """Return True when the file is over the sendAudio size limit.
+
+    Returns None when the size cannot be determined, letting the caller
+    attempt the upload rather than skipping it.
+    """
+    try:
+        return Path(file_path).stat().st_size > _AUDIO_SIZE_LIMIT_BYTES
+    except OSError:
+        return None
+
+
 def _is_pdf_file(file_path: str) -> bool:
     """Check if a file path points to a PDF."""
     return Path(file_path).suffix.lower() == ".pdf"
@@ -153,10 +230,12 @@ def _send_media_with_document_fallback(
     chat_id: str,
     file_path: str,
     send_media: Any,
+    *args: Any,
+    **kwargs: Any,
 ) -> None:
     """Send inline media, retrying as a document if Telegram rejects it."""
     try:
-        send_media(chat_id, file_path)
+        send_media(chat_id, file_path, *args, **kwargs)
     except Exception:
         log.warning(
             "Failed to send media %s inline; retrying as document",
@@ -521,6 +600,28 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
 
                 if _is_video_file(actual_path):
                     _send_media_with_document_fallback(chat_id, actual_path, send_video)
+                    rate_limit.record_send()
+                    continue
+
+                if _is_audio_file(actual_path):
+                    if _audio_size_exceeds_limit(actual_path):
+                        size_mb = Path(actual_path).stat().st_size / (1024 * 1024)
+                        send_message(
+                            chat_id,
+                            f"Audio attachment too large for Telegram "
+                            f"(50 MB limit): {size_mb:.1f} MB — {actual_path}",
+                        )
+                        rate_limit.record_send()
+                        continue
+                    title, performer, duration = _read_audio_metadata(actual_path)
+                    _send_media_with_document_fallback(
+                        chat_id,
+                        actual_path,
+                        send_audio,
+                        title=title,
+                        performer=performer,
+                        duration=duration,
+                    )
                     rate_limit.record_send()
                     continue
 

@@ -1727,20 +1727,43 @@ class TestFormatWorkflowComplete:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as mp4:
             mp4.write(b"\x00\x00\x00\x18ftypmp42")
             mp4_file = mp4.name
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as mp3:
+            mp3.write(b"ID3\x04\x00\x00\x00\x00\x00\x00")
+            mp3_file = mp3.name
+        with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as m4a:
+            m4a.write(b"\x00\x00\x00\x18ftypM4A ")
+            m4a_file = m4a.name
 
         n = _make_notification(
             sender="user-agent",
             notes=["Agent completed: media-update"],
-            files=[png_file, jpg_file, gif_file, mp4_file, "/missing/not-attached.gif"],
+            files=[
+                png_file,
+                jpg_file,
+                gif_file,
+                mp4_file,
+                mp3_file,
+                m4a_file,
+                "/missing/not-attached.gif",
+            ],
         )
         _text, _keyboard, attachments = format_notification(n)
 
-        assert attachments == [png_file, jpg_file, gif_file, mp4_file]
+        assert attachments == [
+            png_file,
+            jpg_file,
+            gif_file,
+            mp4_file,
+            mp3_file,
+            m4a_file,
+        ]
 
         Path(png_file).unlink()
         Path(jpg_file).unlink()
         Path(gif_file).unlink()
         Path(mp4_file).unlink()
+        Path(mp3_file).unlink()
+        Path(m4a_file).unlink()
 
     def test_coalesces_motion_media_variants_at_the_groups_original_position(
         self, tmp_path: Path

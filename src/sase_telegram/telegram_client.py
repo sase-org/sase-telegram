@@ -230,6 +230,30 @@ def send_video(
 
 
 @_with_retry
+def send_audio(
+    chat_id: str,
+    audio: str | bytes,
+    caption: str | None = None,
+    title: str | None = None,
+    performer: str | None = None,
+    duration: int | None = None,
+) -> Message:
+    """Send an audio file to a Telegram chat (lands in the music player)."""
+    bot = _get_bot()
+    return _run_async(
+        bot.send_audio(
+            chat_id=chat_id,
+            audio=audio,
+            caption=caption,
+            title=title,
+            performer=performer,
+            duration=duration,
+            write_timeout=120,
+        )
+    )
+
+
+@_with_retry
 def get_updates(offset: int | None = None, timeout: int = 0) -> list[Update]:
     """Fetch updates (new messages/callbacks) from the Telegram API."""
     bot = _get_bot()

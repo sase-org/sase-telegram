@@ -12,6 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "PyYAML>=6.0",
+    "mutagen>=1.45",
     "sase>=0.17.0",
     "python-telegram-bot>=21.0",
 ]
@@ -65,6 +66,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["telegram.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["mutagen.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
