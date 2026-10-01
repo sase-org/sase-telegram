@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.24](https://github.com/sase-org/sase-telegram/compare/v0.4.23...v0.4.24) (2026-10-01)
+
+
+### Features
+
+* **telegram:** add audio delivery with ID3 metadata and oversize note ([8cb6728](https://github.com/sase-org/sase-telegram/commit/8cb672899fb8400b5439559e14635e15291a8b84))
+
 ## [0.4.23](https://github.com/sase-org/sase-telegram/compare/v0.4.22...v0.4.23) (2026-09-28)
 
 
