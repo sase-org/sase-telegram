@@ -14,7 +14,7 @@ from sase_telegram.inbound import (
     clear_awaiting_feedback,
     clear_awaiting_feedback_by_prefix,
     load_awaiting_feedback,
-    normalize_launch_xprompt_at_refs,
+    normalize_launch_macro_at_refs,
     process_text_message,
     reconstruct_code_markers,
 )
@@ -171,6 +171,6 @@ def _handle_text_message(
         return
 
     # Launch a new agent with this text as the prompt
-    text = normalize_launch_xprompt_at_refs(text)
+    text = normalize_launch_macro_at_refs(text)
     _record_project_context(text, message)
     _launch_agent(text)

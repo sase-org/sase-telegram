@@ -20,7 +20,7 @@ from sase.core.output_variable_values import coerce_var_map
 from sase.notification_gates.models import GateOption
 from sase.notification_gates.registry import adapter_for_action
 from sase.notifications.models import Notification
-from sase.xprompt.models import InputType
+from sase_telegram.macro_compat import InputType
 
 from sase_telegram import callback_data
 from sase_telegram.gate_flow import (
@@ -192,7 +192,7 @@ def build_fork_copy_text(
         resolved_vcs_tag = effective_vcs_workflow_tag(prompt) or resolved_vcs_tag
 
     if resolved_vcs_tag:
-        from sase.xprompt import replace_ref_in_vcs_tag
+        from sase_telegram.macro_compat import replace_ref_in_vcs_tag
 
         if isinstance(cl_name, str) and cl_name:
             resolved_vcs_tag = replace_ref_in_vcs_tag(resolved_vcs_tag, cl_name)

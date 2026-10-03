@@ -175,7 +175,7 @@ Text messages are dispatched in priority order:
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
    - `/changes [project]` — Shows copy buttons for active Patch workflow tags, optionally filtered by exact project name
-   - `/xprompts` — Builds the xprompts catalog PDF and reports its path
+   - `/macros` — Builds the macros catalog PDF and reports its path (`/xprompts` stays an unlisted alias while sase's `legacy_xprompt_syntax` flag is enabled)
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
    - `/usage [provider]` — Shows every usage window for configured providers with capacity bars and resets
    - `/update` — Starts the detached SASE update worker and replies with its log path
@@ -206,7 +206,7 @@ or file download, so disabled hosts do not call Telegram's file API or create lo
 
 When a text message or photo triggers an agent launch:
 
-- **XPrompt expansion**: References like `#mentor` or `#gh(...)` in the message are expanded
+- **Macro expansion**: References like `#mentor` or `#gh(...)` in the message are expanded
 - **Project tags**: Telegram launch prompts target a project with `+<project>` (for example `+sase`), resolved
   case-insensitively just like every other SASE surface. The `#gh:`/`#git:` spellings keep working unchanged
 - **VCS shorthand**: Telegram launch prompts can use `#gh@<patch>` for Patch refs; it is normalized to `#gh:<patch>`

@@ -21,7 +21,7 @@ from sase_telegram.inbound import (
     load_all_awaiting_feedback,
     load_awaiting_feedback,
     make_image_filename,
-    normalize_launch_xprompt_at_refs,
+    normalize_launch_macro_at_refs,
     process_text_message,
     reconstruct_code_markers,
     save_awaiting_feedback,
@@ -1633,16 +1633,16 @@ class TestProjectSpecPath:
         assert _project_spec_path(project_dir, "myproj") == legacy_path
 
 
-class TestListPatchXpromptTagsImport:
-    """``_list_patch_xprompt_tags`` delegates to the canonical patch_tags API."""
+class TestListPatchMacroTagsImport:
+    """``_list_patch_macro_tags`` delegates to the canonical patch_tags API."""
 
     def test_delegates_to_canonical_patch_tags_module(self) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
-            _list_patch_xprompt_tags,
+        from sase_telegram.inbound_handlers.macro_commands import (
+            _list_patch_macro_tags,
         )
 
         with patch("sase.integrations.patch_tags.find_all_patches", return_value=[]):
-            listing = _list_patch_xprompt_tags()
+            listing = _list_patch_macro_tags()
 
         assert listing.entries == []
         assert listing.skipped == []
@@ -1658,13 +1658,13 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
         mock_creds.get_chat_id.return_value = "12345"
 
-        with patch("inbound_namespace.INBOUND._list_patch_xprompt_tags") as mock_list:
+        with patch("inbound_namespace.INBOUND._list_patch_macro_tags") as mock_list:
             _handle_changes_command("one two")
 
         mock_list.assert_not_called()
@@ -1679,7 +1679,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1687,7 +1687,7 @@ class TestChangesCommand:
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_macro_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("")
@@ -1702,7 +1702,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1710,7 +1710,7 @@ class TestChangesCommand:
         listing = SimpleNamespace(entries=[], skipped=[])
 
         with patch(
-            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_macro_tags",
             return_value=listing,
         ) as mock_list:
             _handle_changes_command("sase")
@@ -1727,7 +1727,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1741,7 +1741,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_macro_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -1766,7 +1766,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1784,7 +1784,7 @@ class TestChangesCommand:
 
         with (
             patch(
-                "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+                "inbound_namespace.INBOUND._list_patch_macro_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
@@ -1819,7 +1819,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1830,7 +1830,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_macro_tags",
             return_value=listing,
         ):
             _handle_changes_command("sase")
@@ -1851,7 +1851,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1863,7 +1863,7 @@ class TestChangesCommand:
 
         with (
             patch(
-                "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+                "inbound_namespace.INBOUND._list_patch_macro_tags",
                 return_value=listing,
             ) as mock_list,
             patch(
@@ -1894,7 +1894,7 @@ class TestChangesCommand:
         mock_creds: MagicMock,
         mock_tg: MagicMock,
     ) -> None:
-        from sase_telegram.inbound_handlers.xprompt_commands import (
+        from sase_telegram.inbound_handlers.macro_commands import (
             _handle_changes_command,
         )
 
@@ -1908,7 +1908,7 @@ class TestChangesCommand:
         )
 
         with patch(
-            "inbound_namespace.INBOUND._list_patch_xprompt_tags",
+            "inbound_namespace.INBOUND._list_patch_macro_tags",
             return_value=listing,
         ):
             _handle_changes_command("")
@@ -2437,7 +2437,7 @@ class TestLaunchAgent:
                 return_value=[mock_result],
             ),
             patch(
-                "sase.xprompt.extract_vcs_workflow_tag",
+                "sase.macro.extract_vcs_workflow_tag",
                 return_value="#gh:gh_sase-org__sase ",
             ),
             patch("sase.agent.names.allocate_retry_name", return_value="foo.r1"),
@@ -2481,15 +2481,15 @@ class TestLaunchAgent:
                 return_value=[mock_result],
             ),
             patch(
-                "sase.xprompt.extract_vcs_workflow_tag",
+                "sase.macro.extract_vcs_workflow_tag",
                 return_value="#gh:sase ",
             ),
             patch(
-                "inbound_namespace.INBOUND._prompt_has_pr_xprompt",
+                "inbound_namespace.INBOUND._prompt_has_pr_macro",
                 return_value=True,
             ),
             patch(
-                "sase.xprompt.replace_ref_in_vcs_tag",
+                "sase_telegram.macro_compat.replace_ref_in_vcs_tag",
                 return_value="#gh:@foo ",
             ),
         ):
@@ -2526,11 +2526,11 @@ class TestLaunchAgent:
                 return_value=[mock_result],
             ),
             patch(
-                "sase.xprompt.extract_vcs_workflow_tag",
+                "sase.macro.extract_vcs_workflow_tag",
                 return_value="#gh:sase ",
             ),
             patch(
-                "inbound_namespace.INBOUND._prompt_has_pr_xprompt",
+                "inbound_namespace.INBOUND._prompt_has_pr_macro",
                 return_value=False,
             ),
         ):
@@ -3358,41 +3358,38 @@ class TestReconstructCodeMarkers:
         assert reconstruct_code_markers("hello world", entities) == "hello world"
 
 
-class TestNormalizeLaunchXpromptAtRefs:
+class TestNormalizeLaunchMacroAtRefs:
     def test_normalizes_known_workspace_workflow_refs(self) -> None:
-        assert normalize_launch_xprompt_at_refs("#gh@sase Fix") == "#gh:sase Fix"
+        assert normalize_launch_macro_at_refs("#gh@sase Fix") == "#gh:sase Fix"
         assert (
-            normalize_launch_xprompt_at_refs("%i:a #git@repo Fix")
-            == "%i:a #git:repo Fix"
+            normalize_launch_macro_at_refs("%i:a #git@repo Fix") == "%i:a #git:repo Fix"
         )
-        assert normalize_launch_xprompt_at_refs("(#hg@change)") == "(#hg:change)"
+        assert normalize_launch_macro_at_refs("(#hg@change)") == "(#hg:change)"
         assert (
-            normalize_launch_xprompt_at_refs('"#jj@workspace" #p4@client')
+            normalize_launch_macro_at_refs('"#jj@workspace" #p4@client')
             == '"#jj:workspace" #p4:client'
         )
-        assert normalize_launch_xprompt_at_refs("#cd@repo Fix") == "#cd:repo Fix"
+        assert normalize_launch_macro_at_refs("#cd@repo Fix") == "#cd:repo Fix"
 
     def test_preserves_existing_canonical_forms(self) -> None:
-        assert normalize_launch_xprompt_at_refs("#gh:sase Fix") == "#gh:sase Fix"
-        assert normalize_launch_xprompt_at_refs("#gh_sase Fix") == "#gh_sase Fix"
+        assert normalize_launch_macro_at_refs("#gh:sase Fix") == "#gh:sase Fix"
+        assert normalize_launch_macro_at_refs("#gh_sase Fix") == "#gh_sase Fix"
 
     def test_does_not_rewrite_non_launch_text(self) -> None:
-        assert normalize_launch_xprompt_at_refs("@someone") == "@someone"
-        assert normalize_launch_xprompt_at_refs("name@example.com") == (
+        assert normalize_launch_macro_at_refs("@someone") == "@someone"
+        assert normalize_launch_macro_at_refs("name@example.com") == (
             "name@example.com"
         )
-        assert normalize_launch_xprompt_at_refs("/start@bot") == "/start@bot"
-        assert normalize_launch_xprompt_at_refs("#topic@sase") == "#topic@sase"
-        assert normalize_launch_xprompt_at_refs("word#gh@sase") == "word#gh@sase"
+        assert normalize_launch_macro_at_refs("/start@bot") == "/start@bot"
+        assert normalize_launch_macro_at_refs("#topic@sase") == "#topic@sase"
+        assert normalize_launch_macro_at_refs("word#gh@sase") == "word#gh@sase"
 
     def test_skips_inline_and_fenced_code(self) -> None:
         text = "run `#gh@sase` then #gh@zorg"
-        assert normalize_launch_xprompt_at_refs(text) == "run `#gh@sase` then #gh:zorg"
+        assert normalize_launch_macro_at_refs(text) == "run `#gh@sase` then #gh:zorg"
 
         fenced = "```\n#gh@sase\n```\n#git@repo"
-        assert (
-            normalize_launch_xprompt_at_refs(fenced) == "```\n#gh@sase\n```\n#git:repo"
-        )
+        assert normalize_launch_macro_at_refs(fenced) == "```\n#gh@sase\n```\n#git:repo"
 
 
 class TestHandlePhotoMessage:
@@ -4518,7 +4515,7 @@ class TestHandleForkCommand:
         with (
             patch("sase.agent.running.list_running_agents", return_value=agents),
             patch(
-                "sase.xprompt.extract_vcs_workflow_tag",
+                "sase.macro.extract_vcs_workflow_tag",
                 return_value="#gh:gh_sase-org__sase ",
             ),
             patch(
@@ -4593,13 +4590,13 @@ class TestHandleRetryFromCallback:
         )
 
 
-class TestXpromptsCommand:
-    """Tests for _handle_xprompts_command."""
+class TestMacrosCommand:
+    """Tests for _handle_macros_command."""
 
-    def test_xprompts_command_builds_and_sends_pdf(self, tmp_path: Path) -> None:
+    def test_macros_command_builds_and_sends_pdf(self, tmp_path: Path) -> None:
         from datetime import datetime
 
-        from sase.xprompt.catalog import CatalogArtifact, CatalogStats
+        from sase_telegram.macro_compat import CatalogArtifact, CatalogStats
 
         pdf_path = tmp_path / "catalog.pdf"
         pdf_path.write_bytes(b"%PDF-fake")
@@ -4621,46 +4618,126 @@ class TestXpromptsCommand:
             patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
             patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase.xprompt.catalog.build_xprompts_catalog",
+                "sase_telegram.macro_compat.build_macros_catalog",
                 return_value=fake_artifact,
             ) as build_mock,
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.inbound_handlers.xprompt_commands import (
-                _handle_xprompts_command,
+            from sase_telegram.inbound_handlers.macro_commands import (
+                _handle_macros_command,
             )
 
-            _handle_xprompts_command()
+            _handle_macros_command()
 
         build_mock.assert_called_once()
         assert tc_mock.send_message.call_count == 1  # the ack
         tc_mock.send_document.assert_called_once()
         _args, kwargs = tc_mock.send_document.call_args
         assert kwargs.get("parse_mode") == "HTML"
-        assert "xprompts Catalog" in kwargs.get("caption", "")
+        assert "Macros Catalog" in kwargs.get("caption", "")
 
-    def test_xprompts_command_handles_pdf_engine_unavailable(
+    def test_macros_command_handles_pdf_engine_unavailable(
         self, tmp_path: Path
     ) -> None:
-        from sase.xprompt.catalog import PdfEngineUnavailable
+        from sase_telegram.macro_compat import PdfEngineUnavailable
 
         with (
             patch("inbound_namespace.INBOUND.telegram_client") as tc_mock,
             patch("inbound_namespace.INBOUND.credentials") as cred_mock,
             patch(
-                "sase.xprompt.catalog.build_xprompts_catalog",
+                "sase_telegram.macro_compat.build_macros_catalog",
                 side_effect=PdfEngineUnavailable("no engine"),
             ),
         ):
             cred_mock.get_chat_id.return_value = "12345"
-            from sase_telegram.inbound_handlers.xprompt_commands import (
-                _handle_xprompts_command,
+            from sase_telegram.inbound_handlers.macro_commands import (
+                _handle_macros_command,
             )
 
-            _handle_xprompts_command()
+            _handle_macros_command()
 
         assert tc_mock.send_message.call_count == 2  # ack + error
         tc_mock.send_document.assert_not_called()
+
+
+class TestMacrosCommandDispatch:
+    """Tests for the /macros slash command and its retired alias."""
+
+    def test_handle_command_dispatches_macros(self) -> None:
+        from sase_telegram.inbound_handlers.commands import _handle_command
+
+        with patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler:
+            _handle_command("/macros")
+
+        mock_handler.assert_called_once_with()
+
+    def test_macros_registered_as_slash_command_without_listed_alias(self) -> None:
+        from sase_telegram.inbound_handlers.commands import _SLASH_COMMANDS
+
+        assert ("macros", "Export the macros catalog as a PDF") in _SLASH_COMMANDS
+        assert not any(command == "xprompts" for command, _desc in _SLASH_COMMANDS)
+
+    def test_handle_command_dispatches_xprompts_alias_while_flag_enabled(self) -> None:
+        from sase_telegram.inbound_handlers.commands import _handle_command
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND.legacy_xprompt_alias_enabled",
+                return_value=True,
+            ),
+            patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler,
+        ):
+            _handle_command("/xprompts")
+
+        mock_handler.assert_called_once_with()
+
+    def test_handle_command_ignores_xprompts_alias_while_flag_disabled(self) -> None:
+        from sase_telegram.inbound_handlers.commands import _handle_command
+
+        with (
+            patch(
+                "inbound_namespace.INBOUND.legacy_xprompt_alias_enabled",
+                return_value=False,
+            ),
+            patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler,
+        ):
+            _handle_command("/xprompts")
+
+        mock_handler.assert_not_called()
+
+
+class TestGetAgentRetryPrompt:
+    """Tests for the raw_prompt.md-first retry fallback."""
+
+    def test_reads_legacy_raw_xprompt_when_no_raw_prompt(self, tmp_path: Path) -> None:
+        from sase_telegram.inbound_handlers.agent_launch import _get_agent_retry_prompt
+
+        (tmp_path / "raw_xprompt.md").write_text(
+            "%i:a Do legacy work",
+            encoding="utf-8",
+        )
+        with patch(
+            "sase.agent.names.find_named_agent",
+            return_value=SimpleNamespace(artifacts_dir=str(tmp_path)),
+        ):
+            assert _get_agent_retry_prompt("a") == "%i:a Do legacy work"
+
+    def test_prefers_raw_prompt_over_legacy(self, tmp_path: Path) -> None:
+        from sase_telegram.inbound_handlers.agent_launch import _get_agent_retry_prompt
+
+        (tmp_path / "raw_prompt.md").write_text(
+            "%i:a Do new work",
+            encoding="utf-8",
+        )
+        (tmp_path / "raw_xprompt.md").write_text(
+            "%i:a Do legacy work",
+            encoding="utf-8",
+        )
+        with patch(
+            "sase.agent.names.find_named_agent",
+            return_value=SimpleNamespace(artifacts_dir=str(tmp_path)),
+        ):
+            assert _get_agent_retry_prompt("a") == "%i:a Do new work"
 
 
 class TestIterKnownProjectWorkspaces:

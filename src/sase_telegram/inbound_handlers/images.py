@@ -14,7 +14,7 @@ from sase_telegram.inbound import (
     build_image_prompt,
     build_photo_prompt,
     make_image_filename,
-    normalize_launch_xprompt_at_refs,
+    normalize_launch_macro_at_refs,
     reconstruct_code_markers,
 )
 from sase_telegram.inbound_handlers.common import (
@@ -94,7 +94,7 @@ def _message_caption(message: Any) -> str | None:
         caption,
         getattr(message, "caption_entities", None),
     )
-    caption = normalize_launch_xprompt_at_refs(caption)
+    caption = normalize_launch_macro_at_refs(caption)
     return caption if caption.strip() else None
 
 
@@ -325,7 +325,7 @@ def _handle_photo_message(message: Any) -> None:
         if message.caption
         else message.caption
     )
-    caption = normalize_launch_xprompt_at_refs(caption) if caption else caption
+    caption = normalize_launch_macro_at_refs(caption) if caption else caption
     prompt = build_photo_prompt(dest, caption)
     _record_project_context(prompt, message)
     _launch_agent(prompt)
@@ -359,7 +359,7 @@ def _handle_document_image(message: Any) -> None:
         if message.caption
         else message.caption
     )
-    caption = normalize_launch_xprompt_at_refs(caption) if caption else caption
+    caption = normalize_launch_macro_at_refs(caption) if caption else caption
     prompt = build_photo_prompt(dest, caption)
     _record_project_context(prompt, message)
     _launch_agent(prompt)

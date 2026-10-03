@@ -82,7 +82,7 @@ for existing SASE configurations.
 - **Two-step feedback** — press a Feedback/Custom button, then type your response
 - **Agent launching** — send a text message to spawn a new sase agent from Telegram
 - **Auto-naming** — agents launched from Telegram automatically get assigned names
-- **xprompt expansion** — agent prompts expand xprompt references (e.g. `#mentor`)
+- **macro expansion** — agent prompts expand macro references (e.g. `#mentor`)
 - **Multi-model directives** — use `%{%m:opus | %m:sonnet}` to launch the same prompt across multiple models
 - **Copy-text buttons** — Fork, Wait, Retry, Redo, plan, and Patch buttons copy pre-filled text to your clipboard
 - **Photo/document handling** — send photos, albums, or image documents to launch agents with visual context
@@ -207,7 +207,7 @@ keyboard callbacks (approve/run/reject/select/epic, agent controls, and bead pic
 (Feedback/Custom button followed by a reply or single active text response), and writes response files for sase to pick
 up. Text messages that don't complete a feedback flow are dispatched as follows:
 
-- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|session|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/xprompts`, `/bead [<id>]`, `/usage [provider]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, xprompt catalog export, bead inspection, usage windows, and SASE updates
+- **Built-in slash commands** (`/list [all|<name>|<project>]`, `/show [<agent|clan|session|@tribe>]`, `/kill [<name>]`, `/fork`, `/changes [project]`, `/macros`, `/bead [<id>]`, `/usage [provider]`, `/update`) — agent and kinship status, management, Patch workflow tag lookup, macros catalog export, bead inspection, usage windows, and SASE updates
 - **Configured slash commands** — execute the matching `telegram.commands` entry and deliver its Markdown stdout as a message or PDF
 - **Other slash commands** (`/start`, unknown commands, etc.) — silently ignored
 - **Everything else** — launches a new sase agent with the message as the prompt
@@ -219,7 +219,7 @@ disable Telegram or remove its credentials: the job tick re-arms it and it survi
 Until `sase-11w` lands, a package upgrade requires manually retiring the running receiver so one running current code
 starts.
 
-Agent launches expand xprompt references, support multi-model directives, and auto-assign names. Launch confirmation
+Agent launches expand macro references, support multi-model directives, and auto-assign names. Launch confirmation
 messages include Fork and Wait copy-text buttons plus Kill and Retry controls for quick follow-up actions.
 
 `/show` opens a compact index of clans, sequential agent sessions, and effective tribes represented by live or recent
@@ -320,7 +320,7 @@ src/sase_telegram/
 │   ├── keyboard_cleanup.py  # Inline-keyboard removal retries
 │   ├── gate_completions.py  # Gate-answer completion delivery
 │   ├── update_command.py    # /update worker and completion delivery
-│   ├── xprompt_commands.py  # /changes and /xprompts
+│   ├── macro_commands.py    # /changes and /macros
 │   ├── beads.py             # /bead picker, show, and subprocess helpers
 │   ├── images.py            # Photo and album staging and flushing
 │   ├── agent_actions.py     # /kill, kill picker, retry, and /fork

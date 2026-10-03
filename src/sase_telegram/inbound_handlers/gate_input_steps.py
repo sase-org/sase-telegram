@@ -8,7 +8,7 @@ from typing import Any
 from sase_telegram import pending_actions, telegram_client
 from sase_telegram.callback_data import decode
 from sase.notification_gates.models import GateError
-from sase.xprompt.models import InputType, XPromptValidationError
+from sase_telegram.macro_compat import InputType, MacroValidationError
 from sase_telegram.formatting import render_gate_input_keyboard
 from sase_telegram.gate_flow import (
     GateProgress,
@@ -249,7 +249,7 @@ def _handle_gate_input_text_message(
 
     try:
         new_values = apply_text_answer(progress.input_values or {}, step.field, text)
-    except XPromptValidationError as exc:
+    except MacroValidationError as exc:
         _reply(str(exc))
         _send_gate_input_prompt(prefix, view, progress, chat_id=chat_id)
         return True

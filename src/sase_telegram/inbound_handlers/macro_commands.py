@@ -1,4 +1,4 @@
-"""/changes and /xprompts commands."""
+"""/changes and /macros commands."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from sase_telegram.formatting import (
     display_project_name,
     display_vcs_refs_in_text,
 )
+from sase_telegram.macro_compat import list_patch_macro_tags
 
 import logging
 
@@ -19,10 +20,8 @@ log = logging.getLogger(__name__)
 _CHANGES_BUTTON_CHUNK_SIZE = 50
 
 
-def _list_patch_xprompt_tags(project: str | None = None) -> Any:
-    from sase.integrations.patch_tags import list_patch_xprompt_tags
-
-    return list_patch_xprompt_tags(project)
+def _list_patch_macro_tags(project: str | None = None) -> Any:
+    return list_patch_macro_tags(project)
 
 
 def _handle_changes_command(args: str) -> None:
@@ -34,7 +33,7 @@ def _handle_changes_command(args: str) -> None:
         return
 
     project = project_parts[0] if project_parts else None
-    listing = _list_patch_xprompt_tags(project)
+    listing = _list_patch_macro_tags(project)
     entries = list(listing.entries)
     skipped = list(listing.skipped)
 
@@ -99,15 +98,15 @@ def _changes_button_label(entry: Any, *, filtered: bool) -> str:
     return label[:61] + "..."
 
 
-def _format_xprompts_caption(stats: Any) -> str:
+def _format_macros_caption(stats: Any) -> str:
     """Format an HTML caption summarising a CatalogStats object."""
     import html
 
     by_source = stats.by_source
     lines = [
-        "📚 <b>xprompts Catalog</b>",
+        "📚 <b>Macros Catalog</b>",
         "",
-        f"<b>{stats.total}</b> xprompts across <b>{len(stats.by_project)}</b> projects",
+        f"<b>{stats.total}</b> macros across <b>{len(stats.by_project)}</b> projects",
         "",
         f"• Built-in:     {by_source.get('built-in', 0)}",
         f"• Project:      {by_source.get('project', 0)}",
@@ -137,52 +136,44 @@ def _format_xprompts_caption(stats: Any) -> str:
     return caption
 
 
-def _handle_xprompts_command() -> None:
-    """Handle /xprompts — build and send the xprompts PDF catalog."""
+def _handle_macros_command() -> None:
+    """Handle /macros — build and send the macros PDF catalog."""
+    from sase_telegram.macro_compat import (
+        NoMacrosFound,
+        PdfEngineUnavailable,
+        build_macros_catalog,
+    )
+
     chat_id = credentials.get_chat_id()
-    telegram_client.send_message(chat_id, "📚 Building your xprompts catalog…")
+    telegram_client.send_message(chat_id, "📚 Building your macros catalog…")
 
     try:
-        from sase.xprompt.catalog import (
-            NoXpromptsFound,
-            PdfEngineUnavailable,
-            build_xprompts_catalog,
-        )
-    except ImportError:
-        log.exception("Failed to import sase.xprompt.catalog")
-        telegram_client.send_message(
-            chat_id,
-            "Failed to build xprompts catalog: ImportError. See bot logs for details.",
-        )
-        return
-
-    try:
-        artifact = build_xprompts_catalog()
+        artifact = build_macros_catalog()
     except PdfEngineUnavailable:
-        log.exception("PDF engine unavailable for /xprompts")
+        log.exception("PDF engine unavailable for /macros")
         telegram_client.send_message(
             chat_id,
             "PDF engine (wkhtmltopdf/pandoc) not installed on the bot host — "
             "cannot render the catalog PDF.",
         )
         return
-    except NoXpromptsFound:
-        log.exception("No xprompts found for /xprompts")
+    except NoMacrosFound:
+        log.exception("No macros found for /macros")
         telegram_client.send_message(
             chat_id,
-            "No xprompts found — unexpected, file a bug.",
+            "No macros found — unexpected, file a bug.",
         )
         return
     except Exception as exc:
-        log.exception("Failed to build xprompts catalog")
+        log.exception("Failed to build macros catalog")
         telegram_client.send_message(
             chat_id,
-            f"Failed to build xprompts catalog: {type(exc).__name__}. "
+            f"Failed to build macros catalog: {type(exc).__name__}. "
             "See bot logs for details.",
         )
         return
 
-    caption = _format_xprompts_caption(artifact.stats)
+    caption = _format_macros_caption(artifact.stats)
     telegram_client.send_document(
         chat_id,
         str(artifact.pdf_path),

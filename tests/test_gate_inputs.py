@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from sase.notification_gates.models import GateError, GateOption
-from sase.xprompt.models import XPromptValidationError
+from sase_telegram.macro_compat import MacroValidationError
 
 from sase_telegram.gate_flow import GateProgress, GateView
 from sase_telegram.gate_inputs import (
@@ -163,7 +163,7 @@ def test_apply_text_answer_converts_each_scalar_type() -> None:
 
 
 def test_apply_text_answer_raises_on_bad_int() -> None:
-    with pytest.raises(XPromptValidationError):
+    with pytest.raises(MacroValidationError):
         apply_text_answer({}, _field(_COUNT_FIELD), "not-a-number")
 
 

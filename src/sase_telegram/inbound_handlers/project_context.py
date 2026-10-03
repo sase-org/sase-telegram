@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 from sase_telegram import pending_actions
-from sase_telegram.inbound import normalize_launch_xprompt_at_refs
+from sase_telegram.inbound import normalize_launch_macro_at_refs
 from sase_telegram.inbound_handlers.common import _context_chat_id
 
 import logging
@@ -72,7 +72,7 @@ def _project_from_vcs_match(match: re.Match[str] | None) -> str | None:
 
 def _extract_project_from_prompt(prompt: str) -> str | None:
     """Extract a project name from the first VCS workflow tag in *prompt*."""
-    text = normalize_launch_xprompt_at_refs(prompt).lstrip()
+    text = normalize_launch_macro_at_refs(prompt).lstrip()
     directive_match = _DIRECTIVE_PREFIX_RE.match(text)
     if directive_match:
         text = text[directive_match.end() :]

@@ -62,6 +62,13 @@ def test_usage_is_reserved() -> None:
     assert "usage" in RESERVED_COMMAND_NAMES
 
 
+def test_macros_and_retired_alias_are_reserved() -> None:
+    from sase_telegram.custom_commands import RESERVED_COMMAND_NAMES
+
+    assert "macros" in RESERVED_COMMAND_NAMES
+    assert "xprompts" in RESERVED_COMMAND_NAMES
+
+
 def test_unknown_filter_suggests_configured(monkeypatch) -> None:
     import sase_telegram.inbound_handlers.usage_command as usage
 

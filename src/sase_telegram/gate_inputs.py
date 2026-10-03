@@ -114,7 +114,7 @@ def apply_text_answer(
     """Return ``values`` with one typed text reply converted and recorded.
 
     Raises:
-        XPromptValidationError: If ``text`` cannot be converted to the
+        MacroValidationError: If ``text`` cannot be converted to the
             field's declared type.
     """
     converted = coerce_field_text(field, text)

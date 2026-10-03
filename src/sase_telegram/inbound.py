@@ -24,10 +24,10 @@ from sase.notification_gates.registry import (
 from sase_telegram.executables import resolve_console_script
 
 
-_LAUNCH_XPROMPT_AT_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
-_LAUNCH_XPROMPT_AT_REF_RE = re.compile(
+_LAUNCH_MACRO_AT_WORKFLOWS = ("gh", "git", "hg", "jj", "p4", "cd")
+_LAUNCH_MACRO_AT_REF_RE = re.compile(
     rf"(?P<context>^|(?<=[\s([{{\"']))"
-    rf"#(?P<workflow>{'|'.join(_LAUNCH_XPROMPT_AT_WORKFLOWS)})"
+    rf"#(?P<workflow>{'|'.join(_LAUNCH_MACRO_AT_WORKFLOWS)})"
     r"(?P<marker>!!|\?\?)?"
     r"@(?P<ref>[A-Za-z0-9][A-Za-z0-9_.~/-]*)"
     r"(?=$|[\s)\]},.!?;:\"'])",
@@ -68,7 +68,7 @@ def _is_inside_ranges(index: int, ranges: Sequence[tuple[int, int]]) -> bool:
     return any(start <= index < end for start, end in ranges)
 
 
-def normalize_launch_xprompt_at_refs(text: str) -> str:
+def normalize_launch_macro_at_refs(text: str) -> str:
     """Normalize Telegram ``#workflow@ref`` launch shorthand to ``#workflow:ref``.
 
     The rewrite is intentionally scoped to known workspace/VCS workflows and
@@ -86,7 +86,7 @@ def normalize_launch_xprompt_at_refs(text: str) -> str:
         marker = match.group("marker") or ""
         return f"#{match.group('workflow')}{marker}:{match.group('ref')}"
 
-    return _LAUNCH_XPROMPT_AT_REF_RE.sub(replace, text)
+    return _LAUNCH_MACRO_AT_REF_RE.sub(replace, text)
 
 
 def reconstruct_code_markers(text: str, entities: Sequence[Any] | None) -> str:
@@ -94,7 +94,7 @@ def reconstruct_code_markers(text: str, entities: Sequence[Any] | None) -> str:
 
     Telegram strips backticks and delivers them as MessageEntity objects.
     This function reconstructs the original markdown so downstream handlers
-    (e.g. xprompt expansion) can honour backtick-protected text.
+    (e.g. macro expansion) can honour backtick-protected text.
     """
     if not entities:
         return text
@@ -729,7 +729,7 @@ def find_shared_handled_transports(
 def _normalized_caption(caption: str | None) -> str | None:
     if not caption:
         return None
-    normalized = normalize_launch_xprompt_at_refs(caption)
+    normalized = normalize_launch_macro_at_refs(caption)
     return normalized if normalized.strip() else None
 
 

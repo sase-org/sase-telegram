@@ -20,10 +20,11 @@ from sase_telegram.custom_commands import (
 )
 from sase_telegram.formatting import markdown_to_telegram_v2
 from sase_telegram.inbound_handlers.update_command import _handle_update_command
-from sase_telegram.inbound_handlers.xprompt_commands import (
+from sase_telegram.inbound_handlers.macro_commands import (
     _handle_changes_command,
-    _handle_xprompts_command,
+    _handle_macros_command,
 )
+from sase_telegram.macro_compat import legacy_xprompt_alias_enabled
 from sase_telegram.inbound_handlers.beads import _handle_bead_command
 from sase_telegram.inbound_handlers.agent_actions import (
     _handle_kill_command,
@@ -185,8 +186,13 @@ def _handle_command(
         _handle_fork_command()
     elif command == "changes":
         _handle_changes_command(args)
+    elif command == "macros":
+        _handle_macros_command()
     elif command == "xprompts":
-        _handle_xprompts_command()
+        # Retired alias: accepted (but unlisted) while sase's
+        # legacy_xprompt_syntax flag is enabled.
+        if legacy_xprompt_alias_enabled():
+            _handle_macros_command()
     elif command in {"bead", "beads"}:
         _handle_bead_command(args, message=message)
     elif command == "usage":
@@ -203,7 +209,7 @@ _SLASH_COMMANDS = [
     ("show", "Show an agent, clan, session, or tribe"),
     ("fork", "Copy fork text for an agent"),
     ("changes", "Copy Patch workflow tags"),
-    ("xprompts", "Export the xprompts catalog as a PDF"),
+    ("macros", "Export the macros catalog as a PDF"),
     ("bead", "Show a bead's details as Markdown"),
     ("usage", "Show LLM usage windows and resets"),
     ("update", "Update SASE and restart axe"),

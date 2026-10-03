@@ -1397,7 +1397,7 @@ class TestFormatWorkflowComplete:
         from unittest.mock import patch
 
         with patch(
-            "sase.xprompt.extract_vcs_workflow_tag",
+            "sase.macro.extract_vcs_workflow_tag",
             return_value="#gh:gh_sase-org__sase ",
         ):
             text, keyboard, _ = format_notification(n)
@@ -1433,7 +1433,7 @@ class TestFormatWorkflowComplete:
             },
         )
         with patch(
-            "sase.xprompt.extract_vcs_workflow_tag",
+            "sase.macro.extract_vcs_workflow_tag",
             return_value="#gh:sase ",
         ):
             text, keyboard, attachments = format_notification(n)
@@ -1682,7 +1682,7 @@ class TestFormatWorkflowComplete:
             },
         )
         with patch(
-            "sase.xprompt.extract_vcs_workflow_tag",
+            "sase.macro.extract_vcs_workflow_tag",
             return_value="#gh:sase ",
         ):
             _, keyboard, _ = format_notification(n)
@@ -1704,7 +1704,7 @@ class TestFormatWorkflowComplete:
             },
         )
         with patch(
-            "sase.xprompt.extract_vcs_workflow_tag",
+            "sase.macro.extract_vcs_workflow_tag",
             return_value="#gh:sase ",
         ):
             _, keyboard, _ = format_notification(n)

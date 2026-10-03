@@ -15,7 +15,7 @@ from sase_telegram.formatting import (
     display_vcs_refs_in_text,
     escape_markdown_v2,
 )
-from sase_telegram.inbound import normalize_launch_xprompt_at_refs
+from sase_telegram.inbound import normalize_launch_macro_at_refs
 from sase_telegram.inbound_handlers.common import _COPY_TEXT_MAX
 
 import logging
@@ -26,9 +26,10 @@ log = logging.getLogger(__name__)
 def _get_agent_retry_prompt(name: str) -> str | None:
     """Read the source prompt for retrying a named agent.
 
-    Falls back to raw_xprompt.md when the pending action is missing (e.g. due
-    to a file-level race between concurrent inbound/outbound handlers). The
-    caller owns formatting the prompt for the target Telegram action.
+    Reads raw_prompt.md first, then raw_xprompt.md for agents archived before
+    the rename, when the pending action is missing (e.g. due to a file-level
+    race between concurrent inbound/outbound handlers). The caller owns
+    formatting the prompt for the target Telegram action.
     """
     from sase.agent.names import find_named_agent
 
@@ -36,12 +37,18 @@ def _get_agent_retry_prompt(name: str) -> str | None:
     if agent is None:
         return None
 
-    raw_path = Path(agent.artifacts_dir) / "raw_xprompt.md"
-    try:
-        prompt = raw_path.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, OSError):
-        return None
-
+    prompt: str | None = None
+    for filename in ("raw_prompt.md", "raw_xprompt.md"):
+        try:
+            prompt = (
+                (Path(agent.artifacts_dir) / filename)
+                .read_text(encoding="utf-8")
+                .strip()
+            )
+        except (FileNotFoundError, OSError):
+            continue
+        if prompt:
+            break
     if not prompt:
         return None
 
@@ -83,16 +90,16 @@ def _launch_agent(prompt: str) -> None:
     canonical ``launch_agents_from_cwd`` pipeline, which handles workspace
     allocation, naming, and retries through a single shared code path.
     """
-    prompt = normalize_launch_xprompt_at_refs(prompt)
+    prompt = normalize_launch_macro_at_refs(prompt)
     log.info("Launching agent for prompt: %s", prompt[:120])
     _launch_agents_with_notifications(prompt)
 
 
-def _prompt_has_pr_xprompt(prompt: str) -> bool:
-    """Check if a prompt contains the #pr xprompt."""
-    from sase.xprompt.workflow_validator_extract import extract_xprompt_calls
+def _prompt_has_pr_macro(prompt: str) -> bool:
+    """Check if a prompt contains the #pr macro."""
+    from sase_telegram.macro_compat import extract_macro_calls
 
-    return any(call.name == "pr" for call in extract_xprompt_calls(prompt))
+    return any(call.name == "pr" for call in extract_macro_calls(prompt))
 
 
 def _launch_agents_with_notifications(original_prompt: str) -> None:
@@ -107,14 +114,15 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
     """
     from sase.agent.launcher import launch_agents_from_cwd
     from sase.agent.repeat_launcher import extract_repeat_and_name
-    from sase.xprompt.directives import extract_prompt_directives
+    from sase_telegram.macro_compat import (
+        extract_prompt_directives,
+        process_macro_references,
+    )
 
     try:
-        from sase.xprompt import process_xprompt_references
-
-        expanded = process_xprompt_references(original_prompt)
+        expanded = process_macro_references(original_prompt)
     except Exception:
-        log.warning("Failed to expand xprompts, using raw prompt", exc_info=True)
+        log.warning("Failed to expand macros, using raw prompt", exc_info=True)
         expanded = original_prompt
 
     _, directives = extract_prompt_directives(expanded)
@@ -192,7 +200,7 @@ def _resolve_slot_prompts(prompt: str, expected_count: int) -> list[str]:
     per-slot model directives for notification labels; agent names are read
     from launch artifacts.
     """
-    from sase.xprompt.directives import plan_prompt_fanout_variants
+    from sase_telegram.macro_compat import plan_prompt_fanout_variants
 
     if expected_count <= 1:
         return [prompt]
@@ -304,12 +312,12 @@ def _agent_vcs_prefix(prompt: str | None, agent_name: str) -> str:
     if not prompt:
         return ""
     from sase.project_tags import effective_vcs_workflow_tag
-    from sase.xprompt import replace_ref_in_vcs_tag
+    from sase_telegram.macro_compat import replace_ref_in_vcs_tag
 
     vcs_tag = effective_vcs_workflow_tag(prompt)
     if not vcs_tag:
         return ""
-    if _prompt_has_pr_xprompt(prompt):
+    if _prompt_has_pr_macro(prompt):
         vcs_tag = replace_ref_in_vcs_tag(vcs_tag, f"@{agent_name}")
     return display_vcs_refs_in_text(vcs_tag)
 
@@ -385,7 +393,7 @@ def _send_launch_notification(
     resolved_agent_name: str | None,
 ) -> None:
     """Send one Telegram launch notification for a spawned agent."""
-    from sase.xprompt.directives import extract_prompt_directives
+    from sase_telegram.macro_compat import extract_prompt_directives
 
     if single_directives is not None:
         directives = single_directives
