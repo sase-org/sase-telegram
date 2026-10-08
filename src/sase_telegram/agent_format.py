@@ -58,27 +58,97 @@ def format_compact_duration(seconds: float | int) -> str:
     return f"{secs}s"
 
 
+_FOLLOW_BLOCKED_PHRASES = {
+    "launch_ended_without_epic": "ended without an epic",
+    "launch_skipped": "was skipped",
+    "target_dismissed_during_launch": "ended when the target was dismissed",
+    "cycle": "would wait on the waiter",
+}
+
+
+def _follow_suffix(entry: Any) -> str:
+    """Return the ``↪`` follow suffix for a wait token, if any."""
+    wait = getattr(entry, "wait", None)
+    raw_follows = getattr(wait, "epic_follows", None)
+    if not isinstance(raw_follows, (list, tuple)) or not raw_follows:
+        return ""
+    phrases: list[str] = []
+    for raw in raw_follows[:2]:
+        if isinstance(raw, dict):
+            target = raw.get("target")
+            state = raw.get("state")
+            epic_ids = raw.get("epic_ids")
+            reason = raw.get("reason")
+            resume = raw.get("resume_command")
+            detail = raw.get("detail")
+        else:
+            target = getattr(raw, "target", None)
+            state = getattr(raw, "state", None)
+            epic_ids = getattr(raw, "epic_ids", None)
+            reason = getattr(raw, "reason", None)
+            resume = getattr(raw, "resume_command", None)
+            detail = getattr(raw, "detail", None)
+        if not isinstance(target, str) or not target:
+            continue
+        if state == "following" and isinstance(epic_ids, (list, tuple)) and epic_ids:
+            ids = [str(i) for i in epic_ids if str(i)]
+            if len(ids) == 1:
+                phrases.append(f"↪ waits on {target}'s epic {ids[0]}")
+            elif ids:
+                phrases.append(f"↪ waits on {target}'s epics {', '.join(ids)}")
+            else:
+                phrases.append(f"↪ waits on {target}'s epic launch")
+        elif state == "following":
+            phrases.append(f"↪ waits on {target}'s epic launch")
+        elif state == "blocked":
+            phrase = _FOLLOW_BLOCKED_PHRASES.get(
+                reason if isinstance(reason, str) else ""
+            )
+            if phrase is None:
+                phrase = (
+                    reason
+                    if isinstance(reason, str) and reason
+                    else (
+                        detail if isinstance(detail, str) and detail else "is blocked"
+                    )
+                )
+            text = f"↪ blocked: {target}'s epic launch {phrase}"
+            if isinstance(resume, str) and resume:
+                text += f" (resume: {resume})"
+            phrases.append(text)
+        else:
+            phrases.append(f"↪ waits on {target}'s epic launch")
+    if isinstance(raw_follows, (list, tuple)) and len(raw_follows) > 2:
+        phrases.append(f"+{len(raw_follows) - 2}")
+    return " ".join(phrases)
+
+
 def format_wait_token(entry: Any) -> str:
     wait = getattr(entry, "wait", None)
     wait_for = tuple(getattr(wait, "wait_for", ()) or ())
     remaining = getattr(wait, "remaining_seconds", None)
     wait_until = getattr(wait, "wait_until", None)
     wait_duration = getattr(wait, "wait_duration_seconds", None)
+    follow = _follow_suffix(entry)
 
     if wait_for:
         deps = ", ".join(str(dep) for dep in wait_for[:2])
         if len(wait_for) > 2:
             deps += f" +{len(wait_for) - 2}"
+        base = f"⏳ on {deps}"
         if isinstance(remaining, int) and remaining > 0:
-            return f"⏳ on {deps} · ~{format_compact_duration(remaining)} left"
-        return f"⏳ on {deps}"
+            base += f" · ~{format_compact_duration(remaining)} left"
+        return f"{base} {follow}" if follow else base
     if isinstance(remaining, int) and remaining > 0:
-        return f"⏳ ~{format_compact_duration(remaining)} left"
+        base = f"⏳ ~{format_compact_duration(remaining)} left"
+        return f"{base} {follow}" if follow else base
     if isinstance(wait_until, str) and wait_until:
-        return f"⏳ until {format_wait_until(wait_until)}"
+        base = f"⏳ until {format_wait_until(wait_until)}"
+        return f"{base} {follow}" if follow else base
     if isinstance(wait_duration, (int, float)) and wait_duration > 0:
-        return f"⏳ {format_compact_duration(wait_duration)}"
-    return "⏳ waiting"
+        base = f"⏳ {format_compact_duration(wait_duration)}"
+        return f"{base} {follow}" if follow else base
+    return f"⏳ waiting {follow}" if follow else "⏳ waiting"
 
 
 def format_wait_until(wait_until: str) -> str:
