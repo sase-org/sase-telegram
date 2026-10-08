@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.25](https://github.com/sase-org/sase-telegram/compare/v0.4.24...v0.4.25) (2026-10-08)
+
+
+### Features
+
+* **telegram:** render wait follow suffixes on agent tokens ([15ccce3](https://github.com/sase-org/sase-telegram/commit/15ccce3857d6802b2fe9a57e4e4d4df846dd4bf1))
+
 ## [0.4.24](https://github.com/sase-org/sase-telegram/compare/v0.4.23...v0.4.24) (2026-10-01)
 
 
