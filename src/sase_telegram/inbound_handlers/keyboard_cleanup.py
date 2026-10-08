@@ -114,10 +114,92 @@ def _dismiss_resolved_button(prefix: str, message_id: int, chat_id: str) -> None
     Cross-surface acceptance (auto-approved, or answered from the TUI/CLI/
     mobile) drives the same durable keyboard-cleanup retry a Telegram-native
     answer does -- see ``_dismiss_button_with_retry``.
+
+    Decision plans use the unified receipt path: the card is edited once
+    into its answered receipt with the keyboard removed in the same
+    request. Markup cleanup never discards the card before that edit is
+    queued; when accepted values are not yet readable the retry context is
+    kept for a later tick.
     """
+    if _settle_externally_resolved_decision(prefix, message_id, chat_id):
+        return
     _dismiss_button_with_retry(prefix, chat_id, message_id)
     pending_actions.remove(prefix)
     clear_awaiting_feedback_by_prefix(prefix)
+
+
+def _settle_externally_resolved_decision(
+    prefix: str, message_id: int, chat_id: str
+) -> bool:
+    """Edit an externally settled decision card to its receipt.
+
+    Return True when the prefix was a decision plan (handled here),
+    False for generic gates (caller dismisses as before).
+    """
+    try:
+        action = pending_actions.get(prefix)
+    except Exception:
+        return False
+    if not isinstance(action, dict):
+        return False
+    action_data = action.get("action_data")
+    if not isinstance(action_data, dict):
+        return False
+    try:
+        from sase_telegram.gate_flow import clear_progress, load_gate_view
+    except Exception:
+        return False
+    try:
+        view = load_gate_view(action_data)
+    except Exception:
+        return False
+    if not view.decisions:
+        return False
+    try:
+        from sase_telegram.decision_receipt import authoritative_values, receipt_text
+    except Exception:
+        return False
+    try:
+        values = authoritative_values(view)
+    except Exception:
+        values = None
+    if values is None:
+        # Keep retry context after transient gaps and receiver restarts.
+        try:
+            _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+        except Exception:
+            pass
+        return True
+    try:
+        text = receipt_text(view, values)
+    except Exception:
+        return False
+    try:
+        telegram_client.edit_message_text(chat_id, message_id, text, reply_markup=None)
+    except Exception:
+        log.warning("Failed to edit externally settled decision card", exc_info=True)
+        try:
+            _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+        except Exception:
+            pass
+        return True
+    try:
+        clear_progress(view)
+    except Exception:
+        pass
+    try:
+        pending_actions.remove(prefix)
+    except Exception:
+        pass
+    try:
+        clear_awaiting_feedback_by_prefix(prefix)
+    except Exception:
+        pass
+    try:
+        _clear_keyboard_cleanup_pending(prefix)
+    except Exception:
+        pass
+    return True
 
 
 def _find_shared_handled_transports(

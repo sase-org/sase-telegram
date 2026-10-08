@@ -146,6 +146,7 @@ class ResponseAction:
     feedback: str | None = None
     input_data: object | None = None
     option_inputs: dict[str, Any] | None = None
+    review_revision: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +349,17 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
             if isinstance(raw_option_inputs, dict)
             else None
         )
+        raw_revision = info.get("review_revision")
+        review_revision: int | None = None
+        if isinstance(raw_revision, int) and not isinstance(raw_revision, bool):
+            review_revision = raw_revision
+        else:
+            try:
+                review_revision = (
+                    int(raw_revision) if raw_revision is not None else None
+                )
+            except (TypeError, ValueError):
+                review_revision = None
         return ResponseAction(
             action_type="gate",
             notif_id_prefix=prefix,
@@ -358,6 +370,7 @@ def process_text_message(text: str, key: str | None = None) -> ResponseAction | 
             feedback=text,
             input_data=input_data,
             option_inputs=option_inputs,
+            review_revision=review_revision,
         )
 
     return None
@@ -455,6 +468,9 @@ def submit_gate_response(
         payload["input_data"] = response.input_data
     if response.feedback is not None:
         payload["feedback"] = response.feedback
+    if response.review_revision is not None:
+        # Operation metadata, never an undeclared option input.
+        payload["review_revision"] = int(response.review_revision)
 
     try:
         proc = submit_proc_request(

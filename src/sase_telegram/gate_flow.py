@@ -32,6 +32,8 @@ class GateView:
     options: tuple[GateOption, ...]
     groups: tuple[GateGroup, ...]
     branches: tuple[tuple[str, ...], ...]
+    decisions: tuple[dict[str, Any], ...] = ()
+    review_revision: int = 1
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,13 @@ class GateProgress:
     input_field_index: int | None = None
     input_values: dict[str, Any] | None = None
     input_feedback_requested: bool = False
+    displayed_revision: int | None = None
+    decision_values: dict[str, Any] | None = None
+    open_choice_index: int | None = None
+    source_message_id: int | None = None
+    source_chat_id: str | None = None
+    submitted_revision: int | None = None
+    submitted_values: dict[str, Any] | None = None
 
 
 def load_gate_view(
@@ -116,6 +125,8 @@ def load_gate_view(
     )
     if not branches or len(branches) != len(raw_branches):
         raise GateError("invalid_request", "branches", "gate has invalid branches")
+    decisions = _frozen_decisions(envelope)
+    review_revision = _envelope_revision(envelope)
     return GateView(
         bundle_path=bundle_path,
         request_id=str(envelope.get("request_id") or bundle_path.name),
@@ -123,7 +134,66 @@ def load_gate_view(
         options=options,
         groups=groups,
         branches=branches,
+        decisions=decisions,
+        review_revision=review_revision,
     )
+
+
+def _frozen_decisions(envelope: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return the envelope's frozen ``payload.decisions`` vector."""
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        return ()
+    raw = payload.get("decisions")
+    if not isinstance(raw, list):
+        return ()
+    kept: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            kept.append({str(key): value for key, value in item.items()})
+    return tuple(kept)
+
+
+def _envelope_revision(envelope: Mapping[str, Any]) -> int:
+    """Return the envelope's ``review_revision``, defaulting to 1."""
+    raw = envelope.get("review_revision", 1)
+    try:
+        revision = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1
+    return revision if revision >= 1 else 1
+
+
+def _validated_decision_values(view: GateView, raw: Any) -> dict[str, Any] | None:
+    """Validate saved drafts against frozen definitions.
+
+    Malformed state never selects an undeclared choice or grants memory
+    consent: unknown ids and invalid values are dropped.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return {}
+    if not view.decisions:
+        return {}
+    by_id = {str(item.get("id", "")): item for item in view.decisions}
+    cleaned: dict[str, Any] = {}
+    for key, value in raw.items():
+        definition = by_id.get(str(key))
+        if definition is None:
+            continue
+        kind = str(definition.get("kind", ""))
+        if kind == "choice":
+            allowed = {
+                str(choice.get("key", ""))
+                for choice in (definition.get("choices", []) or [])
+                if isinstance(choice, dict)
+            }
+            if str(value) in allowed:
+                cleaned[str(key)] = str(value)
+        elif isinstance(value, bool):
+            cleaned[str(key)] = value
+    return cleaned
 
 
 def progress_path(view: GateView) -> Path:
@@ -146,6 +216,9 @@ def initial_progress(
         expanded_branch_index=expanded,
         active_message_id=active_message_id,
         chat_id=chat_id,
+        displayed_revision=view.review_revision if view.decisions else None,
+        decision_values=None,
+        open_choice_index=None,
     )
 
 
@@ -198,6 +271,17 @@ def load_progress(
     input_option_ids, input_field_index, input_values, input_feedback_requested = (
         _load_input_block(view, raw)
     )
+    displayed_revision, decision_values, open_choice_index = _load_decision_block(
+        view, raw
+    )
+    source_message_id = _optional_int(raw.get("source_message_id"))
+    raw_source_chat = raw.get("source_chat_id")
+    source_chat_id = str(raw_source_chat) if raw_source_chat is not None else None
+    submitted_revision = _optional_int(raw.get("submitted_revision"))
+    submitted_values = _validated_decision_values(view, raw.get("submitted_values"))
+    if raw.get("submitted_values") is None:
+        submitted_values = None
+        submitted_revision = _optional_int(raw.get("submitted_revision"))
     return GateProgress(
         selected_option_ids=selected_ids,
         expanded_branch_index=expanded,
@@ -207,7 +291,38 @@ def load_progress(
         input_field_index=input_field_index,
         input_values=input_values,
         input_feedback_requested=input_feedback_requested,
+        displayed_revision=displayed_revision,
+        decision_values=decision_values,
+        open_choice_index=open_choice_index,
+        source_message_id=source_message_id,
+        source_chat_id=source_chat_id,
+        submitted_revision=submitted_revision,
+        submitted_values=submitted_values,
     )
+
+
+def _load_decision_block(
+    view: GateView, raw: Mapping[str, Any]
+) -> tuple[int | None, dict[str, Any] | None, int | None]:
+    """Recover the decision draft block, keeping a stale revision.
+
+    A saved revision is kept until the reviewer explicitly refreshes it.
+    Malformed values never select an undeclared choice or grant consent.
+    """
+    if not view.decisions:
+        return None, None, None
+    raw_revision = _optional_int(raw.get("displayed_revision"))
+    # Keep the stale saved revision; a missing value starts at the envelope.
+    displayed = raw_revision if raw_revision is not None else view.review_revision
+    cleaned = _validated_decision_values(view, raw.get("decision_values"))
+    decision_values = dict(cleaned) if cleaned else None
+    raw_open = _optional_int(raw.get("open_choice_index"))
+    open_index: int | None = None
+    if raw_open is not None and 0 <= raw_open < len(view.decisions):
+        kind = str(view.decisions[raw_open].get("kind", ""))
+        if kind == "choice":
+            open_index = raw_open
+    return displayed, decision_values, open_index
 
 
 def _load_input_block(
@@ -259,6 +374,13 @@ def save_progress(view: GateView, progress: GateProgress) -> None:
         "input_field_index": progress.input_field_index,
         "input_values": progress.input_values,
         "input_feedback_requested": progress.input_feedback_requested,
+        "displayed_revision": progress.displayed_revision,
+        "decision_values": progress.decision_values,
+        "open_choice_index": progress.open_choice_index,
+        "source_message_id": progress.source_message_id,
+        "source_chat_id": progress.source_chat_id,
+        "submitted_revision": progress.submitted_revision,
+        "submitted_values": progress.submitted_values,
     }
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:

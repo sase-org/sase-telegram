@@ -110,18 +110,22 @@ def _send_single_message(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
+    disable_notification: bool | None = None,
 ) -> Message:
     """Send a single text message, falling back to plain text on parse errors."""
+    kwargs: dict[str, object] = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": reply_markup,
+        "parse_mode": parse_mode,
+        "reply_to_message_id": reply_to_message_id,
+    }
+    if disable_notification is not None:
+        kwargs["disable_notification"] = disable_notification
+    # Drop Nones so older client libraries without the flag keep working.
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
     try:
-        return _run_async(
-            _get_bot().send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                reply_to_message_id=reply_to_message_id,
-            )
-        )
+        return _run_async(_get_bot().send_message(**kwargs))  # type: ignore[arg-type]
     except Exception:
         if parse_mode:
             log.warning(
@@ -132,14 +136,9 @@ def _send_single_message(
             # Use a fresh Bot instance — the previous asyncio.run() closed
             # its event loop which can leave the old Bot's internal httpx
             # client in a broken state (python-telegram-bot v21+).
-            return _run_async(
-                _get_bot().send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=reply_to_message_id,
-                )
-            )
+            fallback = dict(kwargs)
+            fallback.pop("parse_mode", None)
+            return _run_async(_get_bot().send_message(**fallback))  # type: ignore[arg-type]
         raise
 
 
@@ -150,12 +149,14 @@ def send_message(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
+    disable_notification: bool | None = None,
 ) -> Message:
     """Send a text message to a Telegram chat.
 
     Messages exceeding Telegram's 4096-character limit are automatically
     split into multiple messages.  Only the last chunk carries the
     ``reply_markup`` so that inline keyboards appear once at the end.
+    ``disable_notification`` sends quietly across split/fallback sends.
     """
     chunks = _split_message(text)
     last_msg: Message | None = None
@@ -168,6 +169,7 @@ def send_message(
             reply_markup=markup,
             parse_mode=parse_mode,
             reply_to_message_id=reply_to_message_id,
+            disable_notification=disable_notification,
         )
     assert last_msg is not None  # noqa: S101 — chunks is never empty
     return last_msg

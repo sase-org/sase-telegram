@@ -82,6 +82,13 @@ def _execute_gate_callback_response(
         _answer_callback(callback_query, result_message or "Gate answered")
     if message is not None:
         _send_confirmation(response, message.message_id)
+    # Submission can precede a stale rejection; for decision plans retain
+    # durable review context to restore the refresh action when the
+    # supervised process rejects the displayed revision. Never turn
+    # "process submitted" into an approval claim.
+    if view.decisions:
+        _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
+        return
     _dismiss_gate_callback(callback_query, action, response.notif_id_prefix)
     clear_gate_progress(view)
 
@@ -129,6 +136,7 @@ def _begin_gate_feedback(
     selected_option_ids: tuple[str, ...],
     *,
     option_inputs: dict[str, dict[str, Any]],
+    review_revision: int | None = None,
 ) -> None:
     if not selected_option_ids:
         _answer_callback(callback_query, "Select at least one option")
@@ -140,17 +148,18 @@ def _begin_gate_feedback(
         if progress.active_message_id is not None
         else prefix
     )
-    save_awaiting_feedback(
-        key,
-        prefix,
-        {
-            "action_type": "gate",
-            "bundle_path": str(view.bundle_path),
-            "selected_option_ids": list(selected_option_ids),
-            "option_inputs": option_inputs,
-        },
-    )
-    _answer_callback(callback_query, "Send the required feedback as a text message")
+    entry: dict[str, Any] = {
+        "action_type": "gate",
+        "bundle_path": str(view.bundle_path),
+        "selected_option_ids": list(selected_option_ids),
+        "option_inputs": option_inputs,
+    }
+    if review_revision is not None:
+        entry["review_revision"] = int(review_revision)
+    save_awaiting_feedback(key, prefix, entry)
+    # Feedback asks for a reply to the review message and carries the
+    # current vector as provisional values.
+    _answer_callback(callback_query, "Reply to the review message with feedback")
     message_id = _action_message_id(action)
     chat_id = _callback_chat_id(callback_query, action)
     if message_id is not None and chat_id is not None:

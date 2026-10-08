@@ -157,6 +157,26 @@ def _advance_gate_input(
     option_inputs = submitted_option_inputs(view, progress)
     selected_option_ids = progress.input_option_ids
     feedback_requested = progress.input_feedback_requested
+    review_revision: int | None = None
+    if view.decisions:
+        from sase_telegram.decision_callbacks import (
+            decision_inputs_for,
+            displayed_revision,
+        )
+
+        # Merge decisions after declared-input collection too.
+        decision_inputs = decision_inputs_for(view, progress)
+        for option_id in list(option_inputs):
+            option_inputs[option_id] = {
+                **option_inputs[option_id],
+                **decision_inputs,
+            }
+        for extra_id in ("approve", "commit"):
+            if extra_id not in option_inputs and any(
+                option.id == extra_id for option in view.options
+            ):
+                option_inputs[extra_id] = dict(decision_inputs)
+        review_revision = displayed_revision(view, progress)
     progress = clear_input(progress)
     save_gate_progress(view, progress)
     _clear_awaiting_feedback_entry(None, prefix)
@@ -170,6 +190,7 @@ def _advance_gate_input(
             progress,
             selected_option_ids,
             option_inputs=option_inputs,
+            review_revision=review_revision,
         )
         return
 
@@ -181,6 +202,7 @@ def _advance_gate_input(
         answer_text=None,
         selected_option_ids=selected_option_ids,
         option_inputs=option_inputs,
+        review_revision=review_revision,
     )
     _execute_gate_callback_response(
         callback_query, action, response, view, message=message

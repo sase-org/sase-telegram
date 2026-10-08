@@ -17,7 +17,11 @@ def md_to_pdf(md_path: str) -> str | None:
 
     The public plugin API remains stable while the Pandoc command construction
     and engine fallback behavior live in ``sase.attachments.markdown_pdf``.
+    Plan PDFs show a Decisions table before Properties/body with decision
+    callouts as labelled blockquotes; every branch is retained.
     """
+    from sase_telegram.decision_pdf import preprocess_plan_for_pdf
+
     p = Path(md_path)
     if p.suffix.lower() != ".md":
         return None
@@ -25,6 +29,21 @@ def md_to_pdf(md_path: str) -> str | None:
     pdf_path = p.with_suffix(".pdf")
     if p.name == "launch_preview.md":
         rendered = render_launch_preview_pdf(p, pdf_path)
-    else:
-        rendered = render_markdown_pdf(p, pdf_path, css_path=_CSS_PATH)
+        return str(rendered) if rendered is not None else None
+    preprocessed: Path | None = None
+    source: Path = p
+    try:
+        preprocessed = preprocess_plan_for_pdf(p)
+    except Exception:
+        preprocessed = None
+    if preprocessed is not None:
+        source = preprocessed
+    try:
+        rendered = render_markdown_pdf(source, pdf_path, css_path=_CSS_PATH)
+    finally:
+        if preprocessed is not None:
+            try:
+                preprocessed.unlink(missing_ok=True)
+            except OSError:
+                pass
     return str(rendered) if rendered is not None else None

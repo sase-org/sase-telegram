@@ -905,6 +905,67 @@ def _format_plan_properties_preview(
     return _join_message_sections(prefix_with_card, body_preview)
 
 
+def _format_plan_with_decision_sheet(
+    header_text: str,
+    notes: list[str],
+    sheet_text: str,
+    properties: list[tuple[str, str]],
+    body: str,
+) -> str:
+    """Assemble header/notes/sheet/properties/body under the 4,096 budget.
+
+    Reserves space for the static Decisions sheet before budgeting
+    Properties and the body. Optional notes/properties/body shrink first.
+    """
+    from sase_telegram.plan_decisions import DECISION_SHEET_BUDGET
+
+    sheet = (
+        sheet_text[:DECISION_SHEET_BUDGET]
+        if len(sheet_text) > DECISION_SHEET_BUDGET
+        else sheet_text
+    )
+    minimum_card = _render_properties_card(properties, 0)
+    full_body = _render_plan_body(body)
+    body_reserve = min(_PLAN_BODY_RESERVE, len(full_body))
+    separators = 4  # header -> sheet -> card (+ body)
+    if notes:
+        separators += 2
+    if full_body:
+        separators += 2
+    notes_budget = max(
+        0,
+        MAX_MESSAGE_LENGTH
+        - len(header_text)
+        - len(sheet)
+        - len(minimum_card)
+        - body_reserve
+        - separators,
+    )
+    notes_text = _format_plan_notes(notes, min(_PLAN_NOTES_MAX_LENGTH, notes_budget))
+    prefix = _join_message_sections(header_text, notes_text, sheet)
+    property_budget = MAX_MESSAGE_LENGTH - len(prefix) - 2
+    if full_body:
+        property_budget -= 2
+    property_target = max(len(minimum_card), property_budget - body_reserve)
+    property_target = min(property_target, property_budget)
+    property_card = _render_properties_card(properties, property_target)
+    prefix_with_card = _join_message_sections(prefix, property_card)
+    if not full_body:
+        return _ensure_message_budget(prefix_with_card)
+    body_budget = MAX_MESSAGE_LENGTH - len(prefix_with_card) - 2
+    body_preview = _render_plan_body(body, body_budget)
+    return _ensure_message_budget(
+        _join_message_sections(prefix_with_card, body_preview)
+    )
+
+
+def _ensure_message_budget(text: str) -> str:
+    """Keep the complete escaped message within Telegram's limit."""
+    if len(text) <= MAX_MESSAGE_LENGTH:
+        return text
+    return text[: MAX_MESSAGE_LENGTH - 1] + "…"
+
+
 def _format_legacy_plan_preview(
     header_text: str,
     notes_text: str,
@@ -1025,6 +1086,13 @@ def _feedback_button_text(label: str) -> str:
     return f"💬 {label} with feedback"
 
 
+def _bound_gate_token(base: str, view: GateView) -> str:
+    """Bind a verdict/AND token to the displayed revision for decision plans."""
+    if not view.decisions:
+        return base
+    return f"{base}r{view.review_revision}"
+
+
 def render_gate_keyboard(
     prefix: str,
     view: GateView,
@@ -1036,9 +1104,50 @@ def render_gate_keyboard(
     never rendered: Telegram has no controlling TTY to satisfy them, and a
     submitted answer for one would fail after the gate's other options --
     including Deny -- had already been removed from the keyboard.
+
+    For decision plans, decision rows render above the AND controls, the
+    primary button shows the short summary, and every verdict/AND token
+    carries the displayed revision.
     """
     progress = progress or initial_progress(view)
     rows: list[list[InlineKeyboardButton]] = []
+    if view.decisions:
+        from sase_telegram.decision_keyboard import decision_rows
+        from sase_telegram.plan_decisions import (
+            current_values,
+            effective_values,
+            sheet_for,
+        )
+
+        _defs = [dict(item) for item in view.decisions]
+        _vals = current_values(
+            _defs,
+            progress.decision_values
+            if progress.decision_values is not None
+            else effective_values(_defs),
+        )
+        sheet = sheet_for(
+            _defs,
+            _vals,
+            view.review_revision,
+        )
+        if sheet is None:
+            unavailable = escape_markdown_v2("Decisions unavailable")
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"⚠️ {unavailable}",
+                        callback_data=callback_data.encode(
+                            "gate", prefix, f"dzr{view.review_revision}"
+                        ),
+                    )
+                ]
+            )
+            return InlineKeyboardMarkup(rows)
+        try:
+            rows.extend(decision_rows(prefix, view, progress))
+        except Exception:
+            pass
     singleton_row: list[InlineKeyboardButton] = []
 
     def flush_singletons() -> None:
@@ -1048,16 +1157,37 @@ def render_gate_keyboard(
 
     by_id = {option.id: option for option in view.options}
     selected_ids = set(progress.selected_option_ids)
+    from sase_telegram.decision_keyboard import primary_label as _primary_label
+
+    use_decision_primary = bool(view.decisions)
+    decision_primary = ""
+    if use_decision_primary:
+        try:
+            decision_primary = _primary_label(view, progress)
+        except Exception:
+            decision_primary = ""
     for branch_index, branch in enumerate(view.branches):
         if len(branch) == 1:
             option = by_id[branch[0]]
             if option.requires_tty:
                 continue
+            label = _option_button_text(option)
+            if (
+                use_decision_primary
+                and decision_primary
+                and option.id
+                in {
+                    "approve",
+                    "commit",
+                }
+            ):
+                # Keep sealed semantics; presentation shows the summary.
+                label = decision_primary if len(singleton_row) == 0 else label
             singleton_row.append(
                 InlineKeyboardButton(
-                    _option_button_text(option),
+                    label,
                     callback_data=callback_data.encode(
-                        "gate", prefix, f"c{branch_index}"
+                        "gate", prefix, _bound_gate_token(f"c{branch_index}", view)
                     ),
                 )
             )
@@ -1068,7 +1198,9 @@ def render_gate_keyboard(
                         InlineKeyboardButton(
                             _feedback_button_text(option.label),
                             callback_data=callback_data.encode(
-                                "gate", prefix, f"f{branch_index}"
+                                "gate",
+                                prefix,
+                                _bound_gate_token(f"f{branch_index}", view),
                             ),
                         )
                     ]
@@ -1087,13 +1219,15 @@ def render_gate_keyboard(
         group_text = (
             f"{group.icon or '•'} {group.label or by_id[visible_members[0]].label}"
         )
+        if use_decision_primary and decision_primary:
+            group_text = decision_primary
         if progress.expanded_branch_index != branch_index:
             rows.append(
                 [
                     InlineKeyboardButton(
                         group_text,
                         callback_data=callback_data.encode(
-                            "gate", prefix, f"c{branch_index}"
+                            "gate", prefix, _bound_gate_token(f"c{branch_index}", view)
                         ),
                     )
                 ]
@@ -1107,7 +1241,11 @@ def render_gate_keyboard(
                     InlineKeyboardButton(
                         f"{checked} {_option_button_text(option)}",
                         callback_data=callback_data.encode(
-                            "gate", prefix, f"x{option_index(view, option_id)}"
+                            "gate",
+                            prefix,
+                            _bound_gate_token(
+                                f"x{option_index(view, option_id)}", view
+                            ),
                         ),
                     )
                 ]
@@ -1115,7 +1253,9 @@ def render_gate_keyboard(
         submit_row = [
             InlineKeyboardButton(
                 group_text,
-                callback_data=callback_data.encode("gate", prefix, f"s{branch_index}"),
+                callback_data=callback_data.encode(
+                    "gate", prefix, _bound_gate_token(f"s{branch_index}", view)
+                ),
             )
         ]
         branch_selection = tuple(
@@ -1128,7 +1268,7 @@ def render_gate_keyboard(
                         group.label or by_id[visible_members[0]].label
                     ),
                     callback_data=callback_data.encode(
-                        "gate", prefix, f"f{branch_index}"
+                        "gate", prefix, _bound_gate_token(f"f{branch_index}", view)
                     ),
                 )
             )
@@ -1326,15 +1466,48 @@ def _format_plan_approval(
     if runtime:
         header_text += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
 
+    expected_kind = "epic_plan" if n.action == "EpicApproval" else "plan"
+    view: GateView | None = None
+    if n.action_data.get("bundle_path"):
+        try:
+            view = load_gate_view(n.action_data, expected_kind=expected_kind)
+        except Exception:
+            view = None
+    else:
+        view = None
+    decision_sheet_text = ""
+    if view is not None and view.decisions:
+        try:
+            from sase_telegram.decision_sheet import render_decision_sheet
+
+            decision_sheet_text = render_decision_sheet(
+                [dict(item) for item in view.decisions],
+                None,
+                view.review_revision,
+            )
+        except Exception:
+            decision_sheet_text = ""
     if frontmatter:
         try:
-            properties = _ordered_plan_properties(frontmatter)
-            text = _format_plan_properties_preview(
-                header_text,
-                n.notes,
-                properties,
-                plan_body,
-            )
+            from sase_telegram.decision_sheet import strip_decision_bookkeeping
+
+            clean_frontmatter = strip_decision_bookkeeping(frontmatter)
+            properties = _ordered_plan_properties(clean_frontmatter)
+            if decision_sheet_text:
+                text = _format_plan_with_decision_sheet(
+                    header_text,
+                    n.notes,
+                    decision_sheet_text,
+                    properties,
+                    plan_body,
+                )
+            else:
+                text = _format_plan_properties_preview(
+                    header_text,
+                    n.notes,
+                    properties,
+                    plan_body,
+                )
         except Exception:
             # Formatting metadata is best-effort.  Fall back to the established
             # body-only preview while retaining controls and the attachment.
@@ -1343,24 +1516,37 @@ def _format_plan_approval(
                 notes_text,
                 plan_content,
             )
+            if decision_sheet_text:
+                text = _join_message_sections(header_text, decision_sheet_text, text)
     else:
         text = _format_legacy_plan_preview(
             header_text,
             notes_text,
             plan_body if plan_content else "",
         )
+        if decision_sheet_text:
+            text = _join_message_sections(header_text, decision_sheet_text, text)
 
-    expected_kind = "epic_plan" if n.action == "EpicApproval" else "plan"
-    if not n.action_data.get("bundle_path"):
-        return text, None, attachments
-    try:
-        view = load_gate_view(n.action_data, expected_kind=expected_kind)
-    except Exception:
+    if view is None and n.action_data.get("bundle_path"):
         unavailable = escape_markdown_v2(
             "Controls unavailable: the gate request could not be read."
         )
         return _join_message_sections(text, f"⚠️ _{unavailable}_"), None, attachments
+    if view is None:
+        return text, None, attachments
+    if view.decisions and decision_sheet_text == "":
+        # Available API failing to build a sheet for a decision-bearing gate
+        # shows unavailable controls and keeps approval disabled.
+        unavailable = escape_markdown_v2(
+            "Decisions unavailable: approval is disabled for this review."
+        )
+        text = _join_message_sections(text, f"⚠️ _{unavailable}_")
+        keyboard = render_gate_keyboard(prefix, view, load_progress(view))
+        return text, keyboard, attachments
     keyboard = render_gate_keyboard(prefix, view, load_progress(view))
+    # During edits only the keyboard changes; settlement replaces the sheet
+    # with its receipt. Explicit stale refresh re-renders via this path.
+    text = _ensure_message_budget(text)
     return text, keyboard, attachments
 
 

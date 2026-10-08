@@ -138,7 +138,8 @@ def _launch_agents_with_notifications(original_prompt: str) -> None:
     chat_id = credentials.get_chat_id()
     try:
         log.info("Calling launch_agents_from_cwd")
-        results = launch_agents_from_cwd(prompt)
+        # Prompts newly authored by Telegram users are typed human input.
+        results = launch_agents_from_cwd(prompt, origin="typed")
         log.info("Spawned %d agent(s)", len(results))
     except Exception as e:
         log.error("Failed to launch agent: %s", e, exc_info=True)

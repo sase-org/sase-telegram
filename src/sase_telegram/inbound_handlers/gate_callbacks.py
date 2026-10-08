@@ -39,6 +39,75 @@ from sase_telegram.inbound_handlers.gate_response import (
 from sase_telegram.inbound_handlers.gate_input_steps import _handle_gate_input_callback
 
 
+def _persist_decision_submit_context(
+    view: GateView,
+    progress: GateProgress,
+    callback_query: Any,
+    action: dict[str, Any],
+) -> None:
+    """Persist source context before submitting so stale rejects can refresh."""
+    if not view.decisions:
+        return
+    from sase_telegram.inbound_handlers.common import (
+        _callback_chat_id,
+        _callback_origin_message_id,
+    )
+
+    message_id = _callback_origin_message_id(callback_query, action)
+    chat_id = _callback_chat_id(callback_query, action)
+    displayed = (
+        progress.displayed_revision
+        if progress.displayed_revision is not None
+        else view.review_revision
+    )
+    updated = replace(
+        progress,
+        source_message_id=message_id,
+        source_chat_id=chat_id,
+        submitted_revision=int(displayed),
+        submitted_values=dict(progress.decision_values or {}),
+    )
+    save_gate_progress(view, updated)
+
+
+def _answer_stale_with_refresh(
+    callback_query: Any,
+    action: dict[str, Any],
+    prefix: str,
+    view: GateView,
+    progress: GateProgress,
+    message_id: int | None,
+    chat_id: str | None,
+) -> None:
+    from sase_telegram.decision_callbacks import refresh_token_for, stale_response
+
+    text, _label = stale_response()
+    _answer_callback(callback_query, text)
+    if message_id is None or chat_id is None:
+        return
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from sase_telegram import callback_data as _cb
+
+    refresh = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "↻ Refresh review",
+                    callback_data=_cb.encode("gate", prefix, refresh_token_for(view)),
+                )
+            ]
+        ]
+    )
+    try:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=refresh
+        )
+    except Exception:
+        pass
+    save_gate_progress(view, progress)
+
+
 def _reject_tty_required_selection(
     callback_query: Any, view: GateView, selected_option_ids: tuple[str, ...]
 ) -> bool:
@@ -93,6 +162,26 @@ def _start_or_submit_gate_selection(
         option_inputs: dict[str, dict[str, Any]] = {
             option_id: {} for option_id in selected_option_ids
         }
+        review_revision: int | None = None
+        if view.decisions:
+            from sase_telegram.decision_callbacks import (
+                decision_inputs_for,
+                displayed_revision,
+            )
+
+            decision_inputs = decision_inputs_for(view, progress)
+            for option_id in list(option_inputs):
+                option_inputs[option_id] = {
+                    **option_inputs[option_id],
+                    **decision_inputs,
+                }
+            # Approve and commit share the same decision vector.
+            for extra_id in ("approve", "commit"):
+                if extra_id not in option_inputs and any(
+                    option.id == extra_id for option in view.options
+                ):
+                    option_inputs[extra_id] = dict(decision_inputs)
+            review_revision = displayed_revision(view, progress)
         if feedback_requested:
             _begin_gate_feedback(
                 callback_query,
@@ -102,6 +191,7 @@ def _start_or_submit_gate_selection(
                 progress,
                 selected_option_ids,
                 option_inputs=option_inputs,
+                review_revision=review_revision,
             )
             return
         response = ResponseAction(
@@ -112,7 +202,9 @@ def _start_or_submit_gate_selection(
             answer_text=None,
             selected_option_ids=selected_option_ids,
             option_inputs=option_inputs,
+            review_revision=review_revision,
         )
+        _persist_decision_submit_context(view, progress, callback_query, action)
         _execute_gate_callback_response(callback_query, action, response, view)
         return
 
@@ -160,6 +252,65 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         active_message_id=message_id,
         chat_id=chat_id,
     )
+
+    if view.decisions:
+        from sase_telegram.decision_callbacks import (
+            StaleReview,
+            apply_decision_token,
+            check_revision,
+            split_bound_token,
+        )
+        from sase_telegram.plan_decisions import parse_decision_token
+
+        if parse_decision_token(cb.choice) is not None:
+            try:
+                updated, toast, _ = apply_decision_token(view, progress, cb.choice)
+            except StaleReview:
+                _answer_stale_with_refresh(
+                    callback_query,
+                    action,
+                    cb.notif_id_prefix,
+                    view,
+                    progress,
+                    message_id,
+                    chat_id,
+                )
+                return
+            except ValueError:
+                _answer_callback(callback_query, "Invalid gate callback")
+                return
+            # Editing, back, and reset never submit. Refresh returns to
+            # the main keyboard; another tap is required to approve.
+            if message_id is not None and chat_id is not None:
+                try:
+                    telegram_client.edit_message_reply_markup(
+                        chat_id,
+                        message_id,
+                        reply_markup=render_gate_keyboard(
+                            cb.notif_id_prefix, view, updated
+                        ),
+                    )
+                except Exception:
+                    pass
+            _answer_callback(callback_query, toast)
+            return
+        base, bound_revision = split_bound_token(cb.choice)
+        if bound_revision is not None:
+            if not check_revision(view, progress, bound_revision):
+                _answer_stale_with_refresh(
+                    callback_query,
+                    action,
+                    cb.notif_id_prefix,
+                    view,
+                    progress,
+                    message_id,
+                    chat_id,
+                )
+                return
+            # Replay-safe: continue with the unbound base token. Values are
+            # explicit sets resolved server-side, so replay sets the same
+            # value instead of flipping it.
+            cb = decode(f"{cb.action_type}:{cb.notif_id_prefix}:{base}")
 
     if cb.choice.startswith("i"):
         _handle_gate_input_callback(

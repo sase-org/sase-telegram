@@ -108,7 +108,7 @@ and callback handling without another Telegram action allowlist.
 
 | Type | Body Content | Buttons |
 |---|---|---|
-| Plan Approval | Ordered Properties card + plan body + optional model/agent label | Tale, ✅ Approve, Epic, Reject, Feedback |
+| Plan Approval | Static Decisions sheet + ordered Properties card (decision bookkeeping hidden) + plan body + optional model/agent label | Decision rows + `✅ Tale · defaults` / `✅ Tale · N changes` (`✅ Epic · …` for epics) + `↺ Reset` + `↻ Refresh review` on stale + Reject + Feedback (reply to review) |
 | HITL Request | Request notes | Accept, Reject, Feedback |
 | User Question | Question text + options | One button per option + Custom |
 | Generic Gate (including Task Triage and Custom Gate) | Notes + inline Markdown preview | One button per declared branch, plus a "with feedback" button for a branch whose selection declares `feedback: optional` |
@@ -117,6 +117,14 @@ and callback handling without another Telegram action allowlist.
 | Agent Killed | Termination confirmation | Redo |
 | Error Digest | Error summary | — |
 | Image Generated | Model name | Sends image inline |
+
+Plan reviews approve as displayed: the primary button takes exactly the values shown (`✅ Tale · defaults` or `✅ Tale · N changes`, `✅ Epic · …` for epics). Editing a decision never submits; `↺ Reset` restores effective defaults. A tap on a stale card answers `This plan changed since this card was shown.` with `↻ Refresh review`, which reloads prose and the sheet, keeps still-valid drafts, and requires another tap to approve.
+
+When a decision plan settles here or on another surface, the review message is edited once into its answered receipt (verdict, decider/surface/time, numbered accepted values with `● (★ default)`, memory selectors, and the full core summary) with the keyboard removed in the same request. An accepted plan whose coder could not start reads `Approved with these choices · coder could not start · retry`.
+
+Quiet auto receipts: plan-decision `%auto` notifications tagged `plan_decisions_receipt` are delivered with `disable_notification=True`; other silent rows stay suppressed, and muted/read filtering is preserved.
+
+Plan PDFs prepend a Decisions table before Properties/body with decision callouts as labelled blockquotes; every branch is retained.
 
 The visible plan **✅ Approve** button maps to the internal `run` payload for compatibility. It approves the plan with
 `commit_plan: false` and `run_coder: true`, which starts coder work without committing the plan first.

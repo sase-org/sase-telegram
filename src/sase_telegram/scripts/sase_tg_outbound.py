@@ -509,8 +509,15 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
 
         msg = None
         try:
+            from sase_telegram.outbound import _is_quiet_decision_receipt
+
+            quiet = _is_quiet_decision_receipt(n)
             msg = send_message(
-                chat_id, text, reply_markup=keyboard, parse_mode="MarkdownV2"
+                chat_id,
+                text,
+                reply_markup=keyboard,
+                parse_mode="MarkdownV2",
+                disable_notification=True if quiet else None,
             )
             rate_limit.record_send()
             log.debug("Sent notification %s → message_id=%s", n.id[:8], msg.message_id)

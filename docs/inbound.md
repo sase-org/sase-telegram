@@ -152,7 +152,7 @@ For `feedback` and `custom` choices, the flow is:
 1. The callback is saved to `awaiting_feedback.json` with the pending action context
 2. The entry is keyed by the originating Telegram `message_id`, so multiple feedback flows can be active at once
 3. Telegram answers the button tap with a prompt to send feedback and removes the original inline keyboard
-4. The next reply to that Telegram message completes the action; if only one feedback flow exists, a plain text
+4. The next reply to that Telegram message completes the action (feedback carries the current decision vector as provisional values with its displayed `review_revision`, and can itself become stale); if only one feedback flow exists, a plain text
    message can complete it as a compatibility fallback:
    - The feedback/custom text is written to the response file
    - `awaiting_feedback.json` is cleared
@@ -162,7 +162,7 @@ For `feedback` and `custom` choices, the flow is:
 
 Text messages are dispatched in priority order:
 
-1. **Two-step completion** — If `awaiting_feedback.json` has an active flow, the text completes it (see above)
+1. **Two-step completion** — If `awaiting_feedback.json` has an active flow, the text completes it (see above). When several prompts await replies, unreplied text asks the user to reply to the appropriate message and never launches an agent; single-waiter plain-text compatibility, reply-ID isolation, explicit slash commands, and stale-flow cleanup are preserved
 2. **Slash commands** — Messages starting with `/` are agent management commands (registered with `set_my_commands` so they appear in the chat input UI):
    - `/list` — Lists running agents with provider/model, status, context, activity, prompt snippet, and overview buttons
    - `/list all` — Includes recently finished and failed agents

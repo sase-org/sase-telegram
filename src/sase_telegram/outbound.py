@@ -56,7 +56,9 @@ def get_unsent_notifications() -> list[Notification]:
     all_notifs = getattr(snapshot, "notifications", snapshot)
     unsent = []
     for n in all_notifs:
-        if n.read or n.silent or n.muted:
+        if n.read or n.muted:
+            continue
+        if n.silent and not _is_quiet_decision_receipt(n):
             continue
         try:
             cursor = _notification_cursor(n)
@@ -65,6 +67,22 @@ def get_unsent_notifications() -> list[Notification]:
         if cursor > last_sent:
             unsent.append(n)
     return sorted(unsent, key=_notification_cursor)
+
+
+def _is_quiet_decision_receipt(n: Notification) -> bool:
+    """Return whether *n* is the silent informational decision receipt."""
+    try:
+        from sase_telegram.plan_decisions import RECEIPT_TAG
+
+        tags = list(getattr(n, "tags", ()) or ())
+        return (
+            bool(getattr(n, "silent", False))
+            and not bool(getattr(n, "muted", False))
+            and RECEIPT_TAG in [str(tag) for tag in tags]
+            and getattr(n, "action", None) is None
+        )
+    except Exception:
+        return False
 
 
 def mark_sent(notifications: list[Notification]) -> None:

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from sase_telegram import telegram_client
 from sase.procs.models import TERMINAL_PROC_STATUSES
 from sase.procs.store import get_proc
 from sase_telegram.inbound import GATE_COMPLETION_PENDING_DIR
 from sase_telegram.inbound_handlers.common import _load_json_file, _shorten_home
+
+if TYPE_CHECKING:
+    from sase_telegram.gate_flow import GateView
 
 import logging
 
@@ -104,6 +107,14 @@ def _send_ready_gate_completions() -> int:
             continue
 
         bundle_path = Path(bundle_path_raw)
+        # One decision-plan receipt path for Telegram and external
+        # settlement. Persist the edit before removing pending/progress.
+        if _is_decision_bundle(bundle_path):
+            if _settle_decision_receipt(
+                pending_path, record, bundle_path, chat_id, proc_id, created_at
+            ):
+                sent_count += 1
+            continue
         response = _load_json_file(bundle_path / "response.json")
         text: str | None = None
         if isinstance(response, dict):
@@ -139,6 +150,225 @@ def _send_ready_gate_completions() -> int:
         sent_count += 1
         pending_path.unlink(missing_ok=True)
     return sent_count
+
+
+def _is_decision_bundle(bundle_path: Path) -> bool:
+    request = _load_json_file(bundle_path / "request.json")
+    if not isinstance(request, dict):
+        return False
+    payload = request.get("payload")
+    return isinstance(payload, dict) and isinstance(payload.get("decisions"), list)
+
+
+def _settle_decision_receipt(
+    pending_path: Path,
+    record: dict[str, Any],
+    bundle_path: Path,
+    chat_id: str,
+    proc_id: str,
+    created_at: float,
+) -> bool:
+    """Edit one review card into its answered receipt. Return True when done."""
+    from sase_telegram.decision_receipt import (
+        authoritative_values as _auth_values,
+        launch_failed_text,
+        receipt_text,
+    )
+    from sase_telegram.gate_flow import GateView
+
+    response = _load_json_file(bundle_path / "response.json")
+    # Fast acceptance before response.json/stamped plan: disable controls
+    # and retain the receipt job until the accepted vector is readable.
+    if not isinstance(response, dict):
+        error = _latest_gate_execution_error(bundle_path, since=created_at)
+        if error is not None and _is_stale_error(error):
+            _restore_refresh_for_stale(bundle_path, chat_id, record)
+            pending_path.unlink(missing_ok=True)
+            return True
+        return False
+    view = _minimal_view_for_receipt(bundle_path)
+    if view is None:
+        return False
+    values = _auth_values(view)
+    if values is None:
+        return False
+    verdict = _verdict_for_response(view, response)
+    base = receipt_text(view, values, verdict=verdict)
+    # Acceptance and implementation status stay distinct: a response can
+    # exist before a successor-launch failure. Inspect post-response
+    # failures as well as responses.
+    error = _latest_gate_execution_error(bundle_path, since=created_at)
+    proc = _gate_answer_proc_status(proc_id)
+    launch_failed = _is_launch_failure(error, proc)
+    text = launch_failed_text(base) if launch_failed else base
+    # Repeat polls produce one logical edit; freeze text and treat
+    # already-identical as success, retrying only unfinished work.
+    if (
+        isinstance(record.get("receipt_text"), str)
+        and record.get("receipt_text") != text
+        and not launch_failed
+    ):
+        text = str(record["receipt_text"])
+    else:
+        record["receipt_text"] = text
+        try:
+            pending_path.write_text(__import__("json").dumps(record, indent=2))
+        except OSError:
+            pass
+    message_id = _review_message_id(bundle_path, record)
+    if message_id is None:
+        try:
+            telegram_client.send_message(chat_id, text)
+        except Exception:
+            log.warning(
+                "Failed to send decision receipt for proc %s", proc_id, exc_info=True
+            )
+            return False
+        _clear_decision_progress(bundle_path)
+        pending_path.unlink(missing_ok=True)
+        return True
+    try:
+        telegram_client.edit_message_text(chat_id, message_id, text, reply_markup=None)
+    except Exception as exc:
+        if "not modified" in str(exc).lower() or "identical" in str(exc).lower():
+            _clear_decision_progress(bundle_path)
+            pending_path.unlink(missing_ok=True)
+            return True
+        log.warning(
+            "Failed to edit decision receipt for proc %s", proc_id, exc_info=True
+        )
+        return False
+    # The completion reply carries the full summary sentence.
+    try:
+        telegram_client.send_message(chat_id, text)
+    except Exception:
+        log.warning(
+            "Failed to send decision completion for proc %s", proc_id, exc_info=True
+        )
+    _clear_decision_progress(bundle_path)
+    pending_path.unlink(missing_ok=True)
+    return True
+
+
+def _minimal_view_for_receipt(bundle_path: Path) -> GateView | None:
+    from sase_telegram.gate_flow import GateView as _View
+
+    request = _load_json_file(bundle_path / "request.json")
+    if not isinstance(request, dict):
+        return None
+    payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
+    raw_decisions = payload.get("decisions") if isinstance(payload, dict) else None
+    decisions = tuple(raw_decisions) if isinstance(raw_decisions, list) else ()
+    revision = request.get("review_revision", 1)
+    try:
+        revision = int(revision)
+    except (TypeError, ValueError):
+        revision = 1
+    return _View(
+        bundle_path=bundle_path,
+        request_id=str(request.get("request_id") or bundle_path.name),
+        kind=str(request.get("kind") or "plan"),
+        options=(),
+        groups=(),
+        branches=(),
+        decisions=tuple(decisions),
+        review_revision=revision,
+    )
+
+
+def _verdict_for_response(view: GateView, response: dict[str, Any]) -> str:
+    selected = response.get("selected_option_ids")
+    ids = [str(item) for item in selected] if isinstance(selected, list) else []
+    if "reject" in ids:
+        return "Rejected"
+    if "feedback" in ids:
+        return "Feedback"
+    return "Epic" if view.kind == "epic_plan" else "Tale"
+
+
+def _is_stale_error(error: dict[str, Any]) -> bool:
+    message = str(error.get("message") or "")
+    code = str(error.get("code") or "")
+    return "stale_review" in code or "stale_review" in message
+
+
+def _is_launch_failure(error: dict[str, Any] | None, proc: Any | None) -> bool:
+    if error is not None:
+        message = str(error.get("message") or "").lower()
+        if "coder" in message and ("could not start" in message or "launch" in message):
+            return True
+        if str(error.get("code") or "") == "successor_launch_failed":
+            return True
+    if proc is not None and getattr(proc, "status", None) not in (None, "success"):
+        # A response exists but the proc failed afterwards: the plan was
+        # accepted yet its coder could not start.
+        return True
+    return False
+
+
+def _review_message_id(bundle_path: Path, record: dict[str, Any]) -> int | None:
+    progress_file = bundle_path / "telegram_gate_progress.json"
+    progress = _load_json_file(progress_file)
+    if isinstance(progress, dict):
+        for key in ("source_message_id", "active_message_id"):
+            raw = progress.get(key)
+            if isinstance(raw, int):
+                return raw
+            try:
+                return int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                continue
+    raw = record.get("message_id")
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _restore_refresh_for_stale(
+    bundle_path: Path, chat_id: str, record: dict[str, Any]
+) -> None:
+    from sase_telegram import callback_data as _cb
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    message_id = _review_message_id(bundle_path, record)
+    if message_id is None:
+        return
+    request = _load_json_file(bundle_path / "request.json")
+    revision = 1
+    if isinstance(request, dict):
+        try:
+            revision = int(request.get("review_revision", 1))
+        except (TypeError, ValueError):
+            revision = 1
+    prefix = str(record.get("prefix") or "")
+    if not prefix:
+        return
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "↻ Refresh review",
+                    callback_data=_cb.encode("gate", prefix, f"dRr{revision}"),
+                )
+            ]
+        ]
+    )
+    try:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=markup
+        )
+    except Exception:
+        log.warning("Failed to restore decision refresh controls", exc_info=True)
+
+
+def _clear_decision_progress(bundle_path: Path) -> None:
+    try:
+        (bundle_path / "telegram_gate_progress.json").unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _gate_answer_proc_status(proc_id: str) -> Any | None:

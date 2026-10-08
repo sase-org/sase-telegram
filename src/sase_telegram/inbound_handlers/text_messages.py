@@ -132,7 +132,26 @@ def _handle_text_message(
     if _handle_gate_input_text_message(message, text, reply_key=reply_key):
         return
 
+    from sase_telegram.inbound import load_all_awaiting_feedback as _all_awaiting
+
     response = process_text_message(text, key=reply_key)
+    if response is None and reply_key is None:
+        try:
+            pending_flows = _all_awaiting()
+        except Exception:
+            pending_flows = {}
+        if isinstance(pending_flows, dict) and len(pending_flows) > 1:
+            chat_id = _message_chat_id(message) or _configured_chat_id()
+            if chat_id is not None:
+                try:
+                    telegram_client.send_message(
+                        chat_id,
+                        "Reply to the appropriate message to answer that prompt.",
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception:
+                    log.warning("Failed to send multi-prompt reply hint", exc_info=True)
+            return
     if response is not None:
         action = pending_actions.get(response.notif_id_prefix)
         try:
