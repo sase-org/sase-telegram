@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.27](https://github.com/sase-org/sase-telegram/compare/v0.4.26...v0.4.27) (2026-10-08)
+
+
+### Features
+
+* **telegram:** decision recovery with receipt provenance, stale grace, settlement and sheet budget ([db624d3](https://github.com/sase-org/sase-telegram/commit/db624d37fed28467300812b52e4ea4e2b1c85383))
+
 ## [0.4.26](https://github.com/sase-org/sase-telegram/compare/v0.4.25...v0.4.26) (2026-10-08)
 
 
