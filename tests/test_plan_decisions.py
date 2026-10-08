@@ -520,7 +520,12 @@ def test_missing_facade_and_generic_compatibility(gate_home: Path) -> None:
 
 
 def test_approve_commit_reject_feedback_epic_vectors(gate_home: Path) -> None:
-    """Approve+commit, approve-only, commit-only, reject, feedback, epic."""
+    """Helper vectors only: reject empties, approve+commit shares one vector.
+
+    Full Reject, approve-only, and commit-only callback submits live in
+    ``test_submit_reject_approve_only_commit_only``; the epic card verdict
+    lives in ``test_epic_primary_action_and_verdict``.
+    """
     from sase_telegram.decision_callbacks import build_selected_option_inputs
     from sase_telegram.gate_flow import load_gate_view
 
@@ -686,3 +691,1073 @@ def test_pdf_accepted_pending_and_callouts(tmp_path: Path, gate_home: Path) -> N
     labelled = _label_callouts(body)
     assert "Decision" in labelled and "continuation" in labelled
     assert plan.read_text(encoding="utf-8") == TALE_DECISIONS_PLAN
+
+
+def test_receipt_headers_single_attribution_all_surfaces(gate_home: Path) -> None:
+    """One provenance phrase on approve/reject/feedback across surfaces."""
+    from sase_telegram.decision_receipt import (
+        format_attribution,
+        normalize_surface,
+        receipt_text,
+    )
+
+    notification = _tale_notification(gate_home, "telegram-provenance")
+    view = load_gate_view(notification.action_data, expected_kind="plan")
+    values = {"grouping": "mode", "terse": True}
+    cases = [
+        ({"caller": "reviewer", "source": "telegram"}, "you via Telegram"),
+        ({"caller": "human", "source": "tui"}, "you via ACE"),
+        ({"caller": "human", "source": "cli"}, "you via CLI"),
+        ({"caller": "human", "source": "mobile"}, "you via mobile"),
+        ({"caller": "agent", "source": "cli"}, "agent via CLI"),
+        ({"caller": "auto", "source": "auto_resolution"}, "auto"),
+    ]
+    outcomes = [
+        (["approve", "commit"], "✅ Tale approved"),
+        (["reject"], "❌ Rejected"),
+        (["feedback"], "💬 Feedback sent"),
+    ]
+    for provenance, attribution in cases:
+        for selected, marker in outcomes:
+            response = {
+                "selected_option_ids": selected,
+                **provenance,
+                "responded_at_unix": 1750000000,
+            }
+            text = receipt_text(view, dict(values), response=dict(response))
+            first = text.splitlines()[0]
+            assert "via via" not in first, first
+            assert "auto auto" not in first, first
+            assert first.count("via") <= 1, first
+            if attribution == "auto" and selected == ["approve", "commit"]:
+                assert first.startswith("🤖 Auto-approved tale"), first
+            else:
+                assert first.startswith(f"{marker} · {attribution}"), first
+    # Shared helper never doubles explicit `via` inputs either.
+    assert format_attribution("you", "via Telegram") == "you via Telegram"
+    assert format_attribution("you", "Telegram") == "you via Telegram"
+    assert format_attribution("human", "via mobile") == "human via mobile"
+    assert format_attribution("auto", "auto") == "auto"
+    assert normalize_surface("via via Telegram") == "via Telegram"
+    assert normalize_surface("via ACE") == "via ACE"
+    assert normalize_surface("Telegram") == "via Telegram"
+    assert normalize_surface("auto") == "auto"
+    # Explicit doubled inputs collapse to one phrase on every outcome.
+    doubled = receipt_text(
+        view,
+        dict(values),
+        response={
+            "selected_option_ids": ["reject"],
+            "caller": "reviewer",
+            "source": "telegram",
+            "responded_at_unix": 1750000000,
+        },
+        decider="you",
+        surface="via via Telegram",
+    )
+    assert "via via" not in doubled.splitlines()[0]
+    # Epic wording names Epic, never Tale.
+    epic = _tale_notification(
+        gate_home, "telegram-provenance-epic", EPIC_DECISIONS_PLAN
+    )
+    epic_view = load_gate_view(epic.action_data)
+    epic_text = receipt_text(
+        epic_view,
+        {"grouping": "mode"},
+        response={
+            "selected_option_ids": ["approve"],
+            "caller": "reviewer",
+            "source": "telegram",
+            "responded_at_unix": 1750000000,
+        },
+    )
+    assert epic_text.splitlines()[0].startswith("✅ Epic approved · you via Telegram")
+    epic_auto = receipt_text(
+        epic_view,
+        {"grouping": "pane"},
+        response={
+            "selected_option_ids": ["approve"],
+            "caller": "auto",
+            "source": "auto_resolution",
+            "responded_at_unix": 1750000000,
+        },
+    )
+    assert epic_auto.splitlines()[0].startswith("🤖 Auto-approved epic")
+
+
+def test_submit_reject_approve_only_commit_only(gate_home: Path) -> None:
+    """Real Reject, approve-only, and commit-only callbacks on a decision plan."""
+    from sase_telegram.decision_callbacks import _declared_decision_keys
+    from sase_telegram.gate_flow import load_progress, option_index
+    from sase_telegram.inbound_handlers.callbacks import _handle_callback
+
+    def _submit_single(request_id: str, select: list[str]) -> dict[str, Any]:
+        notification = _tale_notification(gate_home, request_id)
+        prefix = notification.id[:8]
+        action = _pending(notification)
+        pending_actions.add(prefix, action)
+        view = load_gate_view(notification.action_data, expected_kind="plan")
+        revision = view.review_revision
+        branch_of = {
+            "approve": 0,
+            "commit": 0,
+            "reject": 1,
+            "feedback": 2,
+        }
+        with (
+            patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+            patch(
+                "inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"
+            ),
+            patch("inbound_namespace.INBOUND.telegram_client.edit_message_text"),
+            patch("inbound_namespace.INBOUND.telegram_client.send_message"),
+            patch(
+                "sase.plan_approval_actions._archive_plan_for_approval",
+                return_value=str(gate_home / "archived-plan.md"),
+            ),
+        ):
+            if select == ["reject"]:
+                _handle_callback(
+                    _callback(f"gate:{prefix}:c{branch_of['reject']}r{revision}"),
+                    {prefix: action},
+                )
+            else:
+                _handle_callback(
+                    _callback(f"gate:{prefix}:c0r{revision}"), {prefix: action}
+                )
+                # Branch 0 defaults to approve+commit; switch the other
+                # member off explicitly for single-verdict submits.
+                for option_id in ("approve", "commit"):
+                    if option_id not in select:
+                        idx = option_index(view, option_id)
+                        _handle_callback(
+                            _callback(f"gate:{prefix}:x{idx}=0r{revision}"),
+                            {prefix: action},
+                        )
+                _handle_callback(
+                    _callback(f"gate:{prefix}:s0r{revision}"), {prefix: action}
+                )
+        bundle = Path(notification.action_data["bundle_path"])
+        response = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
+        assert sorted(str(s) for s in response["selected_option_ids"]) == sorted(select)
+        inputs = response.get("option_inputs", {})
+        for option_id in select:
+            declared = _declared_decision_keys(view, option_id)
+            if option_id == "reject":
+                assert inputs.get(option_id, {}) == {}
+            else:
+                assert set(inputs[option_id]) == declared
+                assert declared, "decision options must declare decision_* fields"
+                assert all(k.startswith("decision_") for k in inputs[option_id])
+        for option_id in inputs:
+            assert option_id in select, "no unselected inputs are submitted"
+        # Displayed revision travels with the submission.
+        assert (
+            response.get("review_revision", revision) == revision
+            or json.loads((bundle / "request.json").read_text(encoding="utf-8")).get(
+                "review_revision"
+            )
+            == revision
+        )
+        # Recovery context is retained for the completion poll.
+        progress = load_progress(view)
+        assert progress.submitted_revision == revision
+        assert progress.submitted_values is not None
+        assert progress.source_message_id == 42
+        return response
+
+    rej = _submit_single("telegram-submit-reject", ["reject"])
+    assert rej["selected_option_ids"] == ["reject"]
+    approve_only = _submit_single("telegram-submit-approve-only", ["approve"])
+    assert approve_only["option_inputs"]["approve"]["decision_grouping"] in (
+        "pane",
+        "mode",
+    )
+    assert "commit" not in approve_only.get("option_inputs", {})
+    commit_only = _submit_single("telegram-submit-commit-only", ["commit"])
+    assert commit_only["option_inputs"]["commit"]["decision_grouping"] in (
+        "pane",
+        "mode",
+    )
+    assert "approve" not in commit_only.get("option_inputs", {})
+
+
+def _deferred_submit_context(
+    gate_home: Path, request_id: str, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
+    """Build a submitted-but-unanswered decision bundle with a draft.
+
+    The gate proc stays deferred (no synchronous fake execution) so error
+    and missing-output recovery is exercised through the durable records,
+    never through the inline fake.
+    """
+    from dataclasses import replace
+
+    from sase_telegram.decision_callbacks import apply_decision_token
+    from sase_telegram.gate_flow import save_progress as save_gate_progress
+
+    monkeypatch.setattr(
+        "sase.procs.service.submit_proc_request",
+        lambda request: SimpleNamespace(proc_id=f"deferred-{request_id}"),
+    )
+    notification = _tale_notification(gate_home, request_id)
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+    view = load_gate_view(notification.action_data, expected_kind="plan")
+    revision = view.review_revision
+    progress = load_progress(view)
+    updated, _, _ = apply_decision_token(view, progress, f"d0=k1r{revision}")
+    updated = replace(
+        updated,
+        source_message_id=42,
+        source_chat_id="chat-1",
+        displayed_revision=revision,
+        submitted_revision=revision,
+        submitted_values=dict(updated.decision_values or {}),
+    )
+    save_gate_progress(view, updated)
+    bundle = Path(notification.action_data["bundle_path"])
+    created = 1000.0
+    record = {
+        "prefix": prefix,
+        "proc_id": f"deferred-{request_id}",
+        "request_id": request_id,
+        "kind": "plan",
+        "bundle_path": str(bundle),
+        "chat_id": "chat-1",
+        "created_at": created,
+    }
+    return {
+        "notification": notification,
+        "prefix": prefix,
+        "action": action,
+        "view": view,
+        "revision": revision,
+        "bundle": bundle,
+        "created": created,
+        "record": record,
+    }
+
+
+def _write_completion_record(tmp_path: Path, record: dict[str, Any]) -> Path:
+    pending_path = tmp_path / f"{record['proc_id']}.json"
+    pending_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return pending_path
+
+
+def test_deferred_stale_error_restores_refresh_and_keeps_draft(
+    gate_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deferred stale rejection sends the exact text and keeps recovery state."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+    from sase_telegram.plan_decisions import STALE_TEXT
+
+    ctx = _deferred_submit_context(gate_home, "telegram-deferred-stale", monkeypatch)
+    bundle, revision, record = ctx["bundle"], ctx["revision"], ctx["record"]
+    errors = bundle / "errors"
+    errors.mkdir(parents=True, exist_ok=True)
+    (errors / "stale.json").write_text(
+        json.dumps(
+            {
+                "code": "stale_review",
+                "message": f"stale_review: current revision is {revision}",
+                "created_at_unix": ctx["created"] + 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pending_path = _write_completion_record(tmp_path, dict(record))
+    sent: list[str] = []
+    markups: list[Any] = []
+    monkeypatch.setattr(gc, "_gate_answer_proc_status", lambda proc_id: None)
+    with (
+        patch.object(
+            gc.telegram_client, "send_message", side_effect=lambda c, t: sent.append(t)
+        ),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_reply_markup",
+            side_effect=lambda c, m, reply_markup=None: markups.append(reply_markup),
+        ),
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                pending_path,
+                json.loads(pending_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + 2,
+            )
+            is True
+        )
+    assert sent == [STALE_TEXT]
+    assert markups and any(
+        "dRr" in (b.callback_data or "")
+        for markup in markups
+        for row in markup.inline_keyboard
+        for b in row
+    )
+    assert any(
+        "Refresh" in b.text
+        for markup in markups
+        for row in markup.inline_keyboard
+        for b in row
+    )
+    # Draft, displayed revision, pending action, and progress are kept.
+    reloaded = load_progress(ctx["view"])
+    assert reloaded.decision_values == {"grouping": "mode"}
+    assert reloaded.displayed_revision == revision
+    assert (bundle / "telegram_gate_progress.json").exists()
+    assert pending_actions.get(ctx["prefix"]) is not None
+    assert not (bundle / "response.json").exists()
+    assert not pending_path.exists()
+    # Tapping Refresh reloads prose and keeps only still-valid draft values.
+    from sase_telegram.decision_callbacks import apply_decision_token
+
+    refreshed, toast, submitted = apply_decision_token(
+        ctx["view"], reloaded, f"dRr{revision}"
+    )
+    assert submitted is False
+    assert refreshed.displayed_revision == revision
+    assert refreshed.decision_values == {"grouping": "mode"}
+    assert "refresh" in toast.lower()
+
+
+def test_recorded_error_reports_message_and_stays_retryable(
+    gate_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded schema rejection reports its message with controls usable."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+
+    ctx = _deferred_submit_context(gate_home, "telegram-deferred-schema", monkeypatch)
+    bundle, record = ctx["bundle"], ctx["record"]
+    errors = bundle / "errors"
+    errors.mkdir(parents=True, exist_ok=True)
+    message = "choice key 'zzz' is not allowed for decision grouping"
+    (errors / "schema.json").write_text(
+        json.dumps(
+            {
+                "code": "decision-resolve-failed",
+                "message": message,
+                "created_at_unix": ctx["created"] + 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pending_path = _write_completion_record(tmp_path, dict(record))
+    sent: list[str] = []
+    monkeypatch.setattr(gc, "_gate_answer_proc_status", lambda proc_id: None)
+    with (
+        patch.object(
+            gc.telegram_client, "send_message", side_effect=lambda c, t: sent.append(t)
+        ),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                pending_path,
+                json.loads(pending_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + 2,
+            )
+            is True
+        )
+    assert sent == [message]
+    assert "finished without a recorded answer" not in sent[0]
+    reloaded = load_progress(ctx["view"])
+    assert reloaded.decision_values == {"grouping": "mode"}
+    assert pending_actions.get(ctx["prefix"]) is not None
+    assert not pending_path.exists()
+
+
+def test_missing_proc_grace_interval_and_durable_retry(
+    gate_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing proc rows wait out the grace interval; failures retry durably."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+    from sase_telegram.plan_decisions import STALE_TEXT
+
+    ctx = _deferred_submit_context(gate_home, "telegram-deferred-missing", monkeypatch)
+    bundle, record = ctx["bundle"], ctx["record"]
+    monkeypatch.setattr(gc, "_gate_answer_proc_status", lambda proc_id: None)
+    # Within the grace interval: still waiting, nothing sent.
+    early_path = _write_completion_record(tmp_path, dict(record))
+    with (
+        patch.object(gc.telegram_client, "send_message") as sent,
+        patch.object(gc.telegram_client, "edit_message_reply_markup") as edited,
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                early_path,
+                json.loads(early_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + 1,
+            )
+            is False
+        )
+        assert sent.call_count == 0 and edited.call_count == 0
+    assert early_path.exists()
+    # Past the interval: one missing-output report with usable controls.
+    late_path = _write_completion_record(tmp_path, dict(record))
+    sent_texts: list[str] = []
+    with (
+        patch.object(
+            gc.telegram_client,
+            "send_message",
+            side_effect=lambda c, t: sent_texts.append(t),
+        ),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                late_path,
+                json.loads(late_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + gc.MISSING_PROC_GRACE_SECONDS + 1,
+            )
+            is True
+        )
+    assert len(sent_texts) == 1 and "retry from the review card" in sent_texts[0]
+    assert load_progress(ctx["view"]).decision_values == {"grouping": "mode"}
+    # Failed delivery keeps the durable retry instead of claiming recovery.
+    retry_path = _write_completion_record(tmp_path, dict(record))
+    errors = bundle / "errors"
+    errors.mkdir(parents=True, exist_ok=True)
+    (errors / "stale.json").write_text(
+        json.dumps(
+            {
+                "code": "stale_review",
+                "message": "stale_review: current revision is 1",
+                "created_at_unix": ctx["created"] + 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch.object(
+        gc.telegram_client, "send_message", side_effect=RuntimeError("net down")
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                retry_path,
+                json.loads(retry_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + 2,
+            )
+            is False
+        )
+    assert retry_path.exists()
+    # A still-running visible proc never reports, even past the interval.
+    running_path = _write_completion_record(tmp_path, dict(record))
+    (errors / "stale.json").unlink(missing_ok=True)
+    monkeypatch.setattr(
+        gc,
+        "_gate_answer_proc_status",
+        lambda proc_id: SimpleNamespace(status="running"),
+    )
+    with (
+        patch.object(gc.telegram_client, "send_message") as sent,
+        patch.object(gc.telegram_client, "edit_message_reply_markup") as edited,
+    ):
+        assert (
+            gc._settle_decision_receipt(
+                running_path,
+                json.loads(running_path.read_text(encoding="utf-8")),
+                bundle,
+                "chat-1",
+                record["proc_id"],
+                ctx["created"],
+                now=ctx["created"] + gc.MISSING_PROC_GRACE_SECONDS + 999,
+            )
+            is False
+        )
+        assert sent.call_count == 0 and edited.call_count == 0
+    assert STALE_TEXT  # exact stale wording is pinned above
+
+
+def _submit_approve_commit(request_id: str, gate_home: Path) -> dict[str, Any]:
+    """Submit approve+commit through real callbacks; return context."""
+    from sase_telegram.inbound_handlers.callbacks import _handle_callback
+
+    notification = _tale_notification(gate_home, request_id)
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+    view = load_gate_view(notification.action_data, expected_kind="plan")
+    revision = view.review_revision
+    with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_text"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
+        patch(
+            "sase.plan_approval_actions._archive_plan_for_approval",
+            return_value=str(gate_home / "archived-plan.md"),
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:d0=k1r{revision}"), {prefix: action})
+        _handle_callback(_callback(f"gate:{prefix}:s0r{revision}"), {prefix: action})
+    return {
+        "notification": notification,
+        "prefix": prefix,
+        "view": view,
+        "revision": revision,
+        "bundle": Path(notification.action_data["bundle_path"]),
+    }
+
+
+def test_native_telegram_settlement_edits_once(gate_home: Path) -> None:
+    """Completion edits the card once, replies once, and never duplicates."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+    from sase.notifications import store as _store
+
+    ctx = _submit_approve_commit("telegram-settle-native", gate_home)
+    bundle, prefix = ctx["bundle"], ctx["prefix"]
+    comp_dir = Path(inbound.GATE_COMPLETION_PENDING_DIR)
+    pending_files = sorted(comp_dir.glob("*.json"))
+    assert len(pending_files) == 1
+    edits: list[str] = []
+    replies: list[str] = []
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(gc, "_gate_answer_proc_status", return_value=None),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_text",
+            side_effect=lambda c, m, t, reply_markup=None: edits.append(t),
+        ),
+        patch.object(
+            gc.telegram_client,
+            "send_message",
+            side_effect=lambda c, t, **k: replies.append(t),
+        ),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert gc._send_ready_gate_completions() == 1
+    assert len(edits) == 1
+    assert edits[0].splitlines()[0].startswith("✅ Tale approved · you via Telegram")
+    assert "grouping → mode" in edits[0]
+    assert len(replies) == 1 and replies[0] == edits[0]
+    assert pending_actions.get(prefix) is None
+    assert not (bundle / "telegram_gate_progress.json").exists()
+    assert list(comp_dir.glob("*.json")) == []
+    # Repeated polls and a receiver restart preserve these facts.
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(gc, "_gate_answer_proc_status", return_value=None),
+        patch.object(gc.telegram_client, "edit_message_text") as edited,
+        patch.object(gc.telegram_client, "send_message") as sent,
+    ):
+        assert gc._send_ready_gate_completions() == 0
+        _store._LOAD_CACHE.clear()
+        assert gc._send_ready_gate_completions() == 0
+        assert edited.call_count == 0 and sent.call_count == 0
+    # The post-poll sweep cannot perform a second settlement edit.
+    from sase_telegram.inbound_handlers.keyboard_cleanup import (
+        _settle_externally_resolved_decision,
+    )
+
+    with (
+        patch("sase_telegram.inbound_handlers.keyboard_cleanup.telegram_client"),
+    ):
+        assert _settle_externally_resolved_decision(prefix, 42, "chat-1") is False
+
+
+def test_external_settlement_surfaces_and_feedback_null_source(
+    gate_home: Path,
+) -> None:
+    """ACE/CLI settlement renders truthfully; feedback edits the card w/o source."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+
+    cases = [
+        ("telegram-settle-ace", {"caller": "human", "source": "tui"}, "you via ACE"),
+        ("telegram-settle-cli", {"caller": "human", "source": "cli"}, "you via CLI"),
+    ]
+    for request_id, provenance, attribution in cases:
+        ctx = _submit_approve_commit(request_id, gate_home)
+        bundle, prefix = ctx["bundle"], ctx["prefix"]
+        response_path = bundle / "response.json"
+        response = json.loads(response_path.read_text(encoding="utf-8"))
+        response.update(provenance)
+        response_path.write_text(json.dumps(response, indent=2), encoding="utf-8")
+        comp_dir = Path(inbound.GATE_COMPLETION_PENDING_DIR)
+        edits: list[str] = []
+        with (
+            patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+            patch.object(gc, "_gate_answer_proc_status", return_value=None),
+            patch.object(
+                gc.telegram_client,
+                "edit_message_text",
+                side_effect=lambda c, m, t, reply_markup=None, _edits=edits: (
+                    _edits.append(t)
+                ),
+            ),
+            patch.object(gc.telegram_client, "send_message"),
+            patch.object(gc.telegram_client, "edit_message_reply_markup"),
+        ):
+            assert gc._send_ready_gate_completions() == 1
+        assert (
+            edits[0].splitlines()[0].startswith(f"✅ Tale approved · {attribution}")
+        ), edits[0].splitlines()[0]
+        assert pending_actions.get(prefix) is None
+    # External reject never renders as approved.
+    ctx = _submit_approve_commit("telegram-settle-reject-src", gate_home)
+    bundle = ctx["bundle"]
+    response_path = bundle / "response.json"
+    response = json.loads(response_path.read_text(encoding="utf-8"))
+    response["selected_option_ids"] = ["reject"]
+    response["caller"] = "human"
+    response["source"] = "cli"
+    response_path.write_text(json.dumps(response, indent=2), encoding="utf-8")
+    comp_dir = Path(inbound.GATE_COMPLETION_PENDING_DIR)
+    edits = []
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(gc, "_gate_answer_proc_status", return_value=None),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_text",
+            side_effect=lambda c, m, t, reply_markup=None: edits.append(t),
+        ),
+        patch.object(gc.telegram_client, "send_message"),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert gc._send_ready_gate_completions() == 1
+    assert edits[0].splitlines()[0].startswith("❌ Rejected · you via CLI")
+    assert "approved" not in edits[0].splitlines()[0].lower().replace("rejected", "")
+    # Feedback with a null source id still edits the original card.
+    from dataclasses import replace
+
+    from sase_telegram.gate_flow import save_progress as save_gate_progress
+    from sase_telegram.inbound_handlers.callbacks import _handle_callback
+    from sase_telegram.inbound_handlers.text_messages import _handle_text_message
+
+    notification = _tale_notification(gate_home, "telegram-settle-feedback")
+    prefix = notification.id[:8]
+    action = _pending(notification)
+    pending_actions.add(prefix, action)
+    view = load_gate_view(notification.action_data, expected_kind="plan")
+    revision = view.review_revision
+    feedback_branch = next(
+        i for i, branch in enumerate(view.branches) if branch == ("feedback",)
+    )
+    with (
+        patch("inbound_namespace.INBOUND.telegram_client.answer_callback_query"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_reply_markup"),
+        patch("inbound_namespace.INBOUND.telegram_client.edit_message_text"),
+        patch("inbound_namespace.INBOUND.telegram_client.send_message"),
+        patch(
+            "sase.plan_approval_actions._archive_plan_for_approval",
+            return_value=str(gate_home / "archived-plan.md"),
+        ),
+    ):
+        _handle_callback(_callback(f"gate:{prefix}:d0=k1r{revision}"), {prefix: action})
+        _handle_callback(
+            _callback(f"gate:{prefix}:f{feedback_branch}r{revision}"),
+            {prefix: action},
+        )
+        message = SimpleNamespace(
+            text="please split the difference",
+            entities=None,
+            message_id=100,
+            reply_to_message=SimpleNamespace(message_id=42),
+            chat=SimpleNamespace(id="chat-1"),
+        )
+        _handle_text_message(message, {})
+    # Submission kept the card context; only the awaiting entry cleared.
+    assert pending_actions.get(prefix) is not None
+    bundle = Path(notification.action_data["bundle_path"])
+    assert (bundle / "telegram_gate_progress.json").exists()
+    assert (bundle / "response.json").exists()
+    progress = load_progress(view)
+    progress = replace(progress, source_message_id=None)
+    save_gate_progress(view, progress)
+    comp_dir = Path(inbound.GATE_COMPLETION_PENDING_DIR)
+    edited_ids: list[int] = []
+    fb_texts: list[str] = []
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(gc, "_gate_answer_proc_status", return_value=None),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_text",
+            side_effect=lambda c, m, t, reply_markup=None: (
+                edited_ids.append(m),
+                fb_texts.append(t),
+            ),
+        ),
+        patch.object(
+            gc.telegram_client, "send_message", side_effect=lambda c, t, **k: None
+        ),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert gc._send_ready_gate_completions() == 1
+    assert edited_ids and edited_ids[0] == 42
+    assert fb_texts[0].splitlines()[0].startswith("💬 Feedback sent · you via Telegram")
+    assert "provisional" in fb_texts[0]
+    assert pending_actions.get(prefix) is None
+
+
+def test_launch_failure_claim_only_for_recorded_coder_failure(
+    gate_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Structured coder-start failures earn the claim; nothing else does."""
+    import sase_telegram.inbound_handlers.gate_completions as gc
+    from sase_telegram.decision_receipt import launch_failed_text
+
+    # Unit-level: only a recorded staged failure on a coder launch counts.
+    approve = {"selected_option_ids": ["approve", "commit"]}
+    running = SimpleNamespace(status="running", log_path=None)
+    terminal = SimpleNamespace(status="success", log_path=None)
+    staged = {"code": "coder_launch_failed", "message": "boom", "stage": "side_effects"}
+    wordy = {"code": "other", "message": "coder could not start the thing"}
+    legacy = {"code": "successor_launch_failed", "message": "x"}
+    generic = {"code": "other", "message": "boom", "stage": "command"}
+    assert (
+        gc._is_launch_failure(staged, terminal, approve, bundle_path=tmp_path) is True
+    )
+    assert (
+        gc._is_launch_failure(staged, running, approve, bundle_path=tmp_path) is False
+    )
+    assert (
+        gc._is_launch_failure(wordy, terminal, approve, bundle_path=tmp_path) is False
+    )
+    assert (
+        gc._is_launch_failure(legacy, terminal, approve, bundle_path=tmp_path) is False
+    )
+    assert (
+        gc._is_launch_failure(generic, terminal, approve, bundle_path=tmp_path) is False
+    )
+    assert (
+        gc._is_launch_failure(
+            staged, terminal, {"selected_option_ids": ["commit"]}, bundle_path=tmp_path
+        )
+        is False
+    )
+    assert (
+        gc._is_launch_failure(
+            staged, terminal, {"selected_option_ids": ["reject"]}, bundle_path=tmp_path
+        )
+        is False
+    )
+    assert (
+        gc._is_launch_failure(
+            staged,
+            terminal,
+            {"selected_option_ids": ["feedback"]},
+            bundle_path=tmp_path,
+        )
+        is False
+    )
+    # End to end: failure after first acceptance updates the same card once.
+    ctx = _submit_approve_commit("telegram-launch-failure", gate_home)
+    bundle = ctx["bundle"]
+    before = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
+    journal = bundle / "journal.jsonl"
+    journal.write_text(
+        json.dumps(
+            {"attempt_id": "a", "event": "stage_started", "stage": "side_effects"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    comp_dir = Path(inbound.GATE_COMPLETION_PENDING_DIR)
+    monkeypatch.setattr(
+        gc,
+        "_gate_answer_proc_status",
+        lambda proc_id: SimpleNamespace(status="success"),
+    )
+    first_edits: list[str] = []
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_text",
+            side_effect=lambda c, m, t, reply_markup=None: first_edits.append(t),
+        ),
+        patch.object(gc.telegram_client, "send_message"),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        # Launch still observed: card settles but the job is retained.
+        assert gc._send_ready_gate_completions() == 0
+    assert len(first_edits) == 1 and "coder could not start" not in first_edits[0]
+    assert sorted(comp_dir.glob("*.json")) != []
+    errors = bundle / "errors"
+    errors.mkdir(parents=True, exist_ok=True)
+    (errors / "launch.json").write_text(
+        json.dumps(
+            {
+                "code": "coder_launch_failed",
+                "message": "coder launch failed",
+                "stage": "side_effects",
+                "created_at_unix": 9999999999.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    follow_edits: list[str] = []
+    with (
+        patch.object(gc, "GATE_COMPLETION_PENDING_DIR", comp_dir),
+        patch.object(
+            gc.telegram_client,
+            "edit_message_text",
+            side_effect=lambda c, m, t, reply_markup=None: follow_edits.append(t),
+        ),
+        patch.object(gc.telegram_client, "send_message"),
+        patch.object(gc.telegram_client, "edit_message_reply_markup"),
+    ):
+        assert gc._send_ready_gate_completions() == 1
+    assert len(follow_edits) == 1
+    assert "coder could not start" in follow_edits[0]
+    # Accepted choices stay immutable across the follow-up edit.
+    assert "grouping → mode" in follow_edits[0]
+    after = json.loads((bundle / "response.json").read_text(encoding="utf-8"))
+    assert after["option_inputs"] == before["option_inputs"]
+    assert launch_failed_text("base").endswith("coder could not start · retry")
+
+
+def test_keyboard_exact_rows_tokens_and_style(gate_home: Path) -> None:
+    """Pin decision keyboard rows, tokens, success style, and byte budget."""
+    from sase_telegram import callback_data as _cb
+    from sase_telegram import decision_keyboard as _dk
+    from sase_telegram.decision_callbacks import apply_decision_token
+
+    notification = _tale_notification(gate_home, "telegram-keyboard-exact")
+    view = load_gate_view(notification.action_data, expected_kind="plan")
+    progress = load_progress(view)
+    revision = view.review_revision
+    keyboard = render_gate_keyboard(notification.id[:8], view, progress)
+    assert keyboard is not None
+    rows = [[b.text for b in row] for row in keyboard.inline_keyboard]
+    assert rows[0] == ["◉ grouping: pane ▾"]
+    assert rows[1] == ["☑️ terse"]
+    assert any(text.startswith("✅ Tale · defaults") for row in rows for text in row)
+    assert not any("Reset" in text for row in rows for text in row)
+    # Changed draft marks the row and offers Reset.
+    changed, _, _ = apply_decision_token(view, progress, f"d0=k1r{revision}")
+    keyboard = render_gate_keyboard(notification.id[:8], view, changed)
+    texts = [b.text for row in keyboard.inline_keyboard for b in row]
+    assert "◉ grouping: mode ● ▾" in texts
+    assert "↺ Reset" in texts
+    # Choice sub-keyboard: radio marks, star default, changed dot, back row.
+    opened, toast, _ = apply_decision_token(view, progress, f"d0>r{revision}")
+    assert "How should the overlay group bindings?" in toast
+    keyboard = render_gate_keyboard(notification.id[:8], view, opened)
+    sub = [[b.text for b in row] for row in keyboard.inline_keyboard]
+    assert sub[0] == ["◉ pane ★"]
+    assert sub[1] == ["○ mode"]
+    assert sub[-1] == ["↩ Back"]
+    # Every callback payload fits the 64-byte Telegram budget.
+    for button in [b for row in keyboard.inline_keyboard for b in row]:
+        assert len(button.callback_data.encode("utf-8")) <= 64
+    # Memory card rows carry the brain chip; epic cards name Epic.
+    memory = _tale_notification(
+        gate_home, "telegram-keyboard-memory", MEMORY_DECISIONS_PLAN
+    )
+    memory_view = load_gate_view(memory.action_data, expected_kind="plan")
+    memory_keyboard = render_gate_keyboard(
+        memory.id[:8], memory_view, load_progress(memory_view)
+    )
+    assert memory_keyboard is not None
+    memory_texts = [b.text for row in memory_keyboard.inline_keyboard for b in row]
+    assert any("🧠" in text and "tui_note" in text for text in memory_texts)
+    epic = _tale_notification(gate_home, "telegram-keyboard-epic", EPIC_DECISIONS_PLAN)
+    epic_view = load_gate_view(epic.action_data)
+    epic_keyboard = render_gate_keyboard(
+        epic.id[:8], epic_view, load_progress(epic_view)
+    )
+    assert epic_keyboard is not None
+    epic_texts = [b.text for row in epic_keyboard.inline_keyboard for b in row]
+    assert any(text.startswith("✅ Epic") for text in epic_texts)
+    # Primary styling: success where supported, compatible fallback otherwise.
+    primary = _dk.primary_button("✅ Tale · defaults", "c0r1", "prefix01")
+    if _dk._supports_style():
+        assert getattr(primary, "style", None) == "success"
+    else:
+        assert primary.text.startswith("✅ Tale")
+    decoded = _cb.decode(primary.callback_data)
+    assert decoded.choice == "c0r1"
+    # Token helpers stay within budget and parse back.
+    from sase_telegram.plan_decisions import (
+        encode_back_token,
+        encode_open_token,
+        encode_refresh_token,
+        encode_reset_token,
+        encode_set_token,
+        parse_decision_token,
+    )
+
+    for token in (
+        encode_set_token(0, "k1", revision),
+        encode_open_token(0, revision),
+        encode_back_token(revision),
+        encode_reset_token(revision),
+        encode_refresh_token(revision),
+    ):
+        assert parse_decision_token(token) is not None
+        assert len(_cb.encode("gate", notification.id[:8], token).encode()) <= 64
+
+
+def test_sheet_three_degradations_only(gate_home: Path) -> None:
+    """Step-by-step budget fixtures prove the exact three degradations."""
+    from sase_telegram.decision_sheet import (
+        _render_sheet_text,
+        render_decision_sheet,
+    )
+    from sase_telegram.formatting import escape_markdown_v2
+
+    memory_definition = {
+        "id": "tui_note",
+        "kind": "toggle",
+        "ask": "Record the overlay conventions in the tui memory note?",
+        "why": None,
+        "choices": [],
+        "default": True,
+        "memory": {
+            "selectors": ["tui.md"],
+            "resolved": [
+                {
+                    "selector": "tui.md",
+                    "type": "reference",
+                    "scope": "project",
+                    "exists": False,
+                }
+            ],
+            "provenance": "asked",
+            "quote": "and note the convention in the tui memory",
+        },
+    }
+    choice_definition = {
+        "id": "grouping",
+        "kind": "choice",
+        "ask": "How should the overlay group bindings?",
+        "why": "pane keeps the footer's order",
+        "choices": [
+            {"key": "pane", "label": "By pane, matching the footer hints"},
+            {"key": "mode", "label": "By leader mode, denser <&>"},
+        ],
+        "default": "pane",
+    }
+    frozen = [choice_definition, memory_definition]
+    full = _render_sheet_text(frozen, {})
+    assert "By pane, matching the footer hints" in full
+    assert "By leader mode, denser <&>" in full
+    stage1 = _render_sheet_text(frozen, {}, drop_non_default_labels=True)
+    assert "By pane, matching the footer hints" in stage1
+    assert "By leader mode, denser" not in stage1
+    assert "mode" in stage1
+    stage2 = _render_sheet_text(frozen, {}, drop_all_labels=True)
+    assert "By pane" not in stage2 and "By leader mode" not in stage2
+    for stage in (full, stage1, stage2):
+        # Starred defaults, why, memory, new chip, and quotes survive all.
+        assert "★ pane" in stage
+        assert "pane keeps the footer's order" in stage
+        assert "tui.md" in stage and "you asked" in stage
+        assert "new" in stage
+        assert "and note the convention in the tui memory" in stage
+    # The expandable stage quotes only choice lines; asks/memory stay out.
+    huge = render_decision_sheet(frozen, None, 1, budget=10)
+    assert "||" in huge
+    head, _, quoted = huge.partition("**>")
+    assert "How should the overlay group bindings?" in head
+    assert "tui\\.md" in head
+    assert "and note the convention" in head
+    # Only choice lines are quoted: asks and memory stay outside.
+    assert "How should the overlay group bindings?" not in quoted
+    assert "tui\\.md" not in quoted
+    assert "and note the convention" not in quoted
+    assert "pane" in quoted
+    assert not huge.rstrip().endswith("\\")
+    # Escapes are complete on every stage, and a formatted card fits 4096.
+    for candidate in (full, stage1, stage2):
+        escaped = escape_markdown_v2(candidate)
+        assert not escaped.rstrip().endswith("\\")
+    notification = _tale_notification(gate_home, "telegram-sheet-card")
+    text, _, _ = format_notification(notification)
+    assert len(text) <= 4096
+    assert "Decisions · 2" in text
+
+
+def test_pdf_accepted_values_callouts_and_cleanup(
+    gate_home: Path, tmp_path: Path
+) -> None:
+    """Accepted-plan PDF carries frozen values, callouts, and cleans up."""
+    from sase_telegram.decision_pdf import _label_callouts, preprocess_plan_for_pdf
+
+    ctx = _submit_approve_commit("telegram-pdf-accepted", gate_home)
+    bundle = ctx["bundle"]
+    pending_src = bundle / "plan.md"
+    out = preprocess_plan_for_pdf(
+        pending_src, gate_context={"bundle_path": str(bundle)}
+    )
+    assert out is not None
+    content = out.read_text(encoding="utf-8")
+    # Non-default accepted values and correct defaults render in the table.
+    assert "## Decisions" in content
+    assert "mode" in content
+    assert "decisions:" not in content
+    out.unlink(missing_ok=True)
+    # Labelled callout continuations keep every line and the source is kept.
+    plan = tmp_path / "plan.md"
+    plan.write_text(TALE_DECISIONS_PLAN, encoding="utf-8")
+    body = "> [!decision] grouping = pane First\n> continuation line\n\ntext"
+    labelled = _label_callouts(body)
+    assert "Decision" in labelled and "continuation" in labelled
+    assert plan.read_text(encoding="utf-8") == TALE_DECISIONS_PLAN
+    # The new memory chip renders from a temporary fixture, never canonical.
+    project = tmp_path / "memory-pdf"
+    mem_dir = project / "sase" / "memory"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "glossary").mkdir(exist_ok=True)
+    notification = _tale_notification(
+        gate_home, "telegram-pdf-memory", MEMORY_DECISIONS_PLAN
+    )
+    text, _, _ = format_notification(notification)
+    assert "🧠" in text
+
+
+def test_epic_primary_action_and_verdict(gate_home: Path) -> None:
+    """Epic cards carry the Epic primary action and epic-specific verdict."""
+    from sase_telegram import callback_data as _cb
+    from sase_telegram.decision_receipt import approval_verdict, receipt_text
+
+    notification = _tale_notification(
+        gate_home, "telegram-epic-card", EPIC_DECISIONS_PLAN
+    )
+    notification.action = "EpicApproval"
+    text, keyboard, _ = format_notification(notification)
+    assert keyboard is not None
+    texts = [b.text for row in keyboard.inline_keyboard for b in row]
+    assert any(t.startswith("✅ Epic") for t in texts)
+    assert "grouping" in text
+    view = load_gate_view(notification.action_data)
+    assert approval_verdict(view, {"selected_option_ids": ["approve"]}) == "epic launch"
+    receipt = receipt_text(
+        view,
+        {"grouping": "mode"},
+        response={
+            "selected_option_ids": ["approve"],
+            "caller": "reviewer",
+            "source": "telegram",
+            "responded_at_unix": 1750000000,
+        },
+    )
+    assert receipt.splitlines()[0].startswith("✅ Epic approved · you via Telegram")
+    assert "grouping → mode" in receipt
+    for button in [b for row in keyboard.inline_keyboard for b in row]:
+        assert len(button.callback_data.encode("utf-8")) <= 64
+        _cb.decode(button.callback_data)

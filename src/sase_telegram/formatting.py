@@ -1214,6 +1214,10 @@ def render_gate_keyboard(
             rows.extend(decision_rows(prefix, view, progress))
         except Exception:
             pass
+        if progress.open_choice_index is not None:
+            # An open choice is modal: the sub-keyboard (ending with Back)
+            # replaces the decision area until a value or Back is tapped.
+            return InlineKeyboardMarkup(rows)
     singleton_row: list[InlineKeyboardButton] = []
 
     def flush_singletons() -> None:

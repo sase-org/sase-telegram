@@ -55,6 +55,12 @@ def preprocess_plan_for_pdf(
     if not definitions:
         return None
     answers = dict(stamped_values or {})
+    if not answers:
+        # Submitted reviews render their accepted values from the durable
+        # response; pending reviews show defaults.
+        accepted = _accepted_answers_for_context(source, gate_context)
+        if accepted:
+            answers = accepted
     # Fill answers from stamped plan when available; pending reviews show defaults.
     table = _decisions_table(definitions, answers)
     body = _label_callouts(body)
@@ -120,6 +126,62 @@ def _definitions_from_bundle(bundle_path: Path) -> list[dict[str, Any]] | None:
     if not isinstance(raw, list) or not raw:
         return None
     return [dict(d) for d in raw if isinstance(d, dict)]
+
+
+def _accepted_answers_for_context(
+    source: Path, gate_context: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Return accepted decision values from a submitted bundle response."""
+    candidates: list[Path] = []
+    if isinstance(gate_context, dict):
+        raw = gate_context.get("bundle_path")
+        if isinstance(raw, str) and raw:
+            candidates.append(Path(raw))
+    try:
+        if (source.parent / "request.json").is_file():
+            candidates.append(source.parent)
+    except Exception:
+        pass
+    for bundle_path in candidates:
+        answers = _accepted_answers_from_bundle(bundle_path)
+        if answers:
+            return answers
+    return None
+
+
+def _accepted_answers_from_bundle(bundle_path: Path) -> dict[str, Any] | None:
+    """Map accepted ``decision_<id>`` response inputs by decision id."""
+    try:
+        import json as _json
+
+        response = _json.loads(
+            (bundle_path / "response.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    if not isinstance(response, dict):
+        return None
+    selected = response.get("selected_option_ids")
+    if not isinstance(selected, list) or not selected:
+        return None
+    mod = _facade()
+    if mod is None or not hasattr(mod, "effective_response_input"):
+        return None
+    merged: dict[str, Any] = {}
+    for option_id in selected:
+        oid = str(option_id)
+        if oid in ("reject", "feedback"):
+            continue
+        try:
+            inputs = mod.effective_response_input(response, oid)
+        except Exception:
+            continue
+        if not isinstance(inputs, dict):
+            continue
+        for key, value in inputs.items():
+            if isinstance(key, str) and key.startswith("decision_"):
+                merged[key[len("decision_") :]] = value
+    return merged or None
 
 
 def _stamped_for_source(

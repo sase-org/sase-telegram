@@ -182,21 +182,30 @@ def _disable_decision_controls(
     if message_id is None or chat_id is None:
         return
     try:
-        telegram_client.edit_message_reply_markup(
-            chat_id, message_id, reply_markup=None
-        )
-    except Exception:
-        log.warning("Failed to disable submitted decision controls", exc_info=True)
-    try:
         from sase_telegram.inbound_handlers.keyboard_cleanup import (
             clear_keyboard_cleanup_pending,
             persist_keyboard_cleanup_pending,
         )
 
-        # Persist a retry for the disable itself; the pending action and
-        # progress stay until the receipt settles the card.
+        # Persist before editing; clear only on success so a failed
+        # removal is retried. The pending action and progress stay until
+        # the receipt settles the card.
         persist_keyboard_cleanup_pending(prefix, str(chat_id), int(message_id))
-        clear_keyboard_cleanup_pending(prefix)
+    except Exception:
+        pass
+    try:
+        telegram_client.edit_message_reply_markup(
+            chat_id, message_id, reply_markup=None
+        )
+    except Exception:
+        log.warning("Failed to disable submitted decision controls", exc_info=True)
+        return
+    try:
+        from sase_telegram.inbound_handlers.keyboard_cleanup import (
+            clear_keyboard_cleanup_pending as _clear_pending,
+        )
+
+        _clear_pending(prefix)
     except Exception:
         pass
 

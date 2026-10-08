@@ -969,7 +969,7 @@ def test_sudo_approve_selection_is_rejected_before_submission(
 
     ``render_gate_keyboard`` never renders a button for it, but the branch
     index still exists in the verified envelope, so the rejection must also
-    hold server-side -- mirroring ``cli_answer._reject_detached_tty_options``.
+    hold server-side -- mirroring ``cli_answer_submit.reject_detached_tty_options``.
     """
     with override_flags(agent_sudo_requests=True):
         sudo = create_gate(build_sudo_gate_request(_sudo_request()))

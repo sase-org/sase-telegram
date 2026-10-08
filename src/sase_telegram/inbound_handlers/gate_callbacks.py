@@ -194,7 +194,7 @@ def _reject_tty_required_selection(
 ) -> bool:
     """Reject a selection that includes a requires_tty option; return True if rejected.
 
-    Mirrors ``cli_answer._reject_detached_tty_options``: Telegram is a
+    Mirrors ``cli_answer_submit.reject_detached_tty_options``: Telegram is a
     detached transport with no controlling TTY, so these options must never
     reach ``execute_gate_selection``. ``render_gate_keyboard`` already hides
     them, but a forged or stale callback token can still name one directly.

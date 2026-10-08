@@ -98,6 +98,31 @@ def _send_stale_awaiting_feedback_reply(message: Any) -> None:
         log.warning("Failed to send stale feedback reply", exc_info=True)
 
 
+def _is_decision_plan_feedback(action: Any, response: Any) -> bool:
+    """Return whether *response* is feedback on a decision plan.
+
+    Only the matched awaiting-feedback entry is cleared immediately; the
+    pending action and gate progress stay until settlement edits the card.
+    """
+    try:
+        selected = tuple(getattr(response, "selected_option_ids", ()) or ())
+    except Exception:
+        return False
+    if "feedback" not in [str(s) for s in selected]:
+        return False
+    try:
+        action_data = action.get("action_data") if isinstance(action, dict) else None
+    except Exception:
+        return False
+    if not isinstance(action_data, dict):
+        return False
+    try:
+        view = load_gate_view(action_data)
+    except Exception:
+        return False
+    return bool(view.decisions)
+
+
 def _handle_text_message(
     message: Any,
     custom_commands: dict[str, CustomCommand] | None = None,
@@ -175,6 +200,13 @@ def _handle_text_message(
         # Clear only the matched awaiting entry — leaves other concurrent
         # flows intact.
         _clear_awaiting_feedback_entry(reply_key, response.notif_id_prefix)
+        if _is_decision_plan_feedback(action, response):
+            # Decision-plan feedback settles later: keep the pending action
+            # and progress (including the review message id) so the receipt
+            # edits the original card even when source_message_id is null.
+            # Generic gate behavior stays as it is.
+            _send_confirmation(response, message.message_id)
+            return
         pending_actions.remove(response.notif_id_prefix)
         action_data = action.get("action_data") if isinstance(action, dict) else None
         if isinstance(action_data, dict) and action_data.get("bundle_path"):

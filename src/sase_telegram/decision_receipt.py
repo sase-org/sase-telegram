@@ -196,6 +196,8 @@ def decider_surface(
         return ("you", "via ACE")
     if source in ("cli", "CLI"):
         return ("you", "via CLI")
+    if source == "mobile":
+        return ("you", "via mobile")
     if source == "auto_resolution" or caller == "auto":
         return ("auto", "auto")
     if caller and source:
@@ -217,6 +219,65 @@ def _surface_word(source: str) -> str:
         "mobile": "via mobile",
     }
     return mapping.get(str(source), f"via {source}" if source else "")
+
+
+def normalize_surface(surface: str) -> str:
+    """Return *surface* with exactly one leading ``via `` (or ``auto``/empty)."""
+    text = str(surface or "").strip()
+    while text.lower().startswith("via ") and len(text) > 4:
+        text = text[4:].strip()
+    if not text:
+        return ""
+    if text.lower() == "auto":
+        return "auto"
+    return f"via {text}"
+
+
+def format_attribution(decider: str, surface: str) -> str:
+    """Share one provenance phrase across approve/reject/feedback outcomes.
+
+    Never emits doubled words: a ``via``-prefixed surface contributes a
+    single ``via``, and ``auto`` appears once.
+    """
+    decider_text = str(decider or "").strip()
+    surface_text = normalize_surface(surface)
+    if decider_text.lower() == "auto" or surface_text == "auto":
+        return "auto"
+    if not decider_text:
+        return surface_text.lstrip()
+    if not surface_text:
+        return decider_text
+    return f"{decider_text} {surface_text}"
+
+
+def resolve_provenance(
+    decider: str,
+    surface: str,
+    when: str,
+    response: dict[str, Any] | None,
+) -> tuple[str, str, str]:
+    """Normalize decider/surface/time before branching on the outcome.
+
+    Durable response facts win when they carry real provenance; otherwise
+    the normalized explicit arguments stand. Never guesses Telegram for
+    unknown provenance beyond what :func:`decider_surface` reports.
+    """
+    norm_decider = str(decider or "").strip() or "you"
+    norm_surface = normalize_surface(surface) or "via Telegram"
+    norm_when = str(when or "").strip()
+    if not isinstance(response, dict):
+        return norm_decider, norm_surface, norm_when
+    try:
+        durable_decider, durable_surface = decider_surface(response)
+    except Exception:
+        return norm_decider, norm_surface, norm_when
+    # Durable facts win unless they are the unknown fallback.
+    if (durable_decider, durable_surface) != ("unknown", "via CLI"):
+        norm_decider, norm_surface = durable_decider, durable_surface
+    durable_when = format_when(response)
+    if not norm_when and durable_when:
+        norm_when = durable_when
+    return norm_decider, norm_surface, norm_when
 
 
 def format_when(response: dict[str, Any] | None = None) -> str:
@@ -267,6 +328,11 @@ def receipt_text(
         response = _load_json(view.bundle_path / "response.json")
         if not isinstance(response, dict):
             response = None
+    # Normalize provenance before branching so reject/feedback share the
+    # same single-phrase attribution as approvals.
+    decider, surface, when = resolve_provenance(decider, surface, when, response)
+    attribution = format_attribution(decider, surface)
+    is_auto = attribution == "auto"
     selected: list[str] = []
     if isinstance(response, dict) and isinstance(
         response.get("selected_option_ids"), list
@@ -275,22 +341,14 @@ def receipt_text(
     # Reject and feedback are distinct outcomes with their own headers,
     # including when they have no accepted decision values.
     if "reject" in selected or verdict == "Rejected":
-        header = f"❌ Rejected · {decider} via {surface}"
+        header = f"❌ Rejected · {attribution}"
         if when:
             header += f" · {when}"
-        elif isinstance(response, dict):
-            w = format_when(response)
-            if w:
-                header += f" · {w}"
         return header
     if "feedback" in selected or verdict == "Feedback":
-        header = f"💬 Feedback sent · {decider} via {surface}"
+        header = f"💬 Feedback sent · {attribution}"
         if when:
             header += f" · {when}"
-        elif isinstance(response, dict):
-            w = format_when(response)
-            if w:
-                header += f" · {w}"
         lines = [header]
         if values:
             lines.append("Provisional values (not accepted):")
@@ -311,18 +369,6 @@ def receipt_text(
     is_epic = str(getattr(view, "kind", "")) == "epic_plan"
     kind_word = "Epic" if is_epic else "Tale"
     true_verdict = approval_verdict(view, response)
-    # Resolve decider/surface/time from durable facts when available.
-    if response is not None:
-        d, s = decider_surface(response)
-        # Preserve explicit caller args only when they carry real provenance;
-        # otherwise prefer durable facts. Tests pass decider/surface defaults.
-        if (decider, surface) == ("you", "Telegram") or (decider, surface) == (
-            "you",
-            "via Telegram",
-        ):
-            decider, surface = d, s
-        if not when:
-            when = format_when(response)
     summary_verdict = true_verdict
     sheet = sheet_for(definitions, values, int(getattr(view, "review_revision", 1)))
     summary = ""
@@ -331,7 +377,11 @@ def receipt_text(
             summary = summary_for(sheet, summary_verdict, "full")
         except Exception:
             summary = ""
-    header = f"✅ {kind_word} approved · {decider} {surface}"
+    # Auto appears once with the parent plan's auto-approval wording.
+    if is_auto:
+        header = f"🤖 Auto-approved {kind_word.lower()}"
+    else:
+        header = f"✅ {kind_word} approved · {attribution}"
     if when:
         header += f" · {when}"
     lines = [header]
@@ -372,7 +422,10 @@ __all__ = [
     "approval_verdict",
     "authoritative_values",
     "decider_surface",
+    "format_attribution",
     "format_when",
     "launch_failed_text",
+    "normalize_surface",
     "receipt_text",
+    "resolve_provenance",
 ]
