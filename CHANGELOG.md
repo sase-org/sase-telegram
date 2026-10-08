@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.26](https://github.com/sase-org/sase-telegram/compare/v0.4.25...v0.4.26) (2026-10-08)
+
+
+### Features
+
+* **telegram:** decision sheet, live keyboard, and settle receipt ([70701a0](https://github.com/sase-org/sase-telegram/commit/70701a0155bb4c7504ca054bf88dd582812256d0))
+* **telegram:** submit selected options, recover stale reviews, truthful receipts ([4073408](https://github.com/sase-org/sase-telegram/commit/4073408999e97eb268d859027520b43718424326))
+
 ## [0.4.25](https://github.com/sase-org/sase-telegram/compare/v0.4.24...v0.4.25) (2026-10-08)
 
 
