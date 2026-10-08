@@ -434,6 +434,11 @@ def _wrap_expandable_blockquote(text: str) -> str:
     return "\n".join(result)
 
 
+def wrap_expandable_blockquote(text: str) -> str:
+    """Public wrapper for the expandable-blockquote renderer."""
+    return _wrap_expandable_blockquote(text)
+
+
 def _format_notes_text(
     notes: list[str],
     max_length: int = NOTES_TRUNCATION_THRESHOLD,
@@ -914,16 +919,13 @@ def _format_plan_with_decision_sheet(
 ) -> str:
     """Assemble header/notes/sheet/properties/body under the 4,096 budget.
 
-    Reserves space for the static Decisions sheet before budgeting
-    Properties and the body. Optional notes/properties/body shrink first.
+    The Decisions sheet is protected: every ask and its starred default
+    line survive whole. Optional notes/Properties/body shrink first by
+    whole sections (re-escaped), never by slicing MarkdownV2 strings.
     """
-    from sase_telegram.plan_decisions import DECISION_SHEET_BUDGET
-
-    sheet = (
-        sheet_text[:DECISION_SHEET_BUDGET]
-        if len(sheet_text) > DECISION_SHEET_BUDGET
-        else sheet_text
-    )
+    # Sheet text arrives already budgeted whole-field; never slice it here
+    # (a fixed-length cut could split an escape or a decision in half).
+    sheet = sheet_text
     minimum_card = _render_properties_card(properties, 0)
     full_body = _render_plan_body(body)
     body_reserve = min(_PLAN_BODY_RESERVE, len(full_body))
@@ -951,16 +953,54 @@ def _format_plan_with_decision_sheet(
     property_card = _render_properties_card(properties, property_target)
     prefix_with_card = _join_message_sections(prefix, property_card)
     if not full_body:
-        return _ensure_message_budget(prefix_with_card)
+        return _safe_decision_message(prefix_with_card, header_text, sheet)
     body_budget = MAX_MESSAGE_LENGTH - len(prefix_with_card) - 2
     body_preview = _render_plan_body(body, body_budget)
-    return _ensure_message_budget(
-        _join_message_sections(prefix_with_card, body_preview)
+    return _safe_decision_message(
+        _join_message_sections(prefix_with_card, body_preview),
+        header_text,
+        sheet,
+        notes_text=notes_text,
+        property_card=property_card,
     )
 
 
+def _safe_decision_message(
+    text: str,
+    header_text: str,
+    sheet: str,
+    *,
+    notes_text: str = "",
+    property_card: str = "",
+) -> str:
+    """Keep a decision review within budget without slicing escapes.
+
+    Drops optional body, then Properties, then notes by whole sections,
+    always retaining the header and the complete protected sheet.
+    """
+    if len(text) <= MAX_MESSAGE_LENGTH:
+        return text
+    # Body already budgeted; drop it first.
+    fallback = _join_message_sections(header_text, notes_text, sheet, property_card)
+    if len(fallback) <= MAX_MESSAGE_LENGTH:
+        return fallback
+    fallback = _join_message_sections(header_text, notes_text, sheet)
+    if len(fallback) <= MAX_MESSAGE_LENGTH:
+        return fallback
+    fallback = _join_message_sections(header_text, sheet)
+    if len(fallback) <= MAX_MESSAGE_LENGTH:
+        return fallback
+    # Header + sheet always fit for valid inputs (sheet ≤1800); return
+    # them whole rather than splitting an escape.
+    return fallback
+
+
 def _ensure_message_budget(text: str) -> str:
-    """Keep the complete escaped message within Telegram's limit."""
+    """Keep the complete escaped message within Telegram's limit.
+
+    Generic messages may truncate with an ellipsis; decision reviews use
+    the protected path above and never slice.
+    """
     if len(text) <= MAX_MESSAGE_LENGTH:
         return text
     return text[: MAX_MESSAGE_LENGTH - 1] + "…"
@@ -1086,11 +1126,37 @@ def _feedback_button_text(label: str) -> str:
     return f"💬 {label} with feedback"
 
 
-def _bound_gate_token(base: str, view: GateView) -> str:
-    """Bind a verdict/AND token to the displayed revision for decision plans."""
+def _bound_gate_token(
+    base: str, view: GateView, progress: GateProgress | None = None
+) -> str:
+    """Bind a verdict/AND token to the revision actually displayed."""
     if not view.decisions:
         return base
-    return f"{base}r{view.review_revision}"
+    try:
+        if progress is not None and progress.displayed_revision is not None:
+            rev = int(progress.displayed_revision)
+        else:
+            rev = int(view.review_revision)
+    except (TypeError, ValueError):
+        rev = int(view.review_revision)
+    return f"{base}r{rev}"
+
+
+def _and_set_token(
+    view: GateView, progress: GateProgress, option_id: str, currently_selected: bool
+) -> str:
+    """Return an explicit set-state AND token for decision plans.
+
+    Emits ``x<index>=<0|1>r<rev>`` (e.g. ``x0=0r4``) bound to the displayed
+    revision; replaying it leaves the same selection. Generic gates keep
+    legacy flip tokens via the caller.
+    """
+    from sase_telegram.gate_flow import option_index
+
+    idx = option_index(view, option_id)
+    target = "0" if currently_selected else "1"
+    base = f"x{idx}={target}"
+    return _bound_gate_token(base, view, progress)
 
 
 def render_gate_keyboard(
@@ -1166,31 +1232,44 @@ def render_gate_keyboard(
             decision_primary = _primary_label(view, progress)
         except Exception:
             decision_primary = ""
+
+    def _primary_button(text: str, token: str) -> InlineKeyboardButton:
+        """Primary Tale/Epic action uses success styling when supported."""
+        try:
+            from sase_telegram.decision_keyboard import primary_button as _styled
+
+            return _styled(text, token, prefix)
+        except Exception:
+            return InlineKeyboardButton(
+                text, callback_data=callback_data.encode("gate", prefix, token)
+            )
+
+    _primary_used = False
     for branch_index, branch in enumerate(view.branches):
         if len(branch) == 1:
             option = by_id[branch[0]]
             if option.requires_tty:
                 continue
             label = _option_button_text(option)
-            if (
+            is_primary = (
                 use_decision_primary
                 and decision_primary
-                and option.id
-                in {
-                    "approve",
-                    "commit",
-                }
-            ):
+                and option.id in {"approve", "commit"}
+            )
+            if is_primary:
                 # Keep sealed semantics; presentation shows the summary.
                 label = decision_primary if len(singleton_row) == 0 else label
-            singleton_row.append(
-                InlineKeyboardButton(
-                    label,
-                    callback_data=callback_data.encode(
-                        "gate", prefix, _bound_gate_token(f"c{branch_index}", view)
-                    ),
+            token = _bound_gate_token(f"c{branch_index}", view, progress)
+            if is_primary and not _primary_used and len(singleton_row) == 0:
+                singleton_row.append(_primary_button(label, token))
+                _primary_used = True
+            else:
+                singleton_row.append(
+                    InlineKeyboardButton(
+                        label,
+                        callback_data=callback_data.encode("gate", prefix, token),
+                    )
                 )
-            )
             if feedback_mode(view, branch) == "optional":
                 flush_singletons()
                 rows.append(
@@ -1200,7 +1279,7 @@ def render_gate_keyboard(
                             callback_data=callback_data.encode(
                                 "gate",
                                 prefix,
-                                _bound_gate_token(f"f{branch_index}", view),
+                                _bound_gate_token(f"f{branch_index}", view, progress),
                             ),
                         )
                     ]
@@ -1219,45 +1298,56 @@ def render_gate_keyboard(
         group_text = (
             f"{group.icon or '•'} {group.label or by_id[visible_members[0]].label}"
         )
-        if use_decision_primary and decision_primary:
+        is_group_primary = bool(use_decision_primary and decision_primary)
+        if is_group_primary:
             group_text = decision_primary
         if progress.expanded_branch_index != branch_index:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        group_text,
-                        callback_data=callback_data.encode(
-                            "gate", prefix, _bound_gate_token(f"c{branch_index}", view)
-                        ),
-                    )
-                ]
-            )
+            token = _bound_gate_token(f"c{branch_index}", view, progress)
+            if is_group_primary and not _primary_used:
+                rows.append([_primary_button(group_text, token)])
+                _primary_used = True
+            else:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            group_text,
+                            callback_data=callback_data.encode("gate", prefix, token),
+                        )
+                    ]
+                )
             continue
         for option_id in visible_members:
             option = by_id[option_id]
             checked = "☑️" if option_id in selected_ids else "⬜"
+            if view.decisions:
+                token = _and_set_token(
+                    view, progress, option_id, option_id in selected_ids
+                )
+            else:
+                token = _bound_gate_token(
+                    f"x{option_index(view, option_id)}", view, progress
+                )
             rows.append(
                 [
                     InlineKeyboardButton(
                         f"{checked} {_option_button_text(option)}",
-                        callback_data=callback_data.encode(
-                            "gate",
-                            prefix,
-                            _bound_gate_token(
-                                f"x{option_index(view, option_id)}", view
-                            ),
-                        ),
+                        callback_data=callback_data.encode("gate", prefix, token),
                     )
                 ]
             )
-        submit_row = [
-            InlineKeyboardButton(
-                group_text,
-                callback_data=callback_data.encode(
-                    "gate", prefix, _bound_gate_token(f"s{branch_index}", view)
-                ),
-            )
-        ]
+        group_submit_token = _bound_gate_token(f"s{branch_index}", view, progress)
+        if is_group_primary and not _primary_used:
+            submit_row = [_primary_button(group_text, group_submit_token)]
+            _primary_used = True
+        else:
+            submit_row = [
+                InlineKeyboardButton(
+                    group_text,
+                    callback_data=callback_data.encode(
+                        "gate", prefix, group_submit_token
+                    ),
+                )
+            ]
         branch_selection = tuple(
             option_id for option_id in visible_members if option_id in selected_ids
         )
@@ -1268,7 +1358,9 @@ def render_gate_keyboard(
                         group.label or by_id[visible_members[0]].label
                     ),
                     callback_data=callback_data.encode(
-                        "gate", prefix, _bound_gate_token(f"f{branch_index}", view)
+                        "gate",
+                        prefix,
+                        _bound_gate_token(f"f{branch_index}", view, progress),
                     ),
                 )
             )

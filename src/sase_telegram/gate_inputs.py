@@ -49,8 +49,14 @@ def _resolved_options(
 def pending_fields(
     view: GateView, option_ids: Sequence[str]
 ) -> tuple[GateInputField, ...]:
-    """Return the declared input fields for one gate selection, deduped."""
-    return collected_input_fields(_resolved_options(view, option_ids))
+    """Return the declared input fields for one gate selection, deduped.
+
+    Plan-decision ``decision_*`` fields never enter the generic input flow:
+    reviewer values stay on the card keyboard and travel with the selected
+    schemas at submit time.
+    """
+    fields = collected_input_fields(_resolved_options(view, option_ids))
+    return tuple(f for f in fields if not str(f.id).startswith("decision_"))
 
 
 def unsupported_fields(

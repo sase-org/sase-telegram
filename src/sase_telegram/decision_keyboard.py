@@ -49,6 +49,11 @@ def _plain_button(text: str, prefix: str, cb: str) -> InlineKeyboardButton:
     )
 
 
+def primary_button(text: str, cb: str, prefix: str) -> InlineKeyboardButton:
+    """Primary Tale/Epic action with success styling when supported."""
+    return _button(text, cb, prefix)
+
+
 def primary_label(view: GateView, progress: GateProgress) -> str:
     """Return the decision-plan primary button label."""
     definitions = [dict(item) for item in view.decisions]
@@ -201,6 +206,7 @@ def toast_for_set(definitions: list[dict[str, Any]], index: int, value: Any) -> 
 
 __all__ = [
     "decision_rows",
+    "primary_button",
     "primary_label",
     "toast_for_set",
 ]

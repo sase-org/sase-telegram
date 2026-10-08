@@ -126,9 +126,6 @@ Quiet auto receipts: plan-decision `%auto` notifications tagged `plan_decisions_
 
 Plan PDFs prepend a Decisions table before Properties/body with decision callouts as labelled blockquotes; every branch is retained.
 
-The visible plan **✅ Approve** button maps to the internal `run` payload for compatibility. It approves the plan with
-`commit_plan: false` and `run_coder: true`, which starts coder work without committing the plan first.
-
 ### Attachments
 
 - **Plan attachments**: Plan files are attached whenever present, including when preview parsing fails; Markdown files

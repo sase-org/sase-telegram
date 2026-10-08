@@ -154,29 +154,33 @@ def _advance_gate_input(
         _answer_callback(callback_query, "Answer the input prompt below")
         return
 
-    option_inputs = submitted_option_inputs(view, progress)
+    base_inputs = submitted_option_inputs(view, progress)
     selected_option_ids = progress.input_option_ids
     feedback_requested = progress.input_feedback_requested
     review_revision: int | None = None
+    option_inputs = base_inputs
     if view.decisions:
         from sase_telegram.decision_callbacks import (
-            decision_inputs_for,
+            build_selected_option_inputs,
             displayed_revision,
         )
 
-        # Merge decisions after declared-input collection too.
-        decision_inputs = decision_inputs_for(view, progress)
-        for option_id in list(option_inputs):
-            option_inputs[option_id] = {
-                **option_inputs[option_id],
-                **decision_inputs,
-            }
-        for extra_id in ("approve", "commit"):
-            if extra_id not in option_inputs and any(
-                option.id == extra_id for option in view.options
-            ):
-                option_inputs[extra_id] = dict(decision_inputs)
+        # Merge decisions after declared-input collection too, keeping
+        # only selected schemas and declared decision_* fields.
+        option_inputs = build_selected_option_inputs(
+            view, progress, selected_option_ids, base_inputs=base_inputs
+        )
         review_revision = displayed_revision(view, progress)
+    # Persist review message/chat for input-step completion on decision plans.
+    try:
+        if view.decisions:
+            from sase_telegram.inbound_handlers.gate_callbacks import (
+                persist_decision_submit_context,
+            )
+
+            persist_decision_submit_context(view, progress, callback_query, action)
+    except Exception:
+        pass
     progress = clear_input(progress)
     save_gate_progress(view, progress)
     _clear_awaiting_feedback_entry(None, prefix)

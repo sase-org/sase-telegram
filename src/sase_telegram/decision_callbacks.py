@@ -41,6 +41,63 @@ def stale_response() -> tuple[str, str]:
     return STALE_TEXT, "↻ Refresh review"
 
 
+def _declared_decision_keys(view: GateView, option_id: str) -> set[str]:
+    """Return the ``decision_*`` input keys one option actually declares."""
+    from sase_telegram.gate_flow import option_for_id
+
+    option = option_for_id(view, option_id)
+    if option is None:
+        return set()
+    schema = getattr(option, "input_schema", {}) or {}
+    props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if not isinstance(props, dict):
+        return set()
+    return {str(k) for k in props if str(k).startswith("decision_")}
+
+
+def build_selected_option_inputs(
+    view: GateView,
+    progress: GateProgress,
+    selected_option_ids: tuple[str, ...] | list[str],
+    base_inputs: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build ``option_inputs`` containing only selected schemas.
+
+    Starts from the actual selected option ids (never manufacturing
+    approve/commit entries). For each selected option, merges only the
+    corresponding ``decision_*`` fields its raw ``input_schema.properties``
+    declares. Ordinary declared inputs from *base_inputs* are preserved.
+    Reject receives an empty object; feedback receives its own provisional
+    vector. When approve and commit are both selected, both receive
+    identical decision values.
+    """
+    from sase_telegram.plan_decisions import current_values
+
+    definitions = [dict(item) for item in (view.decisions or ())]
+    draft = dict(progress.decision_values or {}) if progress is not None else {}
+    full_vector = current_values(definitions, draft) if definitions else {}
+    full_decision_inputs = {f"decision_{k}": v for k, v in full_vector.items()}
+    selected = tuple(selected_option_ids or ())
+    out: dict[str, dict[str, Any]] = {}
+    for option_id in selected:
+        if option_id == "reject":
+            out[option_id] = {}
+            continue
+        declared = _declared_decision_keys(view, option_id)
+        merged: dict[str, Any] = {}
+        if base_inputs is not None and option_id in base_inputs:
+            merged.update(dict(base_inputs[option_id] or {}))
+        for key in declared:
+            if key in full_decision_inputs:
+                merged[key] = full_decision_inputs[key]
+        # Drop any undeclared decision_* that leaked via base inputs.
+        for key in list(merged):
+            if str(key).startswith("decision_") and key not in declared:
+                merged.pop(key, None)
+        out[option_id] = merged
+    return out
+
+
 def apply_decision_token(
     view: GateView, progress: GateProgress, token: str
 ) -> tuple[GateProgress, str, bool]:
@@ -53,6 +110,10 @@ def apply_decision_token(
     parsed = parse_decision_token(token)
     if parsed is None:
         raise ValueError("not a decision token")
+    # Explicit refresh recovers the whole review: handle it before the
+    # displayed-revision check so a stale card can still refresh.
+    if str(parsed.get("kind", "")) == "refresh":
+        return _apply_refresh_token(view, progress, int(parsed["revision"]))
     revision = int(parsed["revision"])
     if not check_revision(view, progress, revision):
         raise StaleReview(STALE_TEXT)
@@ -77,30 +138,6 @@ def apply_decision_token(
         updated = replace(progress, decision_values=None, open_choice_index=None)
         save_progress(view, updated)
         return updated, "Reset to defaults", False
-    if kind == "refresh":
-        # Explicit refresh reloads current prose/sheet, retains valid
-        # drafts, persists the new revision, and requires another tap.
-        values = current_values(definitions, draft)
-        cleaned = {
-            key: value
-            for key, value in values.items()
-            if _still_valid(definitions, key, value)
-        }
-        # Only non-default values persist as drafts.
-        from sase_telegram.plan_decisions import effective_values
-
-        defaults = effective_values(definitions)
-        draft_out = {
-            key: value for key, value in cleaned.items() if value != defaults.get(key)
-        }
-        updated = replace(
-            progress,
-            displayed_revision=view.review_revision,
-            decision_values=draft_out or None,
-            open_choice_index=None,
-        )
-        save_progress(view, updated)
-        return updated, "Review refreshed", False
     # set
     index = int(parsed["index"])
     value = decode_set_value(definitions, index, str(parsed["value"]))
@@ -114,6 +151,75 @@ def apply_decision_token(
     updated = replace(progress, decision_values=draft, open_choice_index=None)
     save_progress(view, updated)
     return updated, toast, False
+
+
+def _current_definitions_and_revision(
+    view: GateView,
+) -> tuple[list[dict[str, Any]], int]:
+    """Reload the verified current bundle for refresh, falling back to *view*."""
+    fallback_defs = [dict(item) for item in view.decisions]
+    fallback_rev = int(view.review_revision)
+    try:
+        from sase.notification_gates.hashing import load_and_verify_bundle
+    except Exception:
+        return fallback_defs, fallback_rev
+    try:
+        envelope, _adapter = load_and_verify_bundle(view.bundle_path)
+    except Exception:
+        return fallback_defs, fallback_rev
+    try:
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        raw = payload.get("decisions") if isinstance(payload, dict) else None
+        defs = (
+            [dict(d) for d in raw if isinstance(d, dict)]
+            if isinstance(raw, list)
+            else []
+        )
+    except Exception:
+        defs = []
+    try:
+        raw_rev = (
+            envelope.get("review_revision", fallback_rev)
+            if isinstance(envelope, dict)
+            else fallback_rev
+        )
+        rev = int(raw_rev)
+    except (TypeError, ValueError):
+        rev = fallback_rev
+    return (defs if defs else fallback_defs), rev
+
+
+def _apply_refresh_token(
+    view: GateView, progress: GateProgress, _token_revision: int
+) -> tuple[GateProgress, str, bool]:
+    """Recover the whole review on explicit refresh, ignoring stale revisions.
+
+    Reloads the verified current bundle, retains only still-valid Telegram
+    draft values, resets the open choice, and binds refreshed controls to
+    the current revision. Never submits an answer.
+    """
+    from sase_telegram.plan_decisions import current_values, effective_values
+
+    definitions, current_revision = _current_definitions_and_revision(view)
+    draft = dict(progress.decision_values or {})
+    values = current_values(definitions, draft)
+    cleaned = {
+        key: value
+        for key, value in values.items()
+        if _still_valid(definitions, key, value)
+    }
+    defaults = effective_values(definitions)
+    draft_out = {
+        key: value for key, value in cleaned.items() if value != defaults.get(key)
+    }
+    updated = replace(
+        progress,
+        displayed_revision=int(current_revision),
+        decision_values=draft_out or None,
+        open_choice_index=None,
+    )
+    save_progress(view, updated)
+    return updated, "Review refreshed", False
 
 
 def _still_valid(definitions: list[dict[str, Any]], key: str, value: Any) -> bool:
@@ -161,6 +267,7 @@ def refresh_token_for(view: GateView) -> str:
 __all__ = [
     "StaleReview",
     "apply_decision_token",
+    "build_selected_option_inputs",
     "check_revision",
     "decision_inputs_for",
     "displayed_revision",

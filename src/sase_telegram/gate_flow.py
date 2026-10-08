@@ -459,23 +459,77 @@ def expand_branch(
     )
 
 
+def _parse_and_token(token: str) -> tuple[int, bool | None]:
+    """Parse ``x<index>`` or explicit ``x<index>=<0|1>`` set-state tokens.
+
+    Returns (index, target) where target is None for legacy flip tokens.
+    Accepts an optional ``r<rev>`` revision suffix (stripped by callers via
+    split_bound_token, but also tolerated here for direct use).
+    """
+    body = token
+    # Strip a trailing revision binding like r4 (decision plans bind AND
+    # controls to the displayed revision).
+    import re as _re
+
+    m = _re.fullmatch(r"^(x\d+(?:=[01])?)r\d+$", body)
+    if m is not None:
+        body = m.group(1)
+    m = _re.fullmatch(r"^x(\d+)=([01])$", body)
+    if m is not None:
+        return int(m.group(1)), bool(int(m.group(2)))
+    m = _re.fullmatch(r"^x(\d+)$", body)
+    if m is not None:
+        return int(m.group(1)), None
+    raise ValueError(f"unknown AND token: {token}")
+
+
 def toggle_option(
     view: GateView, progress: GateProgress, token: str
 ) -> tuple[GateProgress, bool]:
-    """Toggle one compact ``x<index>`` group member and return its new state."""
+    """Set or toggle one AND member; explicit sets are replay-idempotent."""
     expanded = progress.expanded_branch_index
     if expanded is None:
         raise ValueError("open a gate group before toggling options")
-    option = option_for_token(view, token)
-    if option is None or option.id not in view.branches[expanded]:
+    try:
+        index, target = _parse_and_token(token)
+    except ValueError as err:
+        # Legacy path for plain x<index> via option_for_token.
+        option = option_for_token(view, token)
+        if option is None or option.id not in view.branches[expanded]:
+            raise ValueError("unknown gate option") from err
+        selected = set(progress.selected_option_ids)
+        if option.id in selected:
+            selected.remove(option.id)
+            enabled = False
+        else:
+            selected.add(option.id)
+            enabled = True
+        ordered = tuple(
+            option_id for option_id in view.branches[expanded] if option_id in selected
+        )
+        return replace(progress, selected_option_ids=ordered), enabled
+    if not (0 <= index < len(view.options)):
+        raise ValueError("unknown gate option")
+    option = view.options[index]
+    if option.id not in view.branches[expanded]:
         raise ValueError("unknown gate option")
     selected = set(progress.selected_option_ids)
-    if option.id in selected:
-        selected.remove(option.id)
-        enabled = False
+    if target is None:
+        # Legacy flip.
+        if option.id in selected:
+            selected.remove(option.id)
+            enabled = False
+        else:
+            selected.add(option.id)
+            enabled = True
     else:
-        selected.add(option.id)
-        enabled = True
+        # Explicit set-state: replaying the same token leaves the same selection.
+        if target:
+            selected.add(option.id)
+            enabled = True
+        else:
+            selected.discard(option.id)
+            enabled = False
     ordered = tuple(
         option_id for option_id in view.branches[expanded] if option_id in selected
     )

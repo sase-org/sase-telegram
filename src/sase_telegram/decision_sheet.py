@@ -1,4 +1,4 @@
-"""Static Decisions question sheet for Telegram plan reviews (sase-1hi.7)."""
+"""Static Decisions question sheet for Telegram plan reviews (sase-1hi.10.6)."""
 
 from __future__ import annotations
 
@@ -41,10 +41,12 @@ def _memory_note_text(resolved: list[dict[str, Any]]) -> str:
         kind = str(record.get("type", "reference"))
         scope = str(record.get("scope", "project"))
         label = selector or scope
+        exists = record.get("exists", True)
+        new_chip = " · new" if exists is False else ""
         if kind == "core":
-            parts.append(f"{label} (core · loaded every turn)")
+            parts.append(f"{label} (core · loaded every turn{new_chip})")
         else:
-            parts.append(f"{label} ({kind})")
+            parts.append(f"{label} ({kind}{new_chip})")
     return ", ".join(parts)
 
 
@@ -54,7 +56,15 @@ def _render_sheet_text(
     *,
     drop_non_default_labels: bool = False,
     drop_all_labels: bool = False,
+    compact_detail: bool = False,
 ) -> str:
+    """Render unescaped sheet text as whole fields/lines.
+
+    Protected: every ask and its complete starred default line always
+    survive. Optional why/provenance/choice detail compacts by whole lines
+    when *compact_detail* is set. Choice keys always survive in full (the
+    radio keyboard and attached plan carry them too).
+    """
     total = len(definitions)
     memos = sum(1 for d in definitions if d.get("memory") is not None)
     lines = [f"Decisions · {total}" + (f" · 🧠 {memos}" if memos else "")]
@@ -65,6 +75,7 @@ def _render_sheet_text(
         default = definition.get("default")
         memory = definition.get("memory")
         prefix = "🧠 " if memory is not None else ""
+        # Protected ask line.
         lines.append(f"{number}. {prefix}{decision_id} — {ask}")
         if kind == "choice":
             choices = definition.get("choices", []) or []
@@ -75,7 +86,7 @@ def _render_sheet_text(
                 key = str(choice.get("key", ""))
                 label = str(choice.get("label", ""))
                 star = "★ " if key == default_key else ""
-                if drop_all_labels:
+                if compact_detail or drop_all_labels:
                     lines.append(f"   {star}{key}")
                 elif drop_non_default_labels and key != default_key:
                     lines.append(f"   {star}{key}")
@@ -83,17 +94,18 @@ def _render_sheet_text(
                     lines.append(f"   {star}{key} · {label}")
                 else:
                     lines.append(f"   {star}{key}")
-            why = definition.get("why")
-            if isinstance(why, str) and why.strip() and not drop_all_labels:
-                lines.append(f"   ★ {why.strip()}")
-            elif isinstance(why, str) and why.strip() and drop_all_labels:
-                lines.append(f"   ★ {why.strip()}")
+            if not compact_detail:
+                why = definition.get("why")
+                if isinstance(why, str) and why.strip():
+                    lines.append(f"   ★ {why.strip()}")
         else:
             default_word = "yes" if bool(default) else "no"
             lines.append(f"   ★ {default_word}")
-            why = definition.get("why")
-            if isinstance(why, str) and why.strip():
-                lines.append(f"   ★ {why.strip()}")
+            if not compact_detail:
+                why = definition.get("why")
+                if isinstance(why, str) and why.strip():
+                    # Toggle why is planner detail; keep unless compacting.
+                    lines.append(f"   ★ {why.strip()}")
         if memory is not None:
             mem = memory if isinstance(memory, dict) else {}
             selectors = mem.get("selectors", [])
@@ -104,12 +116,53 @@ def _render_sheet_text(
             chip = _memory_provenance_text(provenance)
             quote = mem.get("quote", "")
             if note_text:
-                lines.append(f"   🧠 {note_text} · {chip}")
+                # Avoid duplicated provenance wording when the note text
+                # already names the provenance.
+                if chip.lower() in note_text.lower():
+                    lines.append(f"   🧠 {note_text}")
+                else:
+                    lines.append(f"   🧠 {note_text} · {chip}")
             else:
                 lines.append(f"   🧠 {chip}")
-            if isinstance(quote, str) and quote.strip():
+            if not compact_detail and isinstance(quote, str) and quote.strip():
                 lines.append(f'   "{quote.strip()}"')
     return "\n".join(lines)
+
+
+def _render_sheet_expandable(
+    definitions: list[dict[str, Any]],
+    values: dict[str, Any],
+) -> str:
+    """Render asks/defaults plus expandable choice detail (unescaped)."""
+    total = len(definitions)
+    memos = sum(1 for d in definitions if d.get("memory") is not None)
+    head = [f"Decisions · {total}" + (f" · 🧠 {memos}" if memos else "")]
+    choice_block: list[str] = []
+    for number, definition in enumerate(definitions, start=1):
+        decision_id = str(definition.get("id", ""))
+        ask = str(definition.get("ask", ""))
+        kind = str(definition.get("kind", ""))
+        default = definition.get("default")
+        memory = definition.get("memory")
+        prefix = "🧠 " if memory is not None else ""
+        head.append(f"{number}. {prefix}{decision_id} — {ask}")
+        if kind == "choice":
+            default_key = str(default)
+            for choice in definition.get("choices", []) or []:
+                if not isinstance(choice, dict):
+                    continue
+                key = str(choice.get("key", ""))
+                star = "★ " if key == default_key else ""
+                choice_block.append(f"{star}{key} ({decision_id})")
+        else:
+            default_word = "yes" if bool(default) else "no"
+            head.append(f"   ★ {default_word}")
+    # Choice detail lives in a real expandable block; asks/defaults stay
+    # outside so every question survives even at extreme sizes.
+    if choice_block:
+        head.append("Details:")
+        head.extend(f"· {line}" for line in choice_block)
+    return "\n".join(head)
 
 
 def render_decision_sheet(
@@ -121,9 +174,11 @@ def render_decision_sheet(
 ) -> str:
     """Render the static Decisions sheet within *budget* characters.
 
-    Degrades in order: drop non-default labels, drop remaining labels,
-    then wrap choice lines in an expandable blockquote. Every ask and its
-    complete default line survive; never slices through a decision.
+    Budgets are enforced by rendering whole fields/lines, never by slicing
+    MarkdownV2 strings. Degrades in order: full labels, non-default labels,
+    remaining labels, then real expandable choice-line blockquotes. Every
+    ask and its complete default line survive; full choice keys stay in the
+    radio keyboard and attached plan.
     """
     if not definitions:
         return ""
@@ -143,14 +198,39 @@ def render_decision_sheet(
         _render_sheet_text(frozen, _values),
         _render_sheet_text(frozen, _values, drop_non_default_labels=True),
         _render_sheet_text(frozen, _values, drop_all_labels=True),
+        _render_sheet_text(frozen, _values, drop_all_labels=True, compact_detail=True),
     ]
     for candidate in candidates:
         escaped = escape_markdown_v2(candidate)
         if len(escaped) <= budget:
             return escaped
-    # Final degrade: expandable blockquote for choice lines.
-    smallest = escape_markdown_v2(candidates[-1])
-    return f"> {smallest}" if len(smallest) <= budget else smallest[:budget]
+    # Final degrade: real expandable blockquote for choice detail, still
+    # whole lines only — never a fixed-length cut through a decision or an
+    # escape.
+    try:
+        from sase_telegram.formatting import wrap_expandable_blockquote as _wrap
+    except Exception:
+        _wrap = None  # type: ignore[assignment]
+    unescaped = _render_sheet_expandable(frozen, _values)
+    escaped = escape_markdown_v2(unescaped)
+    if _wrap is not None:
+        try:
+            wrapped = _wrap(escaped)
+            if len(wrapped) <= budget:
+                return wrapped
+            # Even the expandable form must not slice escapes: fall back to
+            # asks + defaults only, which always fit for valid inputs (≤5
+            # decisions).
+            minimal = _render_sheet_text(
+                frozen, _values, drop_all_labels=True, compact_detail=True
+            )
+            minimal_escaped = escape_markdown_v2(minimal)
+            if len(minimal_escaped) <= budget:
+                return minimal_escaped
+            return minimal_escaped
+        except Exception:
+            pass
+    return escaped
 
 
 def _sheet_rows_to_definitions(sheet: dict[str, Any]) -> list[dict[str, Any]]:

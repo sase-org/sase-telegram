@@ -779,10 +779,17 @@ def test_registry_drives_resolution_guard_and_inbound_kind_lookup(
         selected_option_ids=("accept",),
         input_data={},
     )
-    view = SimpleNamespace(
-        bundle_path=gate_home,
-        branches=(("accept",),),
+    from sase_telegram.gate_flow import GateView as _GateView
+
+    view = _GateView(
+        bundle_path=Path(gate_home),
+        request_id="registry",
+        kind="custom",
         options=(),
+        groups=(),
+        branches=(("accept",),),
+        decisions=(),
+        review_revision=1,
     )
     callback = _callback("gate:registry:c0")
 
@@ -858,7 +865,18 @@ def test_gate_callback_acknowledges_before_durable_submission(
         input_data={},
     )
     action = {"action": "CustomGate", "chat_id": "chat-1", "message_id": 42}
-    view = SimpleNamespace(bundle_path=gate_home)
+    from sase_telegram.gate_flow import GateView as _GateView2
+
+    view = _GateView2(
+        bundle_path=Path(gate_home),
+        request_id="registry",
+        kind="custom",
+        options=(),
+        groups=(),
+        branches=(("accept",),),
+        decisions=(),
+        review_revision=1,
+    )
     callback = _callback("gate:registry:c0")
     events: list[tuple[str, str | None]] = []
 
@@ -910,7 +928,18 @@ def test_gate_callback_submission_error_sends_chat_message_after_ack(
         input_data={},
     )
     action = {"action": "CustomGate", "chat_id": "chat-1", "message_id": 42}
-    view = SimpleNamespace(bundle_path=gate_home)
+    from sase_telegram.gate_flow import GateView as _GateView3
+
+    view = _GateView3(
+        bundle_path=Path(gate_home),
+        request_id="registry",
+        kind="custom",
+        options=(),
+        groups=(),
+        branches=(("accept",),),
+        decisions=(),
+        review_revision=1,
+    )
     callback = _callback("gate:registry:c0")
 
     with (

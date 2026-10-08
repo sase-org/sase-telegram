@@ -23,7 +23,9 @@ _DECISION_OPEN_RE = re.compile(r"^d(\d+)>r(\d+)$")
 _DECISION_BACK_RE = re.compile(r"^d<r(\d+)$")
 _DECISION_RESET_RE = re.compile(r"^dzr(\d+)$")
 _DECISION_REFRESH_RE = re.compile(r"^dRr(\d+)$")
-_BOUND_SUFFIX_RE = re.compile(r"^(?P<base>[csxf]\d+|i\d+(?:k|d|c|v\d+))r(?P<rev>\d+)$")
+_BOUND_SUFFIX_RE = re.compile(
+    r"^(?P<base>[csf]\d+|x\d+(?:=[01])?|i\d+(?:k|d|c|v\d+))r(?P<rev>\d+)$"
+)
 
 
 def _plan_decisions_module() -> Any | None:

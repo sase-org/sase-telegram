@@ -39,6 +39,77 @@ from sase_telegram.inbound_handlers.gate_response import (
 from sase_telegram.inbound_handlers.gate_input_steps import _handle_gate_input_callback
 
 
+def _edit_refreshed_review(
+    prefix: str,
+    action: dict[str, Any],
+    stale_view: GateView,
+    updated: GateProgress,
+    chat_id: str,
+    message_id: int,
+) -> bool:
+    """Edit a stale card into the current prose plus refreshed controls.
+
+    Returns True when the card edit succeeded (displayed revision is then
+    committed via *updated*); False leaves the caller to retry markup-only
+    so the refresh stays retryable without claiming new prose was shown.
+    """
+    try:
+        action_data = action.get("action_data") if isinstance(action, dict) else None
+        if not isinstance(action_data, dict):
+            return False
+        fresh_view = load_gate_view(dict(action_data))
+    except Exception:
+        return False
+    try:
+        from sase_telegram.formatting import render_gate_keyboard as _render_kb
+
+        markup = _render_kb(prefix, fresh_view, updated)
+    except Exception:
+        return False
+    # Reuse the normal plan-review formatter for the message text when the
+    # bundle still carries the presentation context; otherwise keep the
+    # header/notes by editing the keyboard alone.
+    new_text: str | None = None
+    try:
+        new_text = _render_refreshed_text(action, fresh_view)
+    except Exception:
+        new_text = None
+    try:
+        if new_text is not None:
+            telegram_client.edit_message_text(
+                chat_id, message_id, new_text, reply_markup=markup
+            )
+        else:
+            telegram_client.edit_message_reply_markup(
+                chat_id, message_id, reply_markup=markup
+            )
+    except Exception:
+        return False
+    return True
+
+
+def _render_refreshed_text(action: dict[str, Any], fresh_view: GateView) -> str | None:
+    """Best-effort refreshed card text preserving header and notes."""
+    try:
+        from sase.notifications.store import load_notifications
+
+        from sase_telegram.formatting import format_notification
+    except Exception:
+        return None
+    try:
+        notification_id = str(action.get("notification_id", ""))
+        if not notification_id:
+            return None
+        for note in load_notifications(include_dismissed=True):
+            if str(getattr(note, "id", "")) != notification_id:
+                continue
+            text, _kb, _att = format_notification(note)
+            return text
+    except Exception:
+        return None
+    return None
+
+
 def _persist_decision_submit_context(
     view: GateView,
     progress: GateProgress,
@@ -68,6 +139,16 @@ def _persist_decision_submit_context(
         submitted_values=dict(progress.decision_values or {}),
     )
     save_gate_progress(view, updated)
+
+
+def persist_decision_submit_context(
+    view: GateView,
+    progress: GateProgress,
+    callback_query: Any,
+    action: dict[str, Any],
+) -> None:
+    """Public wrapper preserving review context for stale-refresh recovery."""
+    return _persist_decision_submit_context(view, progress, callback_query, action)
 
 
 def _answer_stale_with_refresh(
@@ -165,22 +246,15 @@ def _start_or_submit_gate_selection(
         review_revision: int | None = None
         if view.decisions:
             from sase_telegram.decision_callbacks import (
-                decision_inputs_for,
+                build_selected_option_inputs,
                 displayed_revision,
             )
 
-            decision_inputs = decision_inputs_for(view, progress)
-            for option_id in list(option_inputs):
-                option_inputs[option_id] = {
-                    **option_inputs[option_id],
-                    **decision_inputs,
-                }
-            # Approve and commit share the same decision vector.
-            for extra_id in ("approve", "commit"):
-                if extra_id not in option_inputs and any(
-                    option.id == extra_id for option in view.options
-                ):
-                    option_inputs[extra_id] = dict(decision_inputs)
+            # Submit only the selected schemas: each selected option gets
+            # only the decision_* fields it declares; reject gets {}.
+            option_inputs = build_selected_option_inputs(
+                view, progress, selected_option_ids, base_inputs=option_inputs
+            )
             review_revision = displayed_revision(view, progress)
         if feedback_requested:
             _begin_gate_feedback(
@@ -263,6 +337,12 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
         from sase_telegram.plan_decisions import parse_decision_token
 
         if parse_decision_token(cb.choice) is not None:
+            from sase_telegram.plan_decisions import parse_decision_token as _parse
+
+            _parsed = _parse(cb.choice)
+            _is_refresh = (
+                _parsed is not None and str(_parsed.get("kind", "")) == "refresh"
+            )
             try:
                 updated, toast, _ = apply_decision_token(view, progress, cb.choice)
             except StaleReview:
@@ -279,9 +359,24 @@ def _handle_gate_callback(callback_query: Any, pending: dict[str, Any]) -> None:
             except ValueError:
                 _answer_callback(callback_query, "Invalid gate callback")
                 return
-            # Editing, back, and reset never submit. Refresh returns to
-            # the main keyboard; another tap is required to approve.
-            if message_id is not None and chat_id is not None:
+            # Editing, back, and reset never submit. Refresh re-renders
+            # both message text and keyboard from the current bundle and
+            # requires another tap to approve.
+            if _is_refresh and message_id is not None and chat_id is not None:
+                if not _edit_refreshed_review(
+                    cb.notif_id_prefix, action, view, updated, chat_id, message_id
+                ):
+                    try:
+                        telegram_client.edit_message_reply_markup(
+                            chat_id,
+                            message_id,
+                            reply_markup=render_gate_keyboard(
+                                cb.notif_id_prefix, view, updated
+                            ),
+                        )
+                    except Exception:
+                        pass
+            elif message_id is not None and chat_id is not None:
                 try:
                     telegram_client.edit_message_reply_markup(
                         chat_id,

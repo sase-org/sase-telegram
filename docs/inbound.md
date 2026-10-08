@@ -139,7 +139,14 @@ must run a blocked command, archive output, or launch a successor in a supervise
 Success and failure are then delivered through the normal completion record or chat
 message, and keyboard cleanup still runs after the accepted or terminal state.
 
-Plan `run` writes an approval response with `commit_plan: false` and `run_coder: true`.
+Plan decision reviews submit only selected schemas with the displayed
+`review_revision`; reject sends an empty input object. A stale card answers
+with `↻ Refresh review`, which reloads current prose and controls, retains
+still-valid drafts, and requires a second tap to approve. Settled cards edit
+once into truthful receipts (true verdict, decider/surface/time, yes/no and
+`★`/`●` values, full core summary) with the keyboard removed in the same
+request; already-identical edits count as success and retries repeat the
+receipt edit.
 
 #### Two-Step Actions
 
@@ -151,7 +158,7 @@ For `feedback` and `custom` choices, the flow is:
 
 1. The callback is saved to `awaiting_feedback.json` with the pending action context
 2. The entry is keyed by the originating Telegram `message_id`, so multiple feedback flows can be active at once
-3. Telegram answers the button tap with a prompt to send feedback and removes the original inline keyboard
+3. Plan reviews answer `Reply to the review message with feedback`; generic gates answer `Send the required feedback as a text message`. The original inline keyboard is removed
 4. The next reply to that Telegram message completes the action (feedback carries the current decision vector as provisional values with its displayed `review_revision`, and can itself become stale); if only one feedback flow exists, a plain text
    message can complete it as a compatibility fallback:
    - The feedback/custom text is written to the response file

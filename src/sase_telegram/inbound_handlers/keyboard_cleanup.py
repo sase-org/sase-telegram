@@ -50,6 +50,25 @@ def _clear_keyboard_cleanup_pending(prefix: str) -> None:
     _keyboard_cleanup_retry_path(prefix).unlink(missing_ok=True)
 
 
+def persist_keyboard_cleanup_pending(
+    prefix: str, chat_id: str, message_id: int
+) -> None:
+    """Public wrapper for durable keyboard-cleanup retries."""
+    return _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+
+
+def clear_keyboard_cleanup_pending(prefix: str) -> None:
+    """Public wrapper clearing a durable keyboard-cleanup retry."""
+    return _clear_keyboard_cleanup_pending(prefix)
+
+
+def dismiss_button_with_retry(
+    prefix: str, chat_id: str | None, message_id: int | None
+) -> None:
+    """Public wrapper removing one inline keyboard with durable retry."""
+    return _dismiss_button_with_retry(prefix, chat_id, message_id)
+
+
 def _dismiss_button_with_retry(
     prefix: str, chat_id: str | None, message_id: int | None
 ) -> None:
@@ -96,6 +115,19 @@ def _retry_pending_keyboard_cleanups() -> int:
         if not isinstance(chat_id, str) or not isinstance(message_id, int):
             pending_path.unlink(missing_ok=True)
             continue
+        prefix = str(record.get("prefix") or "")
+        # Decision plans retry the receipt edit itself, not merely erasing
+        # controls, so a failed card edit is not lost.
+        if prefix:
+            try:
+                if _settle_externally_resolved_decision(prefix, message_id, chat_id):
+                    # Handled (or re-persisted) via the receipt path.
+                    # Count only when the retry record is gone.
+                    if not _keyboard_cleanup_retry_path(prefix).exists():
+                        retried += 1
+                    continue
+            except Exception:
+                pass
         try:
             telegram_client.edit_message_reply_markup(
                 chat_id, message_id, reply_markup=None
@@ -156,7 +188,12 @@ def _settle_externally_resolved_decision(
     if not view.decisions:
         return False
     try:
-        from sase_telegram.decision_receipt import authoritative_values, receipt_text
+        from sase_telegram.decision_receipt import (
+            authoritative_values,
+            decider_surface,
+            format_when,
+            receipt_text,
+        )
     except Exception:
         return False
     try:
@@ -171,18 +208,53 @@ def _settle_externally_resolved_decision(
             pass
         return True
     try:
-        text = receipt_text(view, values)
+        import json as _json
+
+        response = None
+        try:
+            response = _json.loads(
+                (view.bundle_path / "response.json").read_text(encoding="utf-8")
+            )
+            if not isinstance(response, dict):
+                response = None
+        except (OSError, ValueError):
+            response = None
+        if isinstance(response, dict):
+            decider, surface = decider_surface(response)
+            when = format_when(response)
+            text = receipt_text(
+                view,
+                values,
+                decider=decider,
+                surface=surface,
+                when=when,
+                response=response,
+            )
+        else:
+            text = receipt_text(view, values)
     except Exception:
         return False
     try:
         telegram_client.edit_message_text(chat_id, message_id, text, reply_markup=None)
-    except Exception:
-        log.warning("Failed to edit externally settled decision card", exc_info=True)
+    except Exception as exc:
+        # Treat already-identical as success; otherwise retry the receipt
+        # edit itself, not merely erasing controls.
         try:
-            _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+            lowered = str(exc).lower()
         except Exception:
+            lowered = ""
+        if "not modified" in lowered or "identical" in lowered:
             pass
-        return True
+        else:
+            log.warning(
+                "Failed to edit externally settled decision card", exc_info=True
+            )
+            try:
+                _persist_keyboard_cleanup_pending(prefix, chat_id, message_id)
+            except Exception:
+                pass
+            return True
+        # Already-identical falls through to cleanup as success.
     try:
         clear_progress(view)
     except Exception:

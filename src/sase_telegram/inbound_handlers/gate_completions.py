@@ -171,10 +171,14 @@ def _settle_decision_receipt(
     """Edit one review card into its answered receipt. Return True when done."""
     from sase_telegram.decision_receipt import (
         authoritative_values as _auth_values,
+        decider_surface,
+        format_when,
         launch_failed_text,
         receipt_text,
     )
     from sase_telegram.gate_flow import GateView
+
+    from sase.procs.models import TERMINAL_PROC_STATUSES as _TERMINAL
 
     response = _load_json_file(bundle_path / "response.json")
     # Fast acceptance before response.json/stamped plan: disable controls
@@ -185,6 +189,33 @@ def _settle_decision_receipt(
             _restore_refresh_for_stale(bundle_path, chat_id, record)
             pending_path.unlink(missing_ok=True)
             return True
+        proc = _gate_answer_proc_status(proc_id)
+        try:
+            terminal = proc is not None and proc.status in _TERMINAL
+        except Exception:
+            terminal = False
+        if terminal:
+            # Terminal proc with no durable response/error: actionable
+            # report instead of spinning forever.
+            try:
+                status = getattr(proc, "status", "?") if proc is not None else "?"
+                telegram_client.send_message(
+                    chat_id,
+                    f"❌ Gate {record.get('kind', '?')}/{record.get('request_id', '?')} "
+                    f"finished without a recorded answer (proc {proc_id} {status}); "
+                    "retry from the review card.",
+                )
+            except Exception:
+                log.warning(
+                    "Failed to send missing-response report for proc %s",
+                    proc_id,
+                    exc_info=True,
+                )
+                return False
+            _clear_decision_progress(bundle_path)
+            pending_path.unlink(missing_ok=True)
+            return True
+        # Still running or not yet visible: keep pending, never claim failure.
         return False
     view = _minimal_view_for_receipt(bundle_path)
     if view is None:
@@ -192,14 +223,20 @@ def _settle_decision_receipt(
     values = _auth_values(view)
     if values is None:
         return False
-    verdict = _verdict_for_response(view, response)
-    base = receipt_text(view, values, verdict=verdict)
+    # One truthful receipt path: durable decider/surface/time plus the
+    # true approval verdict; reject/feedback render their own headers.
+    decider, surface = decider_surface(response)
+    when = format_when(response)
+    base = receipt_text(
+        view, values, decider=decider, surface=surface, when=when, response=response
+    )
     # Acceptance and implementation status stay distinct: a response can
     # exist before a successor-launch failure. Inspect post-response
-    # failures as well as responses.
+    # failures as well as responses. Only recorded launch-failure evidence
+    # adds the coder-start claim; running procs never do.
     error = _latest_gate_execution_error(bundle_path, since=created_at)
     proc = _gate_answer_proc_status(proc_id)
-    launch_failed = _is_launch_failure(error, proc)
+    launch_failed = _is_launch_failure(error, proc, response)
     text = launch_failed_text(base) if launch_failed else base
     # Repeat polls produce one logical edit; freeze text and treat
     # already-identical as success, retrying only unfinished work.
@@ -292,39 +329,91 @@ def _is_stale_error(error: dict[str, Any]) -> bool:
     return "stale_review" in code or "stale_review" in message
 
 
-def _is_launch_failure(error: dict[str, Any] | None, proc: Any | None) -> bool:
+def _is_launch_failure(
+    error: dict[str, Any] | None,
+    proc: Any | None,
+    response: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether recorded evidence proves the coder could not start.
+
+    Only real launch-failure evidence counts. Reject, feedback,
+    commit-only, and generic execution failures never acquire the claim,
+    and a still-running proc is never a launch failure.
+    """
+    try:
+        selected: list[str] = []
+        if isinstance(response, dict) and isinstance(
+            response.get("selected_option_ids"), list
+        ):
+            selected = [str(s) for s in response["selected_option_ids"]]
+        if any(s in ("reject", "feedback") for s in selected):
+            return False
+        # Commit-only tales never launch a coder.
+        if "commit" in selected and "approve" not in selected:
+            return False
+    except Exception:
+        pass
     if error is not None:
         message = str(error.get("message") or "").lower()
         if "coder" in message and ("could not start" in message or "launch" in message):
             return True
         if str(error.get("code") or "") == "successor_launch_failed":
             return True
-    if proc is not None and getattr(proc, "status", None) not in (None, "success"):
-        # A response exists but the proc failed afterwards: the plan was
-        # accepted yet its coder could not start.
-        return True
+    # Proc status alone never proves a launch failure: a running proc keeps
+    # its job pending, and generic terminal failures are reported without
+    # the coder-start claim.
     return False
 
 
 def _review_message_id(bundle_path: Path, record: dict[str, Any]) -> int | None:
+    """Return the review card id, never a feedback reply id."""
     progress_file = bundle_path / "telegram_gate_progress.json"
     progress = _load_json_file(progress_file)
     if isinstance(progress, dict):
+        # source first, then the active review id.
         for key in ("source_message_id", "active_message_id"):
             raw = progress.get(key)
+            if raw is None:
+                continue
             if isinstance(raw, int):
                 return raw
             try:
-                return int(raw) if raw is not None else None
+                parsed = int(raw)
+                return parsed
             except (TypeError, ValueError):
                 continue
-    raw = record.get("message_id")
-    if isinstance(raw, int):
-        return raw
+    # Saved review/action message ids from the pending record and the
+    # shared pending-action store; never the feedback reply.
+    for key in ("message_id", "review_message_id", "action_message_id"):
+        raw = record.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, int):
+            return raw
+        try:
+            parsed = int(raw)
+            return parsed
+        except (TypeError, ValueError):
+            continue
     try:
-        return int(raw) if raw is not None else None
-    except (TypeError, ValueError):
-        return None
+        from sase_telegram import pending_actions as _pending
+
+        prefix = str(record.get("prefix") or "")
+        if prefix:
+            action = _pending.get(prefix)
+            if isinstance(action, dict):
+                for key in ("message_id", "review_message_id"):
+                    raw = action.get(key)
+                    if isinstance(raw, int):
+                        return raw
+                    try:
+                        if raw is not None:
+                            return int(raw)
+                    except (TypeError, ValueError):
+                        continue
+    except Exception:
+        pass
+    return None
 
 
 def _restore_refresh_for_stale(

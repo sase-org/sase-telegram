@@ -157,13 +157,19 @@ class TestSendMessage:
         markup = _markup()
         text = "a" * 4000 + "\n" + "b" * 200
 
-        msg = telegram_client.send_message("chat-1", text, reply_markup=markup)
+        msg = telegram_client.send_message(
+            "chat-1", text, reply_markup=markup, disable_notification=True
+        )
 
         assert msg is last
         assert mock_bot.send_message.await_count == 2
         first_call, second_call = mock_bot.send_message.await_args_list
-        assert first_call.kwargs["reply_markup"] is None
+        # Earlier chunks carry absence-or-None markup; only the last has it.
+        assert first_call.kwargs.get("reply_markup") is None
         assert second_call.kwargs["reply_markup"] is markup
+        # Quiet delivery propagates to every chunk.
+        assert first_call.kwargs.get("disable_notification") is True
+        assert second_call.kwargs.get("disable_notification") is True
 
     def test_parse_mode_fallback_on_failure(self, mock_bot: MagicMock) -> None:
         ok = MagicMock(message_id=7)
