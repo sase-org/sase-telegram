@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.28](https://github.com/sase-org/sase-telegram/compare/v0.4.27...v0.4.28) (2026-10-09)
+
+
+### Features
+
+* **install:** rename venv recipe to install-venv with private install alias ([7f5a4b1](https://github.com/sase-org/sase-telegram/commit/7f5a4b17f379eb86b75110b123870d488a16d077))
+
 ## [0.4.27](https://github.com/sase-org/sase-telegram/compare/v0.4.26...v0.4.27) (2026-10-08)
 
 
