@@ -70,9 +70,17 @@ _setup: _validate-local-sase _validate-local-sase-core _write-sase-overrides
     fi
     just _install-local-sase-core
 
-install: _validate-local-sase _validate-local-sase-core _ensure-venv _write-sase-overrides
+[group('install')]
+[doc("Set up this checkout's .venv for tests and lint")]
+install-venv: _validate-local-sase _validate-local-sase-core _ensure-venv _write-sase-overrides
     uv pip install --python {{ quote(venv_python) }} --overrides {{ quote(sase_overrides_file) }} -e ".[dev]"
     just _install-local-sase-core
+
+# Private alias kept for one release; remove after the next release.
+[private]
+install:
+    @echo '`just install` is now `just install-venv`' >&2
+    @just install-venv
 
 # Install a source-overridden sase plus a coordinated sase-core-rs build into
 # the venv rooted at the given python interpreter (used by the wheel smoke

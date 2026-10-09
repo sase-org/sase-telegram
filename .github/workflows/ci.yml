@@ -41,7 +41,7 @@ jobs:
           uv python install ${{ matrix.python-version }}
           uv venv --python ${{ matrix.python-version }} .venv
       - name: Install dependencies
-        run: just install
+        run: just install-venv
       - name: Lint
         if: ${{ matrix.python-version == '3.12' }}
         run: just lint

@@ -179,7 +179,7 @@ def test_install_dry_run_routes_sase_through_overrides(tmp_path: Path) -> None:
     _make_sase_source(source)
     _make_sase_core_source(repo / ".sase-deps" / "sase-core")
 
-    result = _run_just(repo, "--dry-run", "install")
+    result = _run_just(repo, "--dry-run", "install-venv")
     output = result.stdout + result.stderr
 
     overrides_file = repo / ".sase-overrides.txt"
@@ -193,6 +193,19 @@ def test_install_dry_run_routes_sase_through_overrides(tmp_path: Path) -> None:
     assert output.index("printf -- '-e %s") < output.index(project_install)
     assert output.index(project_install) < output.index(core_install)
     assert f"--no-deps -e '{source}'" not in output
+
+
+def test_install_alias_forwards_to_install_venv(tmp_path: Path) -> None:
+    repo = tmp_path / "sase-telegram"
+    _copy_justfile(repo)
+    _make_sase_source(repo / ".sase-deps" / "sase")
+    _make_sase_core_source(repo / ".sase-deps" / "sase-core")
+
+    result = _run_just(repo, "--dry-run", "install")
+    output = result.stdout + result.stderr
+
+    assert "`just install` is now `just install-venv`" in output
+    assert "just install-venv" in output
 
 
 def test_local_sase_core_install_dry_run_uses_maturin_develop(
