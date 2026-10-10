@@ -23,8 +23,10 @@ sase_job_tg_outbound --context X  # Pass context string for logging
    If another outbound process is running, this one exits immediately.
 2. **Load unsent** — `get_unsent_notifications()` performs a current-state notification read and returns the rows past
    the high-water cursor in `last_sent_ts`, filtered to `read == False`, `silent == False`, and `muted == False`, sorted
-   oldest-first by activity cursor. Dismissed notifications are **not** filtered out because TUI dismissal is a UI
-   cleanup action, not a notification-read signal. See [Delivery Cursor](#delivery-cursor) below.
+   oldest-first by activity cursor, then filtered through the shared `ace.notification_rules` resolver (only rows whose
+   resolved `telegram` is true are kept). Dismissed notifications are **not** filtered out because TUI dismissal is a UI
+   cleanup action, not a notification-read signal. See [Delivery Cursor](#delivery-cursor) and
+   [Telegram suppression](#telegram-suppression) below.
 3. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
 4. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
    keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send.
@@ -62,6 +64,36 @@ Consequences for delivery:
 The outbound read prefers the host store's current-state API, which atomically expires due snoozes before projecting, so
 an offline-then-online job catches up on the next run rather than losing the reminder. Older `sase` installs fall back
 to the equivalent expiring snapshot read.
+
+## Telegram suppression
+
+Shared `ace.notification_rules` may set `telegram: false` to suppress Telegram delivery for matching rows, or
+`telegram: true` to allow it (omission leaves the field to later rules; the default is permitted). Telegram is
+resolved independently of the TUI `toast` and `sound` fields with the same priority, glob matching, tab
+classification, and config layering, so a rule setting only Telegram is effective and an earlier TUI-only rule never
+blocks a later Telegram rule.
+
+Suppression is evaluated at each outbound poll, before rate limiting, formatting, PDF conversion, network sends, and
+pending-action creation — suppressed rows never reach those operations. It applies to quiet decision receipts too,
+after their existing silent-row eligibility exception. It does not mutate the notification or advance the delivery
+cursor: a later eligible row still advances the cursor normally, and removing a rule may make older unread rows ahead
+of the cursor eligible again. There is no suppression ledger or backfill. An evaluation error never falls back to
+sending the batch; the failure surfaces and the cursor is retained for retry.
+
+Direct inbound command responses and cleanup of already-sent keyboards are outside this filtering. Stored
+notifications, unread counts, gate requests, TUI access, and existing messages are unchanged.
+
+Example (machine overlay):
+
+```yaml
+ace:
+  notification_rules:
+    - name: quiet-task-beads-telegram
+      description: Keep Beads notifications in SASE without sending them to Telegram.
+      match:
+        tab: beads
+      telegram: false
+```
 
 ## Notification Formatting
 

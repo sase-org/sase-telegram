@@ -1181,3 +1181,262 @@ class TestRunOutboundAttachments:
         captured = capsys.readouterr()
         assert str(generated_pdf) in captured.out
         assert "Research files:" not in captured.out
+
+
+def _bead_triage_notification(
+    id: str = "bead0000-0000-0000-0000-000000000000",
+    timestamp: str | None = None,
+) -> Notification:
+    if timestamp is None:
+        timestamp = datetime.now(UTC).isoformat()
+    return Notification(
+        id=id,
+        timestamp=timestamp,
+        sender="bead",
+        notes=["Task triage: sase-1 needs a decision"],
+        tags=["bead", "task"],
+        action="TaskTriage",
+        action_data={"panel": "beads"},
+    )
+
+
+def _use_telegram_rules(monkeypatch: pytest.MonkeyPatch, rules: object) -> None:
+    from sase.notifications import delivery as delivery_module
+
+    delivery_module._delivery_rules_for_token.cache_clear()
+    monkeypatch.setattr(
+        delivery_module,
+        "load_merged_config",
+        lambda: {"ace": {"notification_rules": rules}},
+    )
+    monkeypatch.setattr(delivery_module, "current_config_token", lambda: ("tg-test",))
+    # Clear again so the patched token takes effect.
+    delivery_module._delivery_rules_for_token.cache_clear()
+
+
+def _write_versioned_midpoint_cursor() -> str:
+    """Write a versioned midpoint cursor; return its bytes for comparison.
+
+    The cursor file migrates legacy epoch text to versioned JSON on its
+    first read, so byte-equality assertions must start from the versioned
+    form to measure suppression rather than that one-time migration.
+    """
+    from sase_telegram.outbound import _DeliveryCursor, _write_high_water_mark
+
+    LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _write_high_water_mark(
+        _DeliveryCursor(
+            datetime(2025, 1, 1, tzinfo=UTC),
+            "00000000-0000-0000-0000-000000000000",
+        )
+    )
+    return LAST_SENT_TEST_FILE.read_text(encoding="utf-8")
+
+
+class TestTelegramSuppression:
+    def test_bead_rows_suppressed_with_real_resolver(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Global TUI rule + Athena telegram overlay suppress only bead rows."""
+        _use_telegram_rules(
+            monkeypatch,
+            [
+                {
+                    "name": "quiet-task-beads",
+                    "match": {"tab": "beads"},
+                    "toast": False,
+                    "sound": "none",
+                },
+                {
+                    "name": "quiet-task-beads-telegram",
+                    "match": {"tab": "beads"},
+                    "telegram": False,
+                },
+            ],
+        )
+        try:
+            midpoint = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
+            LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAST_SENT_TEST_FILE.write_text(str(midpoint))
+            new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+            bead = _bead_triage_notification(
+                id="bead0000-0000-0000-0000-000000000000", timestamp=new_ts
+            )
+            approval = Notification(
+                id="appr0000-0000-0000-0000-000000000000",
+                timestamp=new_ts,
+                sender="plan",
+                notes=["Plan ready for review"],
+                action="PlanApproval",
+                action_data={"response_dir": "/tmp/plan"},
+            )
+            with patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[bead, approval],
+            ):
+                result = get_unsent_notifications()
+            assert [n.id for n in result] == [approval.id]
+        finally:
+            from sase.notifications import delivery as delivery_module
+
+            delivery_module._delivery_rules_for_token.cache_clear()
+
+    def test_toast_only_rule_still_allows_telegram(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _use_telegram_rules(
+            monkeypatch,
+            [{"name": "quiet", "match": {"tab": "beads"}, "toast": False}],
+        )
+        try:
+            midpoint = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
+            LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAST_SENT_TEST_FILE.write_text(str(midpoint))
+            new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+            bead = _bead_triage_notification(timestamp=new_ts)
+            with patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[bead],
+            ):
+                assert [n.id for n in get_unsent_notifications()] == [bead.id]
+        finally:
+            from sase.notifications import delivery as delivery_module
+
+            delivery_module._delivery_rules_for_token.cache_clear()
+
+    def test_all_suppressed_leaves_cursor_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _use_telegram_rules(
+            monkeypatch,
+            [{"name": "no-tg", "telegram": False}],
+        )
+        try:
+            before = _write_versioned_midpoint_cursor()
+            new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+            with patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[_make_notification(timestamp=new_ts)],
+            ):
+                assert get_unsent_notifications() == []
+            assert LAST_SENT_TEST_FILE.read_text(encoding="utf-8") == before
+        finally:
+            from sase.notifications import delivery as delivery_module
+
+            delivery_module._delivery_rules_for_token.cache_clear()
+
+    def test_evaluation_error_retains_cursor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        before = _write_versioned_midpoint_cursor()
+        new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+        with (
+            patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[_make_notification(timestamp=new_ts)],
+            ),
+            patch(
+                "sase.notifications.delivery.resolve_notification_deliveries",
+                side_effect=ValueError("core unavailable"),
+            ),
+        ):
+            with pytest.raises(ValueError, match="core unavailable"):
+                get_unsent_notifications()
+        assert LAST_SENT_TEST_FILE.read_text(encoding="utf-8") == before
+
+    def test_quiet_decision_receipt_is_also_suppressed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sase_telegram.plan_decisions import RECEIPT_TAG
+
+        _use_telegram_rules(
+            monkeypatch,
+            [{"name": "no-tg", "telegram": False}],
+        )
+        try:
+            midpoint = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
+            LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAST_SENT_TEST_FILE.write_text(str(midpoint))
+            new_ts = datetime(2025, 6, 1, tzinfo=UTC).isoformat()
+            receipt = Notification(
+                id="rcpt0000-0000-0000-0000-000000000000",
+                timestamp=new_ts,
+                sender="plan",
+                notes=["auto receipt"],
+                tags=[RECEIPT_TAG],
+                silent=True,
+            )
+            with patch(
+                "sase_telegram.outbound._read_current_notification_snapshot",
+                return_value=[receipt],
+            ):
+                # Without the telegram rule the quiet receipt is eligible;
+                # with telegram:false it is suppressed too.
+                assert get_unsent_notifications() == []
+        finally:
+            from sase.notifications import delivery as delivery_module
+
+            delivery_module._delivery_rules_for_token.cache_clear()
+
+    def test_suppressed_rows_do_not_reach_sends_or_pending_writes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _use_telegram_rules(
+            monkeypatch,
+            [
+                {
+                    "name": "quiet-task-beads-telegram",
+                    "match": {"tab": "beads"},
+                    "telegram": False,
+                }
+            ],
+        )
+        try:
+            midpoint = datetime(2025, 1, 1, tzinfo=UTC).timestamp()
+            LAST_SENT_TEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LAST_SENT_TEST_FILE.write_text(str(midpoint))
+            new_ts = datetime.now(UTC).isoformat()
+            bead = _bead_triage_notification(timestamp=new_ts)
+            approval = Notification(
+                id="appr1111-0000-0000-0000-000000000000",
+                timestamp=new_ts,
+                sender="plan",
+                notes=["Plan ready"],
+                action="PlanApproval",
+                action_data={"response_dir": "/tmp/plan", "session_id": "s1"},
+                files=[],
+            )
+            with (
+                patch(
+                    "sase_telegram.outbound._read_current_notification_snapshot",
+                    return_value=[bead, approval],
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                    return_value="chat-1",
+                ),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                    return_value=True,
+                ),
+                patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+                patch("sase_telegram.scripts.sase_tg_outbound.mark_sent") as mark_sent,
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound.send_message",
+                    return_value=SimpleNamespace(message_id=7),
+                ) as send_message,
+                patch("sase_telegram.scripts.sase_tg_outbound.pending_actions.add"),
+                patch(
+                    "sase_telegram.scripts.sase_tg_outbound._register_shared_transport"
+                ),
+            ):
+                result = _run_outbound(argparse.Namespace(dry_run=False))
+            assert result == 0
+            # Only the eligible approval reaches the transport.
+            assert send_message.call_count == 1
+            assert mark_sent.call_count == 1
+            assert mark_sent.call_args[0][0][0].id == approval.id
+        finally:
+            from sase.notifications import delivery as delivery_module
+
+            delivery_module._delivery_rules_for_token.cache_clear()

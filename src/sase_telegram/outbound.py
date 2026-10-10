@@ -40,6 +40,13 @@ def get_unsent_notifications() -> list[Notification]:
     filter on ``n.dismissed`` — TUI agent-dismissal is a UI cleanup
     action, not a notification-read signal.
 
+    Shared ``ace.notification_rules`` with ``telegram: false`` suppress
+    matching rows after the read/mute/silent eligibility above (quiet
+    decision receipts included). Suppression never mutates stored state
+    nor advances the cursor; a later eligible row still advances it
+    normally. A rule-evaluation failure raises instead of falling back
+    to sending the batch, so the cursor is retained for retry.
+
     On first run (no file), initializes the file to now and returns empty
     to avoid dumping backlog.
     """
@@ -66,7 +73,15 @@ def get_unsent_notifications() -> list[Notification]:
             continue
         if cursor > last_sent:
             unsent.append(n)
-    return sorted(unsent, key=_notification_cursor)
+    ordered = sorted(unsent, key=_notification_cursor)
+    if not ordered:
+        return []
+    from sase.notifications.delivery import resolve_notification_deliveries
+
+    deliveries = resolve_notification_deliveries(ordered)
+    return [
+        n for n, delivery in zip(ordered, deliveries, strict=True) if delivery.telegram
+    ]
 
 
 def _is_quiet_decision_receipt(n: Notification) -> bool:

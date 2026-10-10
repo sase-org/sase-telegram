@@ -76,7 +76,7 @@ for existing SASE configurations.
 
 ### Features
 
-- **Outbound notifications** — sends unread, non-silent SASE notifications to Telegram
+- **Outbound notifications** — sends unread, non-silent SASE notifications to Telegram, minus rows suppressed by shared `ace.notification_rules` (`telegram: false`)
 - **Rate limiting** — sliding-window rate limiter prevents message flooding
 - **Exclusive outbound locking** — prevents concurrent outbound runs from duplicating sends
 - **Two-step feedback** — press a Feedback/Custom button, then type your response
@@ -180,7 +180,9 @@ documentation](docs/inbound.md#custom-slash-commands) for the script-output cont
 ### Outbound
 
 The outbound script acquires an exclusive file lock (to prevent concurrent runs from duplicating sends), loads unsent
-notifications using a versioned activity cursor (see [docs/outbound.md](docs/outbound.md#delivery-cursor)), and formats
+notifications using a versioned activity cursor (see [docs/outbound.md](docs/outbound.md#delivery-cursor)), filters them
+through the shared `ace.notification_rules` Telegram permission (see
+[docs/outbound.md](docs/outbound.md#telegram-suppression)), and formats
 them as Telegram MarkdownV2 messages with inline
 keyboards. Plan approvals present every parseable top-level frontmatter field in an ordered **Properties** card before
 the Markdown body. Nested lists and mappings use indented multiline rows; long cards become expandable, and unusually
