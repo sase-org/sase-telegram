@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.29](https://github.com/sase-org/sase-telegram/compare/v0.4.28...v0.4.29) (2026-10-10)
+
+
+### Features
+
+* **telegram:** honor per-rule telegram suppression in outbound sends ([9aca460](https://github.com/sase-org/sase-telegram/commit/9aca4604909b8c713333cea3a84daf78820df207))
+
 ## [0.4.28](https://github.com/sase-org/sase-telegram/compare/v0.4.27...v0.4.28) (2026-10-09)
 
 
