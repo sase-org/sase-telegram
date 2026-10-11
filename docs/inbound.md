@@ -182,7 +182,7 @@ Text messages are dispatched in priority order:
    - `/kill <name>` — Terminates the named agent (sends a 🔄 Redo button on success)
    - `/fork` — Shows fork copy buttons for named running agents
    - `/changes [project]` — Shows copy buttons for active Patch workflow tags, optionally filtered by exact project name
-   - `/macros` — Builds the macros catalog PDF and reports its path (`/xprompts` stays an unlisted alias while sase's `legacy_xprompt_syntax` flag is enabled)
+   - `/macros` — Builds the macros catalog PDF and reports its path (`/xprompts` stays an unlisted alias)
    - `/bead [<id>]` — Shows active beads as picker buttons, or renders `sase bead show <id>` output in chat
    - `/usage [provider]` — Shows every usage window for configured providers with capacity bars and resets
    - `/update` — Starts the detached SASE update worker and replies with its log path

@@ -150,19 +150,3 @@ CatalogStats = _resolve(
     )
 )
 """Summary counts for a built macros catalog."""
-
-
-def legacy_xprompt_alias_enabled() -> bool:
-    """Return True while the retired ``/xprompts`` alias stays accepted.
-
-    Follows sase's ``legacy_xprompt_syntax`` sunset flag. A missing flag (an
-    older sase that predates the rename) counts as enabled.
-    """
-    try:
-        from sase.legacy_xprompt_syntax import legacy_xprompt_syntax_enabled
-    except ImportError:
-        return True
-    try:
-        return bool(legacy_xprompt_syntax_enabled())
-    except Exception:
-        return True

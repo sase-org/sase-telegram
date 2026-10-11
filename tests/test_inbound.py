@@ -4677,33 +4677,13 @@ class TestMacrosCommandDispatch:
         assert ("macros", "Export the macros catalog as a PDF") in _SLASH_COMMANDS
         assert not any(command == "xprompts" for command, _desc in _SLASH_COMMANDS)
 
-    def test_handle_command_dispatches_xprompts_alias_while_flag_enabled(self) -> None:
+    def test_handle_command_dispatches_xprompts_alias(self) -> None:
         from sase_telegram.inbound_handlers.commands import _handle_command
 
-        with (
-            patch(
-                "inbound_namespace.INBOUND.legacy_xprompt_alias_enabled",
-                return_value=True,
-            ),
-            patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler,
-        ):
+        with patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler:
             _handle_command("/xprompts")
 
         mock_handler.assert_called_once_with()
-
-    def test_handle_command_ignores_xprompts_alias_while_flag_disabled(self) -> None:
-        from sase_telegram.inbound_handlers.commands import _handle_command
-
-        with (
-            patch(
-                "inbound_namespace.INBOUND.legacy_xprompt_alias_enabled",
-                return_value=False,
-            ),
-            patch("inbound_namespace.INBOUND._handle_macros_command") as mock_handler,
-        ):
-            _handle_command("/xprompts")
-
-        mock_handler.assert_not_called()
 
 
 class TestGetAgentRetryPrompt:

@@ -21,7 +21,6 @@ from sase.bead.model import SnoozeRecord
 from sase.bead.snooze_gate import create_bead_snooze_gate
 from sase.bead.stale_cleanup_gate import create_bead_stale_cleanup_gate
 from sase.bead.task_gate import create_task_triage_gate
-from sase.feature_flags import override_flags
 from sase.notification_gates.models import GateError
 from sase.notification_gates.registry import (
     adapter_for_kind,
@@ -738,8 +737,7 @@ def test_registry_declared_generic_forms_render_keyboards(gate_home: Path) -> No
         missing=[_missing_plugin_entry()],
         producer={"chop": "plugins_required"},
     )
-    with override_flags(agent_sudo_requests=True):
-        sudo = create_gate(build_sudo_gate_request(_sudo_request()))
+    sudo = create_gate(build_sudo_gate_request(_sudo_request()))
     notifications = {
         "custom": _notification(custom, action="CustomGate", sender="custom"),
         "sudo": _stored_notification(sudo.notification_id),
@@ -971,8 +969,7 @@ def test_sudo_approve_selection_is_rejected_before_submission(
     index still exists in the verified envelope, so the rejection must also
     hold server-side -- mirroring ``cli_answer_submit.reject_detached_tty_options``.
     """
-    with override_flags(agent_sudo_requests=True):
-        sudo = create_gate(build_sudo_gate_request(_sudo_request()))
+    sudo = create_gate(build_sudo_gate_request(_sudo_request()))
     notification = _stored_notification(sudo.notification_id)
     action = _pending(notification)
     prefix = notification.id[:8]
