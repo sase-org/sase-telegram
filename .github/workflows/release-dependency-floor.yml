@@ -1,0 +1,29 @@
+name: Release dependency floor
+
+on:
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: '29 * * * *'
+  workflow_dispatch:
+    inputs:
+      probe_requirement:
+        description: Extra requirement to force a red check (for example sase>=99)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-dependency-floor:
+    uses: sase-org/sase/.github/workflows/release-dependency-floor.yml@master
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    with:
+      probe_requirement: ${{ github.event.inputs.probe_requirement || '' }}
