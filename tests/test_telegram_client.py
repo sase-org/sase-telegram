@@ -13,9 +13,23 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_mock import MockerFixture
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+from telegram.error import (
+    BadRequest,
+    Forbidden,
+    InvalidToken,
+    NetworkError,
+    RetryAfter,
+    TimedOut,
+)
 
 from sase_telegram import telegram_client
+from sase_telegram.credentials import TelegramCredentialError
+
+# Telegram's description for a malformed MarkdownV2 entity (PTB strips the
+# "Bad Request: " prefix).
+PARSE_ERROR = (
+    "Can't parse entities: can't find end of the entity starting at byte offset 6"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -173,7 +187,7 @@ class TestSendMessage:
 
     def test_parse_mode_fallback_on_failure(self, mock_bot: MagicMock) -> None:
         ok = MagicMock(message_id=7)
-        mock_bot.send_message.side_effect = [BadRequest("bad markdown"), ok]
+        mock_bot.send_message.side_effect = [BadRequest(PARSE_ERROR), ok]
 
         msg = telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
 
@@ -188,6 +202,305 @@ class TestSendMessage:
         with pytest.raises(BadRequest):
             telegram_client.send_message("chat-1", "hi")
         assert mock_bot.send_message.await_count == 1
+
+
+def _chunked_text(count: int) -> tuple[str, list[str]]:
+    """Return a text that splits into *count* chunks, plus those chunks."""
+    chunks = [chr(ord("a") + index) * 4000 for index in range(count)]
+    text = "\n".join(chunks)
+    assert telegram_client._split_message(text) == chunks
+    return text, chunks
+
+
+def _sent_texts(mock_bot: MagicMock) -> list[str]:
+    return [call.kwargs["text"] for call in mock_bot.send_message.await_args_list]
+
+
+class TestEntityParseFallback:
+    """Plain-text fallback fires only for an entity-parse ``BadRequest``."""
+
+    @pytest.mark.parametrize(
+        "description",
+        [
+            PARSE_ERROR,
+            "Can't parse entities: character '.' is reserved and must be "
+            "escaped with the preceding '\\\\'",
+            'Can\'t parse message text: unsupported start tag "x" at byte offset 0',
+        ],
+    )
+    def test_entity_parse_errors_are_recognized(self, description: str) -> None:
+        assert telegram_client._is_entity_parse_error(BadRequest(description))
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            BadRequest("Chat not found"),
+            BadRequest("Message is too long"),
+            TimedOut(),
+            NetworkError("Bad Gateway"),
+            RetryAfter(3),
+        ],
+        ids=["chat-not-found", "too-long", "timed-out", "bad-gateway", "retry-after"],
+    )
+    def test_other_errors_are_not_parse_errors(self, exc: Exception) -> None:
+        assert not telegram_client._is_entity_parse_error(exc)
+
+    def test_non_parse_bad_request_does_not_fall_back(
+        self, mock_bot: MagicMock
+    ) -> None:
+        mock_bot.send_message.side_effect = BadRequest("Chat not found")
+
+        with pytest.raises(BadRequest, match="Chat not found"):
+            telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        # Neither retried nor resent as plain text.
+        assert mock_bot.send_message.await_count == 1
+
+    def test_timed_out_retries_without_falling_back(self, mock_bot: MagicMock) -> None:
+        ok = MagicMock(message_id=3)
+        mock_bot.send_message.side_effect = [TimedOut(), TimedOut(), ok]
+
+        msg = telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        assert msg is ok
+        assert mock_bot.send_message.await_count == 3
+        assert [
+            call.kwargs.get("parse_mode")
+            for call in mock_bot.send_message.await_args_list
+        ] == ["MarkdownV2"] * 3
+
+    def test_timed_out_exhaustion_raises_timed_out(self, mock_bot: MagicMock) -> None:
+        mock_bot.send_message.side_effect = TimedOut()
+
+        with pytest.raises(TimedOut):
+            telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        assert mock_bot.send_message.await_count == telegram_client._MAX_RETRIES + 1
+        assert all(
+            call.kwargs.get("parse_mode") == "MarkdownV2"
+            for call in mock_bot.send_message.await_args_list
+        )
+
+    @pytest.mark.parametrize(
+        ("exc", "expected_sends"),
+        [
+            (NetworkError("Bad Gateway"), telegram_client._MAX_RETRIES + 1),
+            (RetryAfter(1), telegram_client._MAX_RETRIES + 1),
+            (Forbidden("Forbidden: bot was blocked by the user"), 1),
+            (InvalidToken(), 1),
+        ],
+        ids=["bad-gateway", "retry-after", "forbidden", "invalid-token"],
+    )
+    def test_errors_propagate_unchanged_without_fallback(
+        self, mock_bot: MagicMock, exc: Exception, expected_sends: int
+    ) -> None:
+        mock_bot.send_message.side_effect = exc
+
+        with pytest.raises(type(exc)) as raised:
+            telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        assert raised.value is exc
+        assert mock_bot.send_message.await_count == expected_sends
+        assert all(
+            call.kwargs.get("parse_mode") == "MarkdownV2"
+            for call in mock_bot.send_message.await_args_list
+        )
+
+    def test_credential_error_propagates_without_send_or_retry(
+        self, mocker: MockerFixture
+    ) -> None:
+        get_bot = mocker.patch.object(
+            telegram_client,
+            "_get_bot",
+            side_effect=TelegramCredentialError("bot token unavailable"),
+        )
+
+        with pytest.raises(TelegramCredentialError):
+            telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        assert get_bot.call_count == 1
+
+    def test_fallback_is_sticky_across_retries(self, mock_bot: MagicMock) -> None:
+        ok = MagicMock(message_id=4)
+        mock_bot.send_message.side_effect = [BadRequest(PARSE_ERROR), TimedOut(), ok]
+
+        msg = telegram_client.send_message("chat-1", "hi", parse_mode="MarkdownV2")
+
+        assert msg is ok
+        calls = mock_bot.send_message.await_args_list
+        assert len(calls) == 3
+        assert calls[0].kwargs["parse_mode"] == "MarkdownV2"
+        # The retry after the transient error stays on plain text.
+        assert "parse_mode" not in calls[1].kwargs
+        assert "parse_mode" not in calls[2].kwargs
+
+
+class TestPerChunkRetry:
+    """Retries wrap each chunk; delivered chunks are never re-sent."""
+
+    def test_failed_chunk_is_retried_alone(self, mock_bot: MagicMock) -> None:
+        text, chunks = _chunked_text(3)
+        last = MagicMock(message_id=3)
+        mock_bot.send_message.side_effect = [
+            MagicMock(message_id=1),
+            TimedOut(),
+            TimedOut(),
+            MagicMock(message_id=2),
+            last,
+        ]
+        markup = _markup()
+
+        msg = telegram_client.send_message(
+            "chat-1", text, reply_markup=markup, parse_mode="MarkdownV2"
+        )
+
+        assert msg is last
+        assert _sent_texts(mock_bot) == [
+            chunks[0],
+            chunks[1],
+            chunks[1],
+            chunks[1],
+            chunks[2],
+        ]
+        markups = [
+            call.kwargs.get("reply_markup")
+            for call in mock_bot.send_message.await_args_list
+        ]
+        assert markups == [None, None, None, None, markup]
+
+    def test_exhausted_chunk_costs_at_most_four_sends(
+        self, mock_bot: MagicMock
+    ) -> None:
+        text, chunks = _chunked_text(3)
+        mock_bot.send_message.side_effect = [MagicMock(message_id=1)] + [TimedOut()] * (
+            telegram_client._MAX_RETRIES + 1
+        )
+
+        with pytest.raises(TimedOut) as raised:
+            telegram_client.send_message("chat-1", text, parse_mode="MarkdownV2")
+
+        # One delivery for chunk 0, then exactly 4 attempts for chunk 1; chunk
+        # 2 is never attempted and chunk 0 is never resent.
+        assert telegram_client._MAX_RETRIES + 1 == 4
+        assert _sent_texts(mock_bot) == [chunks[0]] + [chunks[1]] * 4
+        assert telegram_client.delivered_chunks(raised.value) == 1
+        assert any("1 of 3" in note for note in raised.value.__notes__)
+
+    def test_first_chunk_failure_reports_zero_delivered(
+        self, mock_bot: MagicMock
+    ) -> None:
+        text, _chunks = _chunked_text(2)
+        mock_bot.send_message.side_effect = BadRequest("Chat not found")
+
+        with pytest.raises(BadRequest) as raised:
+            telegram_client.send_message("chat-1", text, parse_mode="MarkdownV2")
+
+        assert telegram_client.delivered_chunks(raised.value) == 0
+        assert mock_bot.send_message.await_count == 1
+
+    def test_start_chunk_resumes_at_first_undelivered_chunk(
+        self, mock_bot: MagicMock
+    ) -> None:
+        text, chunks = _chunked_text(3)
+        last = MagicMock(message_id=9)
+        mock_bot.send_message.side_effect = [MagicMock(message_id=8), last]
+        markup = _markup()
+
+        msg = telegram_client.send_message(
+            "chat-1", text, reply_markup=markup, start_chunk=1
+        )
+
+        assert msg is last
+        assert _sent_texts(mock_bot) == chunks[1:]
+        assert (
+            mock_bot.send_message.await_args_list[-1].kwargs["reply_markup"] is markup
+        )
+
+    def test_resumed_failure_reports_absolute_delivered_count(
+        self, mock_bot: MagicMock
+    ) -> None:
+        text, _chunks = _chunked_text(4)
+        mock_bot.send_message.side_effect = [MagicMock(message_id=1), TimedOut()] + [
+            TimedOut()
+        ] * telegram_client._MAX_RETRIES
+
+        with pytest.raises(TimedOut) as raised:
+            telegram_client.send_message("chat-1", text, start_chunk=1)
+
+        assert telegram_client.delivered_chunks(raised.value) == 2
+
+    @pytest.mark.parametrize("start_chunk", [-1, 3])
+    def test_out_of_range_start_chunk_is_rejected(
+        self, mock_bot: MagicMock, start_chunk: int
+    ) -> None:
+        text, _chunks = _chunked_text(3)
+
+        with pytest.raises(ValueError, match="start_chunk"):
+            telegram_client.send_message("chat-1", text, start_chunk=start_chunk)
+
+        mock_bot.send_message.assert_not_awaited()
+
+    def test_delivered_chunks_is_none_for_foreign_errors(self) -> None:
+        assert telegram_client.delivered_chunks(TimedOut()) is None
+
+
+class TestEditMessageTextFallback:
+    def test_non_parse_bad_request_does_not_fall_back(
+        self, mock_bot: MagicMock
+    ) -> None:
+        mock_bot.edit_message_text.side_effect = BadRequest("Message to edit not found")
+
+        with pytest.raises(BadRequest, match="Message to edit not found"):
+            telegram_client.edit_message_text(
+                "chat-1", 42, "done", parse_mode="MarkdownV2"
+            )
+
+        assert mock_bot.edit_message_text.await_count == 1
+
+    def test_timed_out_retries_without_falling_back(self, mock_bot: MagicMock) -> None:
+        ok = MagicMock(message_id=42)
+        mock_bot.edit_message_text.side_effect = [TimedOut(), ok]
+
+        assert (
+            telegram_client.edit_message_text(
+                "chat-1", 42, "done", parse_mode="MarkdownV2"
+            )
+            is ok
+        )
+        assert [
+            call.kwargs.get("parse_mode")
+            for call in mock_bot.edit_message_text.await_args_list
+        ] == ["MarkdownV2", "MarkdownV2"]
+
+    def test_credential_error_propagates_without_edit(
+        self, mocker: MockerFixture
+    ) -> None:
+        mocker.patch.object(
+            telegram_client,
+            "_get_bot",
+            side_effect=TelegramCredentialError("bot token unavailable"),
+        )
+
+        with pytest.raises(TelegramCredentialError):
+            telegram_client.edit_message_text(
+                "chat-1", 42, "done", parse_mode="MarkdownV2"
+            )
+
+    def test_not_modified_after_plain_fallback_returns_true(
+        self, mock_bot: MagicMock
+    ) -> None:
+        mock_bot.edit_message_text.side_effect = [
+            BadRequest(PARSE_ERROR),
+            BadRequest("Message is not modified: specified new message content"),
+        ]
+
+        assert (
+            telegram_client.edit_message_text(
+                "chat-1", 42, "done", parse_mode="MarkdownV2"
+            )
+            is True
+        )
+        assert mock_bot.edit_message_text.await_count == 2
 
 
 class TestSendDocument:
@@ -328,7 +641,7 @@ class TestEditMessageText:
 
     def test_parse_mode_fallback_on_failure(self, mock_bot: MagicMock) -> None:
         ok = MagicMock(message_id=7)
-        mock_bot.edit_message_text.side_effect = [BadRequest("bad markdown"), ok]
+        mock_bot.edit_message_text.side_effect = [BadRequest(PARSE_ERROR), ok]
 
         msg = telegram_client.edit_message_text(
             "chat-1",

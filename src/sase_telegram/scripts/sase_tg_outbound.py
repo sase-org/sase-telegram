@@ -16,8 +16,15 @@ from sase.notification_gates.registry import PRIVILEGED_GATE_ACTIONS
 from sase_telegram import pending_actions, rate_limit
 from sase_telegram.credentials import get_chat_id
 from sase_telegram.formatting import display_safe_stem, format_notification
-from sase_telegram.outbound import get_unsent_notifications, mark_sent
+from sase_telegram.outbound import (
+    clear_partial_delivery,
+    get_unsent_notifications,
+    mark_sent,
+    partial_delivery_start,
+    record_partial_delivery,
+)
 from sase_telegram.telegram_client import (
+    delivered_chunks,
     send_animation,
     send_audio,
     send_document,
@@ -58,6 +65,26 @@ def _register_shared_transport(n: Any, message_id: int, chat_id: str) -> None:
             n.id[:8],
             exc_info=True,
         )
+
+
+def _record_partial_delivery(n: Any, text: str, delivered: int) -> None:
+    """Remember delivered chunks so the next tick never re-sends them."""
+    try:
+        record_partial_delivery(n, text, delivered)
+    except Exception:
+        log.warning(
+            "Failed to record partial delivery of notification %s",
+            n.id[:8],
+            exc_info=True,
+        )
+        return
+    log.info(
+        "Notification %s stopped after %d delivered chunk(s); "
+        "the next run resumes at chunk %d",
+        n.id[:8],
+        delivered,
+        delivered + 1,
+    )
 
 
 def get_sase_directory(name: str) -> str:
@@ -508,24 +535,39 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
             continue
 
         msg = None
+        start_chunk = 0
         try:
             from sase_telegram.outbound import _is_quiet_decision_receipt
 
             quiet = _is_quiet_decision_receipt(n)
+            # Resume a notification that an earlier tick delivered only in
+            # part at its first undelivered chunk.
+            start_chunk = partial_delivery_start(n, text)
+            if start_chunk:
+                log.info(
+                    "Resuming notification %s at chunk %d",
+                    n.id[:8],
+                    start_chunk + 1,
+                )
             msg = send_message(
                 chat_id,
                 text,
                 reply_markup=keyboard,
                 parse_mode="MarkdownV2",
                 disable_notification=True if quiet else None,
+                start_chunk=start_chunk,
             )
             rate_limit.record_send()
             log.debug("Sent notification %s → message_id=%s", n.id[:8], msg.message_id)
             mark_sent([n])
+            clear_partial_delivery()
             high_water_updates += 1
             sent_count += 1
-        except Exception:
+        except Exception as exc:
             failed_count += 1
+            delivered = delivered_chunks(exc)
+            if msg is None and delivered is not None and delivered > start_chunk:
+                _record_partial_delivery(n, text, delivered)
             log.warning(
                 "Failed to send notification %s to Telegram",
                 n.id[:8],

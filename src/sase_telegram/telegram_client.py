@@ -6,7 +6,7 @@ import asyncio
 import functools
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,17 @@ log = logging.getLogger(__name__)
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2.0  # seconds
 _MAX_MESSAGE_LENGTH = 4096
+
+# Lower-cased fragments of Telegram's entity-parse BadRequest descriptions
+# (PTB strips the "Bad Request: " prefix). Only these trigger the plain-text
+# fallback; every other failure propagates unchanged.
+_ENTITY_PARSE_ERROR_MARKERS = (
+    "can't parse entities",
+    "can't parse message text",
+    "can't find end of the entity",
+)
+
+_DELIVERED_CHUNKS_ATTR = "sase_telegram_delivered_chunks"
 
 
 def _run_async(coro: Any) -> Any:
@@ -104,7 +115,61 @@ def _split_message(text: str, limit: int = _MAX_MESSAGE_LENGTH) -> list[str]:
     return chunks
 
 
-def _send_single_message(
+def _is_entity_parse_error(exc: BaseException) -> bool:
+    """Return whether *exc* is Telegram rejecting the message's formatting."""
+    if not isinstance(exc, BadRequest):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _ENTITY_PARSE_ERROR_MARKERS)
+
+
+def _call_with_entity_fallback(
+    call: Callable[..., Coroutine[Any, Any, Any]],
+    kwargs: dict[str, Any],
+    *,
+    action: str,
+) -> Any:
+    """Run one Telegram text call under ``_with_retry`` with a parse fallback.
+
+    *call* receives a fresh ``Bot`` followed by *kwargs*. When *kwargs* has a
+    ``parse_mode`` and Telegram answers with an entity-parse ``BadRequest``,
+    the call is repeated without ``parse_mode``. The fallback is sticky across
+    retry attempts, so a transient error after it never re-sends the formatted
+    text. Every other error -- other ``BadRequest``s, ``TimedOut``,
+    ``NetworkError``, ``RetryAfter``, ``Forbidden``, ``InvalidToken``, and
+    credential errors from ``_get_bot()`` -- reaches the retry wrapper and the
+    caller unchanged.
+    """
+    parse_mode = kwargs.get("parse_mode")
+    plain_kwargs = {key: value for key, value in kwargs.items() if key != "parse_mode"}
+    use_plain = False
+
+    def attempt() -> Any:
+        nonlocal use_plain
+        if not use_plain:
+            bot = _get_bot()
+            try:
+                return _run_async(call(bot, **kwargs))
+            except BadRequest as exc:
+                if not parse_mode or not _is_entity_parse_error(exc):
+                    raise
+                log.warning(
+                    "Telegram rejected parse_mode=%s for %s (%s); "
+                    "falling back to plain text",
+                    parse_mode,
+                    action,
+                    exc,
+                )
+                use_plain = True
+        # Use a fresh Bot instance -- the previous asyncio.run() closed its
+        # event loop, which can leave the old Bot's internal httpx client in
+        # a broken state (python-telegram-bot v21+).
+        return _run_async(call(_get_bot(), **plain_kwargs))
+
+    return _with_retry(attempt)()
+
+
+def _send_chunk(
     chat_id: str,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
@@ -112,7 +177,7 @@ def _send_single_message(
     reply_to_message_id: int | None = None,
     disable_notification: bool | None = None,
 ) -> Message:
-    """Send a single text message, falling back to plain text on parse errors."""
+    """Send one message-sized chunk with its own retries and parse fallback."""
     kwargs: dict[str, object] = {
         "chat_id": chat_id,
         "text": text,
@@ -124,25 +189,23 @@ def _send_single_message(
         kwargs["disable_notification"] = disable_notification
     # Drop Nones so older client libraries without the flag keep working.
     kwargs = {key: value for key, value in kwargs.items() if value is not None}
-    try:
-        return _run_async(_get_bot().send_message(**kwargs))  # type: ignore[arg-type]
-    except Exception:
-        if parse_mode:
-            log.warning(
-                "Failed to send with parse_mode=%s, falling back to plain text",
-                parse_mode,
-                exc_info=True,
-            )
-            # Use a fresh Bot instance — the previous asyncio.run() closed
-            # its event loop which can leave the old Bot's internal httpx
-            # client in a broken state (python-telegram-bot v21+).
-            fallback = dict(kwargs)
-            fallback.pop("parse_mode", None)
-            return _run_async(_get_bot().send_message(**fallback))  # type: ignore[arg-type]
-        raise
+    message: Message = _call_with_entity_fallback(
+        lambda bot, **kw: bot.send_message(**kw), kwargs, action="send_message"
+    )
+    return message
 
 
-@_with_retry
+def delivered_chunks(exc: BaseException) -> int | None:
+    """Return how many chunks a failed :func:`send_message` had delivered.
+
+    The count is the index of the first undelivered chunk of the full text,
+    so it can be passed back as ``start_chunk`` to resume. Returns ``None``
+    when *exc* did not come out of :func:`send_message`'s chunk loop.
+    """
+    count = getattr(exc, _DELIVERED_CHUNKS_ATTR, None)
+    return count if isinstance(count, int) else None
+
+
 def send_message(
     chat_id: str,
     text: str,
@@ -150,6 +213,8 @@ def send_message(
     parse_mode: str | None = None,
     reply_to_message_id: int | None = None,
     disable_notification: bool | None = None,
+    *,
+    start_chunk: int = 0,
 ) -> Message:
     """Send a text message to a Telegram chat.
 
@@ -157,20 +222,40 @@ def send_message(
     split into multiple messages.  Only the last chunk carries the
     ``reply_markup`` so that inline keyboards appear once at the end.
     ``disable_notification`` sends quietly across split/fallback sends.
+
+    Each chunk is retried on its own, so a delivered chunk is never re-sent.
+    When a chunk exhausts its retries, its error propagates with its type
+    unchanged and the number of chunks delivered so far attached: read it
+    with :func:`delivered_chunks` (a PEP 678 note repeats it in tracebacks).
+    Passing that count as *start_chunk* resumes at the first undelivered
+    chunk.
     """
     chunks = _split_message(text)
-    last_msg: Message | None = None
-    for i, chunk in enumerate(chunks):
-        # Only attach reply_markup to the last chunk
-        markup = reply_markup if i == len(chunks) - 1 else None
-        last_msg = _send_single_message(
-            chat_id=chat_id,
-            text=chunk,
-            reply_markup=markup,
-            parse_mode=parse_mode,
-            reply_to_message_id=reply_to_message_id,
-            disable_notification=disable_notification,
+    if not 0 <= start_chunk < len(chunks):
+        raise ValueError(
+            f"start_chunk={start_chunk} is outside the {len(chunks)} chunk(s) "
+            "of this message"
         )
+    last_msg: Message | None = None
+    for index in range(start_chunk, len(chunks)):
+        # Only attach reply_markup to the last chunk
+        markup = reply_markup if index == len(chunks) - 1 else None
+        try:
+            last_msg = _send_chunk(
+                chat_id=chat_id,
+                text=chunks[index],
+                reply_markup=markup,
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
+                disable_notification=disable_notification,
+            )
+        except Exception as exc:
+            setattr(exc, _DELIVERED_CHUNKS_ATTR, index)
+            exc.add_note(
+                f"sase-telegram: {index} of {len(chunks)} message chunk(s) "
+                "were delivered before this failure"
+            )
+            raise
     assert last_msg is not None  # noqa: S101 — chunks is never empty
     return last_msg
 
@@ -295,7 +380,6 @@ def _is_message_not_modified(exc: BaseException) -> bool:
     return "message is not modified" in message.lower()
 
 
-@_with_retry
 def edit_message_text(
     chat_id: str,
     message_id: int,
@@ -303,35 +387,27 @@ def edit_message_text(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
 ) -> Message | bool:
-    """Edit an existing message's text, falling back to plain text on parse errors."""
+    """Edit an existing message's text, falling back to plain text on parse errors.
+
+    An already-identical message counts as success and returns ``True``.
+    """
     try:
-        return _run_async(
-            _get_bot().edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
+        result: Message | bool = _call_with_entity_fallback(
+            lambda bot, **kw: bot.edit_message_text(**kw),
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "reply_markup": reply_markup,
+                "parse_mode": parse_mode,
+            },
+            action="edit_message_text",
         )
-    except Exception as exc:
+    except BadRequest as exc:
         if _is_message_not_modified(exc):
             return True
-        if parse_mode:
-            log.warning(
-                "Failed to edit with parse_mode=%s, falling back to plain text",
-                parse_mode,
-                exc_info=True,
-            )
-            return _run_async(
-                _get_bot().edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                    reply_markup=reply_markup,
-                )
-            )
         raise
+    return result
 
 
 @_with_retry

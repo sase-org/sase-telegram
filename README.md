@@ -275,6 +275,7 @@ State files are stored under `~/.sase/telegram/`:
 | `awaiting_feedback.json`    | Active two-step feedback flow state, keyed by Telegram message |
 | `media_groups.json`         | Staged Telegram photo/image-document albums waiting for the quiet window |
 | `last_sent_ts`              | Versioned `(activity_at, id)` high-water cursor for outbound notifications |
+| `partial_delivery.json`     | Delivered-chunk count of a notification that failed part-way, for resume |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
 | `commands_registered_ts`    | Cached timestamp and fingerprint for Telegram slash command registration |

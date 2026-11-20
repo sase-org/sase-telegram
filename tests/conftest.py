@@ -114,6 +114,25 @@ def _isolate_telegram_registration_cache(
 
 
 @pytest.fixture(autouse=True)
+def _isolate_partial_delivery_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep outbound runs off the real ~/.sase/telegram partial-delivery record.
+
+    Every successful outbound send clears that record and every partial send
+    writes it, so an unpatched suite would delete or forge the live machine's
+    resume state.
+    """
+    import sase_telegram.outbound as _outbound
+
+    monkeypatch.setattr(
+        _outbound,
+        "PARTIAL_DELIVERY_FILE",
+        tmp_path / "partial_delivery.json",
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_git_remote_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite off the network: no test may run ``ssh -T git@github.com``.
 

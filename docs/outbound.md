@@ -29,13 +29,27 @@ sase_job_tg_outbound --context X  # Pass context string for logging
    [Telegram suppression](#telegram-suppression) below.
 3. **Stale cleanup** — `cleanup_stale()` removes pending actions older than 24 hours.
 4. **Format and send** — Each notification is formatted by `format_notification()` into MarkdownV2 text with an inline
-   keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send.
+   keyboard, then sent via `telegram_client.py`. Rate limiting is checked before each send. See
+   [Retries and Partial Delivery](#retries-and-partial-delivery) below.
 5. **Save pending** — Every action registered in SASE's notification-gate adapter registry is saved to
    `pending_actions.json` with its Telegram `message_id` so inbound can resolve it and edit the keyboard later.
 6. **Advance HWM** — `mark_sent()` updates the high-water cursor after each successfully delivered notification. Because
    the batch is processed oldest-first and the cursor is never advanced past an event that failed to send, a crash or a
    failed send mid-batch retries exactly the undelivered remainder.
 7. **Release lock** — `release_outbound_lock()` releases the file lock.
+
+## Retries and Partial Delivery
+
+Text longer than Telegram's 4096-character limit is split into chunks, and only the last chunk carries the inline
+keyboard. Each chunk is retried on its own: timeouts, network errors, and rate limits get up to 4 attempts, so a chunk
+that keeps failing costs at most 4 sends and a delivered chunk is never resent. The plain-text fallback fires only when
+Telegram rejects the MarkdownV2 entities; every other error stops the send unchanged.
+
+When a chunk exhausts its retries after earlier chunks landed, outbound records the delivered-chunk count in
+`~/.sase/telegram/partial_delivery.json`, keyed by the notification's id and activity cursor plus a digest of its
+formatted text. The cursor does not advance, so the next run picks the same notification first and resumes at its first
+undelivered chunk. If the notification's formatted text changed in between, it is sent again from the start. The record
+is cleared after the next successful send.
 
 ## Delivery Cursor
 

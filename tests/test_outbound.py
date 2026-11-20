@@ -8,14 +8,17 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sase.notifications.models import Notification
 from sase_telegram.outbound import (
+    clear_partial_delivery,
     get_unsent_notifications,
     mark_sent,
+    partial_delivery_start,
+    record_partial_delivery,
 )
 from sase_telegram.scripts.sase_tg_outbound import (
     _append_diff_to_markdown,
@@ -1440,3 +1443,221 @@ class TestTelegramSuppression:
             from sase.notifications import delivery as delivery_module
 
             delivery_module._delivery_rules_for_token.cache_clear()
+
+
+def _partial_delivery_file() -> Path:
+    import sase_telegram.outbound as outbound_module
+
+    return outbound_module.PARTIAL_DELIVERY_FILE
+
+
+def _three_chunk_text(prefix: str = "") -> tuple[str, list[str]]:
+    from sase_telegram.telegram_client import _split_message
+
+    chunks = [prefix + letter * 4000 for letter in "abc"]
+    text = "\n".join(chunks)
+    assert _split_message(text) == chunks
+    return text, chunks
+
+
+class TestPartialDeliveryRecord:
+    def test_missing_record_starts_at_zero(self) -> None:
+        assert partial_delivery_start(_make_notification(), "text") == 0
+
+    def test_round_trip_resumes_matching_notification(self) -> None:
+        n = _make_notification()
+        record_partial_delivery(n, "text", 2)
+
+        assert partial_delivery_start(n, "text") == 2
+
+    def test_record_for_other_notification_is_ignored(self) -> None:
+        record_partial_delivery(_make_notification(id="other000"), "text", 2)
+
+        assert partial_delivery_start(_make_notification(), "text") == 0
+
+    def test_resurfaced_generation_starts_over(self) -> None:
+        ts = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
+        original = _make_notification(timestamp=ts)
+        record_partial_delivery(original, "text", 2)
+        resurfaced = _make_notification(
+            timestamp=ts,
+            resurfaced_at=datetime(2025, 2, 1, tzinfo=UTC).isoformat(),
+        )
+
+        assert partial_delivery_start(resurfaced, "text") == 0
+
+    def test_changed_text_starts_over(self) -> None:
+        n = _make_notification()
+        record_partial_delivery(n, "old text", 2)
+
+        assert partial_delivery_start(n, "new text") == 0
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["not json", "[]", '{"version": 99}', ""],
+        ids=["garbage", "list", "future-version", "empty"],
+    )
+    def test_malformed_record_starts_at_zero(self, raw: str) -> None:
+        path = _partial_delivery_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw, encoding="utf-8")
+
+        assert partial_delivery_start(_make_notification(), "text") == 0
+
+    def test_clear_removes_record_and_tolerates_absence(self) -> None:
+        record_partial_delivery(_make_notification(), "text", 1)
+        clear_partial_delivery()
+        clear_partial_delivery()
+
+        assert not _partial_delivery_file().exists()
+
+
+class TestRunOutboundPartialDelivery:
+    """A partly delivered notification resumes at its first undelivered chunk.
+
+    These drive ``_run_outbound`` through the real ``telegram_client`` with a
+    mocked ``Bot`` so the exact HTTP send sequence is observable.
+    """
+
+    @pytest.fixture
+    def bot(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        from sase_telegram import telegram_client
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        monkeypatch.setattr(telegram_client, "_get_bot", lambda: bot)
+        monkeypatch.setattr(telegram_client.time, "sleep", lambda _s: None)
+        return bot
+
+    @staticmethod
+    def _tick(
+        notifications: list[Notification], text: str | dict[str, str]
+    ) -> MagicMock:
+        texts = text if isinstance(text, dict) else {n.id: text for n in notifications}
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=notifications,
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_chat_id",
+                return_value="chat-1",
+            ),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.format_notification",
+                side_effect=lambda n: (texts[n.id], None, []),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent") as mark_sent,
+        ):
+            assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
+        return mark_sent
+
+    @staticmethod
+    def _sent_texts(bot: MagicMock) -> list[str]:
+        texts = [call.kwargs["text"] for call in bot.send_message.await_args_list]
+        bot.send_message.reset_mock()
+        return texts
+
+    def test_partial_delivery_resumes_at_first_undelivered_chunk(
+        self, bot: MagicMock
+    ) -> None:
+        from telegram.error import TimedOut
+
+        n = _make_notification()
+        later = _make_notification(id="later000-0000-0000-0000-000000000000")
+        text, chunks = _three_chunk_text()
+
+        texts = {n.id: text, later.id: "later"}
+
+        # Tick 1: chunk 0 lands, chunk 1 times out on every attempt.
+        bot.send_message.side_effect = [SimpleNamespace(message_id=1)] + [
+            TimedOut()
+        ] * 4
+        mark_sent = self._tick([n, later], texts)
+
+        # Exactly 4 HTTP sends for the failing chunk; the later notification
+        # waits behind the undelivered one.
+        assert self._sent_texts(bot) == [chunks[0]] + [chunks[1]] * 4
+        mark_sent.assert_not_called()
+        record = json.loads(_partial_delivery_file().read_text(encoding="utf-8"))
+        assert record["id"] == n.id
+        assert record["delivered_chunks"] == 1
+
+        # Tick 2: resume at chunk 1; chunk 0 is never resent.
+        bot.send_message.side_effect = [
+            SimpleNamespace(message_id=2),
+            SimpleNamespace(message_id=3),
+            SimpleNamespace(message_id=4),
+        ]
+        mark_sent = self._tick([n, later], texts)
+
+        assert self._sent_texts(bot) == [chunks[1], chunks[2], "later"]
+        assert [call.args[0][0].id for call in mark_sent.call_args_list] == [
+            n.id,
+            later.id,
+        ]
+        assert not _partial_delivery_file().exists()
+
+    def test_resume_failure_keeps_advancing_the_record(self, bot: MagicMock) -> None:
+        from telegram.error import TimedOut
+
+        n = _make_notification()
+        text, chunks = _three_chunk_text()
+        record_partial_delivery(n, text, 1)
+
+        bot.send_message.side_effect = [SimpleNamespace(message_id=2)] + [
+            TimedOut()
+        ] * 4
+        self._tick([n], text)
+
+        assert self._sent_texts(bot) == [chunks[1]] + [chunks[2]] * 4
+        assert partial_delivery_start(n, text) == 2
+
+    def test_first_chunk_failure_writes_no_record(self, bot: MagicMock) -> None:
+        from telegram.error import TimedOut
+
+        n = _make_notification()
+        text, chunks = _three_chunk_text()
+        bot.send_message.side_effect = TimedOut()
+
+        mark_sent = self._tick([n], text)
+
+        assert self._sent_texts(bot) == [chunks[0]] * 4
+        mark_sent.assert_not_called()
+        assert not _partial_delivery_file().exists()
+
+    def test_changed_text_is_sent_again_from_the_start(self, bot: MagicMock) -> None:
+        n = _make_notification()
+        old_text, _old_chunks = _three_chunk_text()
+        new_text, new_chunks = _three_chunk_text(prefix="v2 ")
+        record_partial_delivery(n, old_text, 1)
+        bot.send_message.side_effect = [
+            SimpleNamespace(message_id=index) for index in range(3)
+        ]
+
+        mark_sent = self._tick([n], new_text)
+
+        assert self._sent_texts(bot) == new_chunks
+        mark_sent.assert_called_once()
+        assert not _partial_delivery_file().exists()
+
+    def test_stale_record_for_another_notification_is_cleared(
+        self, bot: MagicMock
+    ) -> None:
+        stale = _make_notification(id="stale000-0000-0000-0000-000000000000")
+        n = _make_notification()
+        text, chunks = _three_chunk_text()
+        record_partial_delivery(stale, text, 2)
+        bot.send_message.side_effect = [
+            SimpleNamespace(message_id=index) for index in range(3)
+        ]
+
+        self._tick([n], text)
+
+        assert self._sent_texts(bot) == chunks
+        assert not _partial_delivery_file().exists()

@@ -40,7 +40,8 @@ pdf_convert.py
 2. Reads current notification state and selects unsent rows past a versioned `(activity_at, id)` high-water cursor
    (`last_sent_ts`), oldest-first
 3. Formats each notification as MarkdownV2 with inline keyboards (`formatting.py`)
-4. Sends via `telegram_client.py` (with rate limiting, retry/backoff, message splitting)
+4. Sends via `telegram_client.py` (with rate limiting, per-chunk retry/backoff, message splitting), resuming a
+   notification that an earlier run delivered only in part at its first undelivered chunk (`partial_delivery.json`)
 5. Saves actionable notifications (plan/HITL/question) to `pending_actions.json`
 6. Advances the high-water cursor only after successful delivery, and never past a send that failed
 
@@ -87,7 +88,12 @@ pdf_convert.py
   limits. Timestamps are persisted to `rate_limit.json` so the window survives process restarts.
 - **Two-step feedback isolation**: Feedback/custom flows are keyed by the originating Telegram message ID. A user can
   reply to the relevant message without overwriting other active feedback flows.
-- **Parse mode fallback**: If MarkdownV2 rendering fails (malformed escaping), the client retries with plain text to
-  ensure the message is delivered.
+- **Parse mode fallback**: Only when Telegram rejects the message's entities (a `BadRequest` such as "Can't parse
+  entities"), the client resends that message or edit as plain text. Timeouts, network errors and Bad Gateway, rate
+  limits, `Forbidden`, `InvalidToken`, and credential errors never trigger the fallback; they reach the retry wrapper
+  and the caller unchanged.
+- **Per-chunk retries**: A message longer than 4096 characters is split, and each chunk is retried on its own (up to 4
+  attempts with 2, 4, and 6 s backoff for timeouts and network errors). A delivered chunk is never resent, and only the
+  last chunk carries the inline keyboard.
 - **Shared PDF rendering**: `pdf_convert.py` delegates Markdown-to-PDF rendering to SASE's shared attachment renderer
   and applies the plugin stylesheet.

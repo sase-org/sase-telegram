@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import tempfile
 import time
@@ -14,9 +16,13 @@ from typing import Any
 from sase.notifications import store as notification_store
 from sase.notifications.models import Notification
 
+log = logging.getLogger(__name__)
+
 LAST_SENT_FILE = Path.home() / ".sase" / "telegram" / "last_sent_ts"
 OUTBOUND_LOCK_FILE = Path.home() / ".sase" / "telegram" / "outbound.lock"
+PARTIAL_DELIVERY_FILE = Path.home() / ".sase" / "telegram" / "partial_delivery.json"
 _CURSOR_VERSION = 2
+_PARTIAL_DELIVERY_VERSION = 1
 _LEGACY_EQUAL_TIMESTAMP_ID = "\U0010ffff"
 
 
@@ -108,6 +114,93 @@ def mark_sent(notifications: list[Notification]) -> None:
     _write_high_water_mark(latest)
 
 
+def partial_delivery_start(notification: Notification, text: str) -> int:
+    """Return the chunk index where *notification*'s *text* should resume.
+
+    A previous tick that delivered only some chunks of this notification
+    records the count with :func:`record_partial_delivery`. The record only
+    applies to the same notification activity (id plus activity cursor) and
+    the same formatted text; anything else -- including a missing, foreign,
+    or unreadable record -- starts from chunk ``0``.
+    """
+    try:
+        raw = PARTIAL_DELIVERY_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        log.warning("Could not read %s; sending from the start", PARTIAL_DELIVERY_FILE)
+        return 0
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if not isinstance(payload, dict) or (
+        payload.get("version") != _PARTIAL_DELIVERY_VERSION
+    ):
+        log.warning(
+            "Ignoring malformed partial-delivery record %s", PARTIAL_DELIVERY_FILE
+        )
+        return 0
+    activity_at = _cursor_activity_text(_notification_cursor(notification))
+    if (
+        payload.get("id") != notification.id
+        or payload.get("activity_at") != activity_at
+    ):
+        return 0
+    delivered = payload.get("delivered_chunks")
+    if not isinstance(delivered, int) or isinstance(delivered, bool) or delivered < 1:
+        return 0
+    if payload.get("text_sha256") != _text_digest(text):
+        log.info(
+            "Notification %s changed after %d chunk(s) were delivered; "
+            "sending it again from the start",
+            notification.id[:8],
+            delivered,
+        )
+        return 0
+    return delivered
+
+
+def record_partial_delivery(
+    notification: Notification, text: str, delivered_chunks: int
+) -> None:
+    """Persist that the first *delivered_chunks* chunks of *text* reached Telegram."""
+    payload = {
+        "version": _PARTIAL_DELIVERY_VERSION,
+        "id": notification.id,
+        "activity_at": _cursor_activity_text(_notification_cursor(notification)),
+        "text_sha256": _text_digest(text),
+        "delivered_chunks": delivered_chunks,
+    }
+    _atomic_write_text(
+        PARTIAL_DELIVERY_FILE, json.dumps(payload, separators=(",", ":")) + "\n"
+    )
+
+
+def clear_partial_delivery() -> None:
+    """Forget any partially delivered notification.
+
+    A record that cannot be removed is harmless -- it only matches its own
+    notification activity -- so a failure is logged instead of raised.
+    """
+    try:
+        PARTIAL_DELIVERY_FILE.unlink(missing_ok=True)
+    except OSError:
+        log.warning(
+            "Could not remove partial-delivery record %s",
+            PARTIAL_DELIVERY_FILE,
+            exc_info=True,
+        )
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _cursor_activity_text(cursor: _DeliveryCursor) -> str:
+    return cursor.activity_at.isoformat().replace("+00:00", "Z")
+
+
 def _notification_cursor(notification: Notification) -> _DeliveryCursor:
     value = getattr(notification, "resurfaced_at", None) or notification.timestamp
     parsed = datetime.fromisoformat(value)
@@ -159,23 +252,24 @@ def _read_high_water_mark() -> _DeliveryCursor:
 
 def _write_high_water_mark(cursor: _DeliveryCursor) -> None:
     """Atomically write a versioned activity cursor to the marker file."""
-    LAST_SENT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=LAST_SENT_FILE.parent, suffix=".tmp")
+    payload = {
+        "version": _CURSOR_VERSION,
+        "activity_at": _cursor_activity_text(cursor),
+        "id": cursor.notification_id,
+    }
+    _atomic_write_text(
+        LAST_SENT_FILE, json.dumps(payload, separators=(",", ":")) + "\n"
+    )
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write *content* to *path* through a sibling tempfile and ``os.replace``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "version": _CURSOR_VERSION,
-                    "activity_at": cursor.activity_at.isoformat().replace(
-                        "+00:00", "Z"
-                    ),
-                    "id": cursor.notification_id,
-                },
-                f,
-                separators=(",", ":"),
-            )
-            f.write("\n")
-        os.replace(tmp_path, LAST_SENT_FILE)
+            f.write(content)
+        os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
