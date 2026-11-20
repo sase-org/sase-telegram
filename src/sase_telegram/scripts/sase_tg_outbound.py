@@ -13,8 +13,8 @@ from typing import Any
 
 from sase.notification_gates.registry import PRIVILEGED_GATE_ACTIONS
 
-from sase_telegram import pending_actions, rate_limit
-from sase_telegram.credentials import get_chat_id
+from sase_telegram import degraded, pending_actions, rate_limit
+from sase_telegram.credentials import TelegramCredentialError, get_chat_id
 from sase_telegram.formatting import display_safe_stem, format_notification
 from sase_telegram.outbound import (
     clear_partial_delivery,
@@ -85,6 +85,14 @@ def _record_partial_delivery(n: Any, text: str, delivered: int) -> None:
         delivered,
         delivered + 1,
     )
+
+
+def _log_send_failure(message: str, exc: BaseException, *args: object) -> None:
+    """Log a failed Telegram call: one line when transient, else a traceback."""
+    if degraded.classify_failure(exc) is None:
+        log.warning(message, *args, exc_info=True)
+    else:
+        log.warning(message + ": %s", *args, degraded.describe_failure(exc))
 
 
 def get_sase_directory(name: str) -> str:
@@ -263,11 +271,9 @@ def _send_media_with_document_fallback(
     """Send inline media, retrying as a document if Telegram rejects it."""
     try:
         send_media(chat_id, file_path, *args, **kwargs)
-    except Exception:
-        log.warning(
-            "Failed to send media %s inline; retrying as document",
-            file_path,
-            exc_info=True,
+    except Exception as exc:
+        _log_send_failure(
+            "Failed to send media %s inline; retrying as document", exc, file_path
         )
         send_document(chat_id, file_path)
 
@@ -437,6 +443,7 @@ def _print_outbound_summary(
     attachment_failures: int = 0,
     high_water_updates: int = 0,
     notification_ids: str = "-",
+    degraded_state: str | None = None,
 ) -> None:
     parts = [
         "tg_outbound:",
@@ -452,6 +459,8 @@ def _print_outbound_summary(
     ]
     if reason:
         parts.append(f"reason={reason}")
+    if degraded_state:
+        parts.append(f"degraded={degraded_state}")
     print(" ".join(parts))
 
 
@@ -503,7 +512,22 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
     log.info("Sending %d notification(s)", len(notifications))
     _log_send_diagnostics(notifications)
 
-    chat_id = get_chat_id() if not args.dry_run else "DRY_RUN"
+    tracker = degraded.DegradedTracker(degraded.OUTBOUND)
+    if args.dry_run:
+        chat_id = "DRY_RUN"
+    else:
+        try:
+            chat_id = get_chat_id()
+        except TelegramCredentialError as exc:
+            tracker.record_failure(degraded.CREDENTIAL_UNAVAILABLE, exc)
+            _print_outbound_summary(
+                reason=degraded.CREDENTIAL_UNAVAILABLE,
+                pending_actions_cleaned=pending_actions_cleaned,
+                unsent_count=len(notifications),
+                notification_ids=_short_notification_ids(notifications),
+                degraded_state=degraded.CREDENTIAL_UNAVAILABLE,
+            )
+            return 0
     sent_count = 0
     dry_run_count = 0
     failed_count = 0
@@ -512,6 +536,14 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
     high_water_updates = 0
 
     for n in notifications:
+        if degraded.skip_outbound_delivery(n):
+            # Never deliver the outbound's own degraded notice (or a settled
+            # receiver notice) through the channel it reports on. Every
+            # earlier notification was delivered, so advancing past it is safe.
+            mark_sent([n])
+            high_water_updates += 1
+            continue
+
         # Check rate limit before sending
         if not args.dry_run and not rate_limit.check_rate_limit():
             wait = rate_limit.wait_time()
@@ -568,14 +600,22 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
             delivered = delivered_chunks(exc)
             if msg is None and delivered is not None and delivered > start_chunk:
                 _record_partial_delivery(n, text, delivered)
-            log.warning(
-                "Failed to send notification %s to Telegram",
-                n.id[:8],
-                exc_info=True,
-            )
+            state = degraded.classify_failure(exc)
+            if state is None:
+                log.warning(
+                    "Failed to send notification %s to Telegram",
+                    n.id[:8],
+                    exc_info=True,
+                )
+            else:
+                # Known outage: one line on entering the state, then periodic
+                # summaries -- never a traceback per tick.
+                tracker.record_failure(state, exc)
 
         if msg is None:
             break
+        # Telegram accepted the message, so any recorded outage is over.
+        tracker.record_success()
 
         # Save pending action IMMEDIATELY after send so the inbound
         # chop can find it when the user taps a button.  Previously
@@ -695,13 +735,13 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                 else:
                     _send_document_with_display_filename(chat_id, actual_path)
                 rate_limit.record_send()
-            except Exception:
+            except Exception as exc:
                 attachment_failures += 1
-                log.warning(
+                _log_send_failure(
                     "Failed to send attachment %s for notification %s",
+                    exc,
                     file_path,
                     n.id[:8],
-                    exc_info=True,
                 )
 
         # Fallback: send diff files separately if not embedded
@@ -710,13 +750,13 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                 try:
                     _send_document_with_display_filename(chat_id, dp)
                     rate_limit.record_send()
-                except Exception:
+                except Exception as exc:
                     attachment_failures += 1
-                    log.warning(
+                    _log_send_failure(
                         "Failed to send diff %s for notification %s",
+                        exc,
                         dp,
                         n.id[:8],
-                        exc_info=True,
                     )
 
         for p in pdf_temps + response_temps:
@@ -733,8 +773,14 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
         attachment_failures=attachment_failures,
         high_water_updates=high_water_updates,
         notification_ids=_short_notification_ids(notifications),
+        degraded_state=_current_degraded_state(tracker) if failed_count else None,
     )
     return 0
+
+
+def _current_degraded_state(tracker: degraded.DegradedTracker) -> str | None:
+    record = tracker.current()
+    return record.state if record is not None else None
 
 
 if __name__ == "__main__":

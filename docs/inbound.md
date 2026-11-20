@@ -62,7 +62,7 @@ is missing the receiver logs an error, upserts one deduped `telegram` notificati
 Telegram keeps unfetched updates for redelivery after the fix and the service host
 applies its `restart: on-failure` backoff instead of showing a healthy receiver. When
 the bot token cannot be resolved (for example `gpg-agent` is not yet usable after
-login), the receiver logs a warning and exits `75` (EX_TEMPFAIL) without polling, so
+login), the receiver exits `75` (EX_TEMPFAIL) without polling, so
 the service host retries with capped backoff until the credential resolves instead of
 ending the episode as a clean exit. The
 receiver does not inherit AXE routine `env:` under the service host: set both
@@ -89,6 +89,20 @@ can replace it. A disabled Telegram exits `0` and does not loop: the service hos
 parks the proc as given up, so after `~/.sase/telegram_is_enabled` comes back, revive
 it with `sase service proc start telegram_receiver` (or restart the host). A missing
 bot token exits `75` and retries with backoff instead.
+
+Credential and network outages collapse into one persisted degraded state in
+`~/.sase/telegram/degraded_receiver.json`, which survives the restarts above. An
+unresolvable bot token enters `credential_unavailable`; a poll that fails with
+`TimedOut` or `NetworkError` (including 5xx Bad Gateway, but never `BadRequest`) after
+the client's own retries enters `network_degraded`. Entering a state logs one WARNING
+line without a traceback and raises one SASE notification from sender `telegram` with
+the dedup key `telegram-degraded:receiver:<state>`. Further failures are counted and
+summarized at most once per 15 minutes. Recovery logs one INFO line and settles the
+notice (a `recovered after …` note, then dismissed): a resolved token clears
+`credential_unavailable`, and a successful poll clears either state. A transient
+housekeeping failure logs one line without becoming a state; unexpected poll or
+housekeeping errors keep their tracebacks. Outbound delivers an open receiver notice
+to Telegram like any other notification and skips it once it is settled.
 
 Adopting the receiver on an existing installation needs no manual config edit: the first
 tick after upgrading calls `ensure_receiver_running` exactly like every later one.

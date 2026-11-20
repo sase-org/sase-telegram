@@ -13,7 +13,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from sase_telegram import credentials, pending_actions, telegram_client
+from sase_telegram import credentials, degraded, pending_actions, telegram_client
 from sase_telegram.credentials import TelegramCredentialError
 from sase_telegram.enabled import is_telegram_enabled
 from sase_telegram.receiver import canonical_receiver_argv, ensure_receiver_running
@@ -458,6 +458,7 @@ def _run_receiver() -> int:
         _RECEIVER_POLL_TIMEOUT_SECONDS,
         baseline.digest,
     )
+    tracker = degraded.DegradedTracker(degraded.RECEIVER)
     while True:
         if not is_telegram_enabled():
             log.info("Telegram disabled; receiver exiting")
@@ -465,8 +466,12 @@ def _run_receiver() -> int:
         try:
             credentials.get_bot_token()
         except TelegramCredentialError as exc:
-            log.warning("Telegram credentials unavailable; receiver retrying: %s", exc)
+            # The service host restarts the receiver after this exit, so the
+            # persisted state keeps a long outage to one WARNING plus
+            # periodic summaries instead of one line per restart.
+            tracker.record_failure(degraded.CREDENTIAL_UNAVAILABLE, exc)
             return _RECEIVER_CREDENTIALS_UNAVAILABLE_EXIT_CODE
+        tracker.record_success(states=(degraded.CREDENTIAL_UNAVAILABLE,))
         try:
             credentials.get_chat_id()
         except TelegramCredentialError as exc:
@@ -490,10 +495,8 @@ def _run_receiver() -> int:
                     )
                 else:
                     stale_count, ready_completions_sent = 0, 0
-        except Exception:
-            log.warning(
-                "Receiver pre-poll housekeeping failed; continuing", exc_info=True
-            )
+        except Exception as exc:
+            _log_housekeeping_failure("pre-poll", exc)
             stale_count, ready_completions_sent = 0, 0
         offset = get_last_offset()
         try:
@@ -505,10 +508,11 @@ def _run_receiver() -> int:
             poll_timeout = _RECEIVER_POLL_TIMEOUT_SECONDS
         try:
             updates = telegram_client.get_updates(offset=offset, timeout=poll_timeout)
-        except Exception:
-            log.warning("Receiver poll failed; retrying", exc_info=True)
+        except Exception as exc:
+            _log_receiver_failure(tracker, "Receiver poll failed; retrying", exc)
             time.sleep(_RECEIVER_ERROR_BACKOFF_SECONDS)
             continue
+        tracker.record_success()
 
         if _runtime_requires_refresh(baseline):
             if updates:
@@ -527,10 +531,8 @@ def _run_receiver() -> int:
                     handled_count = _run_post_poll_cleanup()
                 else:
                     handled_count = 0
-        except Exception:
-            log.warning(
-                "Receiver post-poll housekeeping failed; continuing", exc_info=True
-            )
+        except Exception as exc:
+            _log_housekeeping_failure("post-poll", exc)
             handled_count = 0
         if result.updates:
             _print_inbound_summary(
@@ -546,6 +548,35 @@ def _run_receiver() -> int:
                 pending_actions_cleaned=stale_count + handled_count,
                 reason=None,
             )
+
+
+def _log_receiver_failure(
+    tracker: degraded.DegradedTracker, message: str, exc: BaseException
+) -> None:
+    """Fold a known outage into the receiver's degraded state, else log it.
+
+    Credential and network failures are counted by *tracker* (one line on
+    entering the state, then periodic summaries); anything unexpected keeps
+    its traceback.
+    """
+    state = degraded.classify_failure(exc)
+    if state is None:
+        log.warning(message, exc_info=True)
+    else:
+        tracker.record_failure(state, exc)
+
+
+def _log_housekeeping_failure(phase: str, exc: BaseException) -> None:
+    """Log a failed housekeeping pass: one line when transient, else a traceback.
+
+    Only the poll drives the degraded state; a housekeeping send that times
+    out right before a successful poll must not open and settle a notice.
+    """
+    message = f"Receiver {phase} housekeeping failed; continuing"
+    if degraded.classify_failure(exc) is None:
+        log.warning(message, exc_info=True)
+    else:
+        log.warning("%s: %s", message, degraded.describe_failure(exc))
 
 
 def _runtime_requires_refresh(baseline: RuntimeGeneration) -> bool:

@@ -1,5 +1,6 @@
 """Tests for credential retrieval functions."""
 
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from sase_telegram import credentials
 from sase_telegram.credentials import (
     TelegramCredentialError,
     get_bot_token,
@@ -138,6 +140,141 @@ class TestGetBotToken:
         )
         assert "create ~/.sase/telegram_bot_token" in str(exc.value)
         assert "pass executable was not found" in str(exc.value)
+
+
+class TestBotTokenNegativeCache:
+    """A failed ``pass`` lookup is remembered across processes for a short window."""
+
+    @staticmethod
+    def _failing_pass() -> subprocess.CalledProcessError:
+        return subprocess.CalledProcessError(
+            2,
+            ["pass"],
+            stderr="gpg: public key decryption failed: No such file or directory\n",
+        )
+
+    @staticmethod
+    def _fresh_process() -> None:
+        # The outbound job is a new process every tick: nothing in memory.
+        get_bot_token.cache_clear()
+
+    def _no_env_or_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _point_home(monkeypatch, tmp_path)
+        monkeypatch.delenv("SASE_TELEGRAM_BOT_TOKEN", raising=False)
+
+    def test_failure_is_not_rerun_within_the_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        with patch(
+            "sase_telegram.credentials.subprocess.run",
+            side_effect=self._failing_pass(),
+        ) as mock_run:
+            for _tick in range(5):
+                self._fresh_process()
+                with pytest.raises(TelegramCredentialError) as exc:
+                    get_bot_token()
+                assert "gpg: public key decryption failed" in str(exc.value)
+                assert "~/.sase/telegram_bot_token does not exist" in str(exc.value)
+
+        mock_run.assert_called_once()
+
+    def test_token_from_pass_is_picked_up_after_the_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        now = [1_000.0]
+        monkeypatch.setattr("sase_telegram.credentials.time.time", lambda: now[0])
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="tok\n")
+        with patch(
+            "sase_telegram.credentials.subprocess.run",
+            side_effect=[self._failing_pass(), ok],
+        ) as mock_run:
+            with pytest.raises(TelegramCredentialError):
+                get_bot_token()
+
+            now[0] += credentials.BOT_TOKEN_NEGATIVE_CACHE_SECONDS - 1
+            self._fresh_process()
+            with pytest.raises(TelegramCredentialError):
+                get_bot_token()
+            assert mock_run.call_count == 1
+
+            now[0] += 1
+            self._fresh_process()
+            assert get_bot_token() == "tok"
+
+        assert mock_run.call_count == 2
+        # Success forgets the failure.
+        assert not credentials.bot_token_negative_cache_path().exists()
+
+    def test_env_token_is_used_immediately_despite_a_cached_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        with patch(
+            "sase_telegram.credentials.subprocess.run",
+            side_effect=self._failing_pass(),
+        ):
+            with pytest.raises(TelegramCredentialError):
+                get_bot_token()
+
+        monkeypatch.setenv("SASE_TELEGRAM_BOT_TOKEN", "env-token")
+        self._fresh_process()
+        assert get_bot_token() == "env-token"
+
+    def test_token_file_is_used_immediately_despite_a_cached_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        with patch(
+            "sase_telegram.credentials.subprocess.run",
+            side_effect=self._failing_pass(),
+        ):
+            with pytest.raises(TelegramCredentialError):
+                get_bot_token()
+
+        token_file = tmp_path / ".sase" / "telegram_bot_token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text("file-token\n", encoding="utf-8")
+        token_file.chmod(0o600)
+        self._fresh_process()
+        assert get_bot_token() == "file-token"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "{broken",
+            json.dumps({"version": 99, "failed_at": 0, "pass_failures": ["x"]}),
+            json.dumps({"version": 1, "failed_at": "soon", "pass_failures": ["x"]}),
+            json.dumps({"version": 1, "failed_at": 0, "pass_failures": [1]}),
+        ],
+    )
+    def test_unusable_cache_record_is_ignored(
+        self, raw: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        cache = credentials.bot_token_negative_cache_path()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(raw, encoding="utf-8")
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="tok\n")
+        with patch("sase_telegram.credentials.subprocess.run", return_value=ok):
+            assert get_bot_token() == "tok"
+
+    def test_record_from_the_future_counts_as_expired(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_env_or_file(tmp_path, monkeypatch)
+        cache = credentials.bot_token_negative_cache_path()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(
+            json.dumps(
+                {"version": 1, "failed_at": 4_000_000_000.0, "pass_failures": ["x"]}
+            ),
+            encoding="utf-8",
+        )
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="tok\n")
+        with patch("sase_telegram.credentials.subprocess.run", return_value=ok):
+            assert get_bot_token() == "tok"
 
 
 class TestGetChatId:

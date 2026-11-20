@@ -28,6 +28,13 @@ def outbound_main(*args: Any, **kwargs: Any) -> int:
 
 
 def _run_cleanly(main: Callable[..., int], *args: Any, **kwargs: Any) -> int:
+    """Run *main*, turning an escaped credential error into one stderr line.
+
+    The scheduled outbound job and the long-poll receiver fold credential
+    failures into their persisted degraded state (``sase_telegram.degraded``)
+    and never reach this path; it is the last resort for one-shot runs such
+    as ``sase_job_tg_inbound --once``, where every failure should print.
+    """
     try:
         return main(*args, **kwargs)
     except TelegramCredentialError as exc:

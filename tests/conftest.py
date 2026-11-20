@@ -147,3 +147,40 @@ def _isolate_git_remote_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sase.service.ssh_agent.probe_git_remote_auth", lambda _env: "unknown"
     )
+
+
+@pytest.fixture(autouse=True)
+def degraded_notices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> list[tuple[str, ...]]:
+    """Keep degraded-state tracking off the live machine.
+
+    Every failing outbound send or receiver poll records a degraded state
+    under ``~/.sase/telegram`` and raises or settles a SASE notification, and
+    every failed token lookup writes the negative-cache file. Redirect the
+    state files into ``tmp_path`` and record notice calls instead of writing
+    the real notification store. Tests that exercise the store-backed notice
+    path patch the store functions themselves.
+    """
+    import sase_telegram.credentials as _credentials
+    import sase_telegram.degraded as _degraded
+
+    monkeypatch.setattr(_degraded, "STATE_DIR", tmp_path / "telegram-degraded")
+    monkeypatch.setattr(
+        _credentials,
+        "bot_token_negative_cache_path",
+        lambda: tmp_path / "telegram-degraded" / "bot_token_unavailable.json",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def _raise(component: str, _label: str, record: object) -> str:
+        notice_id = f"notice-{len(calls)}"
+        calls.append(("raise", component, getattr(record, "state", ""), notice_id))
+        return notice_id
+
+    def _settle(notice_id: str, note: str) -> None:
+        calls.append(("settle", notice_id, note))
+
+    monkeypatch.setattr(_degraded, "_raise_notice", _raise)
+    monkeypatch.setattr(_degraded, "_settle_notice", _settle)
+    return calls

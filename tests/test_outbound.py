@@ -1661,3 +1661,207 @@ class TestRunOutboundPartialDelivery:
 
         assert self._sent_texts(bot) == chunks
         assert not _partial_delivery_file().exists()
+
+
+class TestRunOutboundDegradedState:
+    """Credential and network outages collapse into one degraded state."""
+
+    @pytest.fixture
+    def bot(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        from sase_telegram import telegram_client
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1))
+        monkeypatch.setattr(telegram_client, "_get_bot", lambda: bot)
+        monkeypatch.setattr(telegram_client.time, "sleep", lambda _s: None)
+        return bot
+
+    @staticmethod
+    def _tick(
+        notifications: list[Notification],
+        *,
+        chat_id: object = "chat-1",
+    ) -> MagicMock:
+        get_chat_id = (
+            MagicMock(side_effect=chat_id)
+            if isinstance(chat_id, BaseException)
+            else MagicMock(return_value=chat_id)
+        )
+        with (
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.get_unsent_notifications",
+                return_value=notifications,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.get_chat_id", get_chat_id),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.rate_limit.check_rate_limit",
+                return_value=True,
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.rate_limit.record_send"),
+            patch(
+                "sase_telegram.scripts.sase_tg_outbound.format_notification",
+                side_effect=lambda n: (f"text {n.id[:8]}", None, []),
+            ),
+            patch("sase_telegram.scripts.sase_tg_outbound.mark_sent") as mark_sent,
+        ):
+            assert _run_outbound(argparse.Namespace(dry_run=False)) == 0
+        return mark_sent
+
+    @staticmethod
+    def _outbound_records(
+        caplog: pytest.LogCaptureFixture,
+    ) -> list[object]:
+        return [
+            r
+            for r in caplog.records
+            if r.name.startswith("sase_telegram") and r.levelno >= 30
+        ]
+
+    def test_repeated_credential_failures_notify_once_without_tracebacks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        degraded_notices: list[tuple[str, ...]],
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sase_telegram import telegram_client
+        from sase_telegram.credentials import TelegramCredentialError
+        from sase_telegram.degraded import DegradedTracker
+
+        def _no_bot() -> None:
+            raise TelegramCredentialError("gpg: public key decryption failed")
+
+        monkeypatch.setattr(telegram_client, "_get_bot", _no_bot)
+        n = _make_notification()
+
+        with caplog.at_level("INFO"):
+            for _tick in range(50):
+                mark_sent = self._tick([n])
+                mark_sent.assert_not_called()
+
+        assert [call[0] for call in degraded_notices] == ["raise"]
+        warnings = self._outbound_records(caplog)
+        assert len(warnings) == 1
+        assert "Telegram outbound entered credential_unavailable" in (
+            warnings[0].getMessage()  # type: ignore[attr-defined]
+        )
+        assert "Traceback" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+        record = DegradedTracker("outbound").current()
+        assert record is not None and record.count == 50
+        assert "degraded=credential_unavailable" in capsys.readouterr().out
+
+    def test_missing_chat_id_is_tracked_and_exits_zero(
+        self,
+        degraded_notices: list[tuple[str, ...]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from sase_telegram.credentials import TelegramCredentialError
+        from sase_telegram.degraded import DegradedTracker
+
+        error = TelegramCredentialError("SASE_TELEGRAM_BOT_CHAT_ID is not set")
+        for _tick in range(3):
+            self._tick([_make_notification()], chat_id=error)
+
+        out = capsys.readouterr().out
+        assert out.count("reason=credential_unavailable") == 3
+        assert "unsent=1" in out
+        assert [call[0] for call in degraded_notices] == ["raise"]
+        record = DegradedTracker("outbound").current()
+        assert record is not None and record.count == 3
+
+    def test_timeouts_log_no_traceback_and_recovery_settles_the_notice(
+        self,
+        bot: MagicMock,
+        degraded_notices: list[tuple[str, ...]],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from telegram.error import TimedOut
+
+        from sase_telegram.degraded import DegradedTracker
+
+        n = _make_notification()
+        bot.send_message.side_effect = TimedOut()
+        with caplog.at_level("INFO"):
+            self._tick([n])
+            self._tick([n])
+
+        assert "Traceback" not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+        assert "Telegram outbound entered network_degraded: TimedOut" in caplog.text
+        # The per-attempt retry lines no longer reach WARNING.
+        assert "Transient Telegram error" not in caplog.text
+        assert bot.send_message.await_count == 8
+
+        caplog.clear()
+        bot.send_message.side_effect = None
+        with caplog.at_level("INFO"):
+            mark_sent = self._tick([n])
+
+        mark_sent.assert_called_once()
+        recovered = [r for r in caplog.records if "recovered from" in r.getMessage()]
+        assert len(recovered) == 1
+        assert recovered[0].levelname == "INFO"
+        assert "(2 failures)" in recovered[0].getMessage()
+        assert [call[0] for call in degraded_notices] == ["raise", "settle"]
+        assert DegradedTracker("outbound").current() is None
+
+    def test_unexpected_failure_keeps_its_traceback(
+        self,
+        bot: MagicMock,
+        degraded_notices: list[tuple[str, ...]],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from telegram.error import Forbidden
+
+        from sase_telegram.degraded import DegradedTracker
+
+        bot.send_message.side_effect = Forbidden("bot was blocked by the user")
+        with caplog.at_level("WARNING"):
+            self._tick([_make_notification()])
+
+        (failure,) = [r for r in caplog.records if "Failed to send" in r.getMessage()]
+        assert failure.exc_info is not None
+        assert degraded_notices == []
+        assert DegradedTracker("outbound").current() is None
+
+    def test_own_degraded_notice_is_never_delivered(
+        self,
+        bot: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from telegram.error import TimedOut
+
+        from sase_telegram.degraded import (
+            NETWORK_DEGRADED,
+            OUTBOUND,
+            DegradedTracker,
+            notice_dedup_key,
+        )
+
+        DegradedTracker(OUTBOUND).record_failure(NETWORK_DEGRADED, TimedOut())
+        notice = _make_notification(id="notice00-0000-0000-0000-000000000000")
+        notice.sender = "telegram"
+        notice.dedup_key = notice_dedup_key(OUTBOUND, NETWORK_DEGRADED)
+        later = _make_notification(id="later000-0000-0000-0000-000000000000")
+
+        # Degraded: the notice is skipped without a send, then the real
+        # notification still fails and stops the tick.
+        bot.send_message.side_effect = TimedOut()
+        mark_sent = self._tick([notice, later])
+        assert [c.kwargs["text"] for c in bot.send_message.await_args_list] == [
+            "text later000"
+        ] * 4
+        assert [c.args[0][0].id for c in mark_sent.call_args_list] == [notice.id]
+
+        # Recovered: still never delivered, and the cursor keeps advancing.
+        bot.send_message.reset_mock()
+        bot.send_message.side_effect = None
+        mark_sent = self._tick([notice, later])
+        assert [c.kwargs["text"] for c in bot.send_message.await_args_list] == [
+            "text later000"
+        ]
+        assert [c.args[0][0].id for c in mark_sent.call_args_list] == [
+            notice.id,
+            later.id,
+        ]

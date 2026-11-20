@@ -51,6 +51,29 @@ formatted text. The cursor does not advance, so the next run picks the same noti
 undelivered chunk. If the notification's formatted text changed in between, it is sent again from the start. The record
 is cleared after the next successful send.
 
+## Degraded States
+
+Outbound folds credential and network outages into one persisted state in `~/.sase/telegram/degraded_outbound.json`
+instead of logging a traceback per failed tick:
+
+| State                    | Raised by                                                                  |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `credential_unavailable` | `TelegramCredentialError`: the bot token or chat id cannot be resolved     |
+| `network_degraded`       | `TimedOut` or `NetworkError`, including 5xx Bad Gateway (not `BadRequest`) |
+
+- **Entering** a state logs one WARNING line without a traceback and raises one SASE notification from sender
+  `telegram` with the stable dedup key `telegram-degraded:outbound:<state>`. Moving to the other state settles the old
+  notice and raises a new one.
+- **While degraded**, each further failure only updates the state's count and `last_seen`; at most one summary line per
+  15 minutes reports how many failures were suppressed.
+- **Recovery** -- the next successful send -- logs one INFO line with the outage's duration and failure count, adds a
+  `recovered after …` note to the notice, and dismisses it.
+- Outbound never delivers its own degraded notices, and it skips a receiver degraded notice once recovery has settled
+  it. A missing chat id counts as `credential_unavailable` and exits `0` with `reason=credential_unavailable`; a
+  tick that failed while degraded appends `degraded=<state>` to its summary line.
+- Unexpected errors (for example `Forbidden` or a non-parse `BadRequest`) still log their traceback. Retry attempts
+  inside the client log at DEBUG, so an outage costs one line on entry, not three retry warnings per tick.
+
 ## Delivery Cursor
 
 `~/.sase/telegram/last_sent_ts` holds a versioned JSON cursor written atomically through a tempfile and `os.replace`:

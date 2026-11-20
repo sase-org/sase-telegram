@@ -122,6 +122,10 @@ Bot token sources are checked in order:
 | `~/.sase/telegram_bot_token`        | Bot token file; must not be group/other-readable |
 | `pass show telegram_sase_bot_token` | Bot token from `pass`                            |
 
+A failed lookup is remembered for 60 seconds in `~/.sase/telegram/bot_token_unavailable.json`, so a broken
+`pass`/gpg setup is not rerun on every five-second outbound tick. The env var and token file are still checked on
+every call; a token that starts resolving through `pass` is picked up once the 60-second window expires.
+
 The chat target and bot username are required separately:
 
 | Source                       | Description                 |
@@ -276,6 +280,8 @@ State files are stored under `~/.sase/telegram/`:
 | `media_groups.json`         | Staged Telegram photo/image-document albums waiting for the quiet window |
 | `last_sent_ts`              | Versioned `(activity_at, id)` high-water cursor for outbound notifications |
 | `partial_delivery.json`     | Delivered-chunk count of a notification that failed part-way, for resume |
+| `degraded_outbound.json`, `degraded_receiver.json` | Current `credential_unavailable` or `network_degraded` state (entered time, last failure, count); `.lock` siblings serialize updates |
+| `bot_token_unavailable.json` | Recent failed `pass` token lookup, reused for 60 seconds |
 | `outbound.lock`             | Exclusive lock for outbound process           |
 | `outbound_debug.log`        | Diagnostic log for outbound sends             |
 | `commands_registered_ts`    | Cached timestamp and fingerprint for Telegram slash command registration |
@@ -309,6 +315,7 @@ src/sase_telegram/
 ├── callback_data.py         # Encode/decode inline keyboard callback data (64-byte limit)
 ├── custom_commands.py       # Config loading, subprocess execution, and stdout metadata
 ├── credentials.py           # Bot token sources, chat ID, and username
+├── degraded.py              # Persisted credential/network outage states, one notice per transition
 ├── agent_format.py          # Shared pure HTML formatting for agent list/detail views
 ├── usage_format.py          # Pure HTML rendering for /usage windows
 ├── show_entities.py         # /show reference resolution and kinship index models

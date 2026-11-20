@@ -71,7 +71,11 @@ def _with_retry(fn: Callable[..., Any]) -> Callable[..., Any]:
                 if attempt == _MAX_RETRIES:
                     raise
                 wait = _RETRY_BACKOFF_BASE * (attempt + 1)
-                log.warning(
+                # DEBUG, not WARNING: a retry that succeeds is not news, and
+                # one that is exhausted reaches the caller, whose degraded
+                # state tracking (sase_telegram.degraded) reports outages
+                # once per transition instead of three lines per send.
+                log.debug(
                     "Transient Telegram error (%s), retrying in %.1fs (attempt %d/%d)",
                     type(e).__name__,
                     wait,

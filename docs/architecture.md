@@ -23,7 +23,10 @@ rate_limit.py          receiver_runtime.py
   Sliding-window throttle  Installed SASE/plugin/native generation fingerprint
      │
 credentials.py
-  Bot token (pass) + env vars
+  Bot token (pass, 60 s negative cache) + env vars
+     │
+degraded.py
+  Persisted credential/network outage states + notices
      │
 callback_data.py
   64-byte encoded callback payloads
@@ -95,5 +98,11 @@ pdf_convert.py
 - **Per-chunk retries**: A message longer than 4096 characters is split, and each chunk is retried on its own (up to 4
   attempts with 2, 4, and 6 s backoff for timeouts and network errors). A delivered chunk is never resent, and only the
   last chunk carries the inline keyboard.
+- **Degraded states**: `degraded.py` classifies credential failures as `credential_unavailable` and timeouts and
+  network errors as `network_degraded`, and persists one state per component (`degraded_outbound.json`,
+  `degraded_receiver.json`) because outbound is a fresh process every tick and the receiver restarts after a
+  credential exit. Each transition logs one line and raises or settles one SASE notification; repeats are summarized
+  every 15 minutes. `credentials.py` remembers a failed `pass` lookup for 60 seconds in
+  `bot_token_unavailable.json`.
 - **Shared PDF rendering**: `pdf_convert.py` delegates Markdown-to-PDF rendering to SASE's shared attachment renderer
   and applies the plugin stylesheet.
