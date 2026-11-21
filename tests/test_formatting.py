@@ -1328,6 +1328,47 @@ class TestFormatWorkflowComplete:
         assert keyboard is None
         assert attachments == []
 
+    def test_resolves_oversized_prompt_before_building_fork_action(self, monkeypatch):
+        full_prompt = "work " * 500 + "\n#gh:sase continue the work"
+        n = _make_notification(
+            action="JumpToAgent",
+            sender="user-agent",
+            notes=["Agent completed: my-workflow"],
+            action_data={
+                "agent_name": "sase_agent",
+                "cl_name": "sase_project",
+                "prompt": "sase-notification-blob:v1:deadbeef:20000",
+            },
+        )
+        captured: dict[str, str | None] = {}
+
+        def resolved_action_data(_path, action_data):
+            return {**action_data, "prompt": full_prompt}
+
+        def build_fork_copy_text(
+            agent_name, *, prompt=None, cl_name=None, vcs_tag=None
+        ):
+            captured["prompt"] = prompt
+            return "full-prompt-copy"
+
+        monkeypatch.setattr(
+            "sase.notifications.payloads.resolve_notification_action_data",
+            resolved_action_data,
+        )
+        monkeypatch.setattr(
+            "sase.notifications.payloads.resolve_notification_notes",
+            lambda _path, notes: list(notes),
+        )
+        monkeypatch.setattr(formatting, "build_fork_copy_text", build_fork_copy_text)
+
+        text, keyboard, _ = format_notification(n)
+
+        assert "sase-notification-blob:v1:" not in text
+        assert captured["prompt"] == full_prompt
+        assert keyboard is not None
+        assert keyboard.inline_keyboard[0][0].copy_text is not None
+        assert keyboard.inline_keyboard[0][0].copy_text.text == "full-prompt-copy"
+
     def test_includes_agent_name(self):
         n = _make_notification(
             sender="user-agent",

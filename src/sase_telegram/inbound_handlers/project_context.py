@@ -182,17 +182,48 @@ def _iter_pending_prompts(chat_id: str | None = None) -> list[str]:
         if chat_id is not None and _pending_action_chat_id(action) != chat_id:
             continue
 
-        prompt = action.get("prompt")
-        if isinstance(prompt, str) and prompt.strip():
+        prompt = _read_pending_prompt(action.get("prompt"), action.get("prompt_path"))
+        if prompt:
             prompts.append(prompt)
 
         action_data = action.get("action_data")
         if isinstance(action_data, dict):
-            nested_prompt = action_data.get("prompt")
-            if isinstance(nested_prompt, str) and nested_prompt.strip():
+            nested_prompt = _read_pending_prompt(
+                action_data.get("prompt"), action_data.get("prompt_path")
+            )
+            if nested_prompt:
                 prompts.append(nested_prompt)
 
     return prompts
+
+
+def _read_pending_prompt(value: object, raw_path: object = None) -> str | None:
+    """Read a prompt saved inline, as a notification sidecar, or by path."""
+    if isinstance(value, str) and value.strip():
+        if value.startswith("sase-notification-blob:v1:"):
+            try:
+                from sase.notifications.payloads import resolve_notification_value
+                from sase.notifications.store import notifications_file_path
+
+                resolved = resolve_notification_value(notifications_file_path(), value)
+            except Exception:
+                log.warning(
+                    "Could not resolve a pending Telegram prompt sidecar",
+                    exc_info=True,
+                )
+                resolved = None
+            if isinstance(resolved, str) and resolved.strip():
+                return resolved
+        else:
+            return value
+
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    try:
+        prompt = Path(raw_path).expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return prompt if prompt.strip() else None
 
 
 def _workspace_from_project_file(project_file: Path) -> str | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence, Set
 from datetime import date
@@ -40,6 +41,8 @@ from sase_telegram.question_flow import (
     is_multi_select,
     load_question_request,
 )
+
+log = logging.getLogger(__name__)
 
 # Telegram message limit
 MAX_MESSAGE_LENGTH = 4096
@@ -2025,8 +2028,9 @@ def _format_workflow_complete(
 ) -> tuple[str, InlineKeyboardMarkup | None, list[str]]:
     from sase.llm_provider.registry import format_provider_model_label
 
-    notes_text = _format_notes_text(n.notes)
-    agent_name = n.action_data.get("agent_name")
+    action_data, notes = _resolved_completion_values(n)
+    notes_text = _format_notes_text(notes)
+    agent_name = action_data.get("agent_name")
     has_diff = any(Path(f).suffix.lower() == ".diff" for f in n.files)
     if has_non_research_diff is not None:
         has_diff = has_non_research_diff
@@ -2038,8 +2042,8 @@ def _format_workflow_complete(
     icon = "".join(icon_parts)
     label = escape_markdown_v2(
         format_provider_model_label(
-            n.action_data.get("llm_provider"),
-            n.action_data.get("model"),
+            action_data.get("llm_provider"),
+            action_data.get("model"),
         )
     )
     if isinstance(agent_name, str) and agent_name:
@@ -2048,26 +2052,26 @@ def _format_workflow_complete(
     else:
         name_line = ""
     header = f"{icon} *{label} Complete*{name_line}"
-    bead_display = n.action_data.get("bead_display")
+    bead_display = action_data.get("bead_display")
     if isinstance(bead_display, str) and bead_display:
         header += (
             f"\n*Bead:* {escape_markdown_v2(display_cl_names_in_text(bead_display))}"
         )
-    runtime = n.action_data.get("runtime")
+    runtime = action_data.get("runtime")
     if runtime:
         header += f"\n*Runtime:* {escape_markdown_v2(runtime)}"
     text = f"{header}\n\n{notes_text}"
 
-    pr_url = n.action_data.get("pr_url")
+    pr_url = action_data.get("pr_url")
     if pr_url:
         escaped_url = escape_markdown_v2(pr_url)
         text += f"\n\n🔗 *PR:* {escaped_url}"
 
-    output_variables_section = _format_output_variables_section(n.action_data)
+    output_variables_section = _format_output_variables_section(action_data)
     if output_variables_section:
         text += f"\n\n{output_variables_section}"
 
-    prompt = n.action_data.get("prompt")
+    prompt = _completion_prompt(action_data)
     if isinstance(prompt, str) and prompt:
         display_prompt = display_cl_names_in_text(prompt)
         truncated = (
@@ -2083,11 +2087,10 @@ def _format_workflow_complete(
     attachments = _select_workflow_complete_attachments(existing_attachments)
 
     keyboard: InlineKeyboardMarkup | None = None
-    raw_prompt = n.action_data.get("prompt")
     fork_text = build_fork_copy_text(
         agent_name,
-        prompt=raw_prompt if isinstance(raw_prompt, str) else None,
-        cl_name=n.action_data.get("cl_name"),
+        prompt=prompt,
+        cl_name=action_data.get("cl_name"),
     )
     if fork_text:
         keyboard = InlineKeyboardMarkup(
@@ -2102,6 +2105,68 @@ def _format_workflow_complete(
         )
 
     return text, keyboard, attachments
+
+
+def _resolved_completion_values(
+    notification: Notification,
+) -> tuple[dict[str, str], list[str]]:
+    """Resolve fields this completion message consumes from payload sidecars."""
+    if not any(
+        "sase-notification-blob:v1:" in value
+        for value in [*notification.action_data.values(), *notification.notes]
+    ):
+        return dict(notification.action_data), list(notification.notes)
+
+    from sase.notifications.payloads import (
+        resolve_notification_action_data,
+        resolve_notification_notes,
+    )
+    from sase.notifications.store import notifications_file_path
+
+    try:
+        path = notifications_file_path()
+        resolved_action_data = resolve_notification_action_data(
+            path, notification.action_data
+        )
+        resolved_notes = resolve_notification_notes(path, notification.notes)
+    except Exception:
+        log.warning(
+            "Could not resolve notification completion payloads",
+            exc_info=True,
+        )
+        return (
+            {
+                key: value
+                for key, value in notification.action_data.items()
+                if not value.startswith("sase-notification-blob:v1:")
+            },
+            list(notification.notes),
+        )
+
+    action_data = {
+        key: value
+        for key, value in resolved_action_data.items()
+        if isinstance(value, str)
+    }
+    notes = [
+        value if value is not None else original
+        for value, original in zip(resolved_notes, notification.notes, strict=True)
+    ]
+    return action_data, notes
+
+
+def _completion_prompt(action_data: dict[str, str]) -> str | None:
+    prompt = action_data.get("prompt")
+    if isinstance(prompt, str) and prompt:
+        return prompt
+
+    raw_path = action_data.get("prompt_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    try:
+        return Path(raw_path).expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _format_error_digest(
