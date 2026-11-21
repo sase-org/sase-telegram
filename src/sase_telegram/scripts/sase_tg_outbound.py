@@ -666,6 +666,15 @@ def _run_outbound(args: argparse.Namespace, *, pending_actions_cleaned: int = 0)
                         # Embed commit message into the response markdown
                         commit_message = n.action_data.get("commit_message")
                         if commit_message:
+                            from sase.notifications.payloads import (
+                                resolve_notification_value,
+                            )
+                            from sase.notifications.store import notifications_file_path
+
+                            commit_message = resolve_notification_value(
+                                notifications_file_path(), commit_message
+                            )
+                        if commit_message:
                             _prepend_commit_message_to_markdown(
                                 response_file, commit_message
                             )

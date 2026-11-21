@@ -1070,7 +1070,10 @@ class TestRunOutboundAttachments:
                 filename="sase_fix-260707.diff",
             )
 
-    def test_chat_pdf_embeds_full_commit_message_before_conversion(self):
+    @pytest.mark.parametrize("externalized", [False, True])
+    def test_chat_pdf_embeds_full_commit_message_before_conversion(
+        self, externalized, monkeypatch
+    ):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             chat_dir = tmp / "chats"
@@ -1080,7 +1083,7 @@ class TestRunOutboundAttachments:
             response_file = tmp / "response.md"
             response_file.write_text("# Response\n\nDone.", encoding="utf-8")
             response_pdf = tmp / "response.pdf"
-            full_message = "feat: add report\n\nInclude all body lines.\n\nMore detail."
+            full_message = "feat: add report\n\n" + "Include all body lines.\n" * 1000
             captured_markdown: list[str] = []
 
             notification = Notification(
@@ -1092,6 +1095,20 @@ class TestRunOutboundAttachments:
                 action="JumpToAgent",
                 action_data={"commit_message": full_message},
             )
+            if externalized:
+                from sase.notifications import store
+
+                monkeypatch.setattr(store, "NOTIFICATIONS_DIR", str(tmp / "notices"))
+                monkeypatch.setattr(
+                    store,
+                    "NOTIFICATIONS_FILE",
+                    str(tmp / "notices" / "notifications.jsonl"),
+                )
+                store.append_notification(notification)
+                notification = store.load_notifications()[0]
+                assert notification.action_data["commit_message"].startswith(
+                    "sase-notification-blob:v1:"
+                )
 
             def fake_md_to_pdf(path: str) -> str:
                 captured_markdown.append(Path(path).read_text(encoding="utf-8"))
