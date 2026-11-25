@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.30](https://github.com/sase-org/sase-telegram/compare/v0.4.29...v0.4.30) (2026-11-25)
+
+
+### Features
+
+* **telegram:** collapse credential and network outages into degraded states ([ceffb63](https://github.com/sase-org/sase-telegram/commit/ceffb630b71147ced05c77cce3a271563f58d23d))
+
+
+### Bug Fixes
+
+* **ci:** repair Telegram display test seam and schedule drift checks ([6c01cbb](https://github.com/sase-org/sase-telegram/commit/6c01cbbf8d16a0ee6a480d71b505b5e081503dfb))
+* **telegram:** fall back to plain text only on entity-parse errors and retry per chunk ([60a94ab](https://github.com/sase-org/sase-telegram/commit/60a94aba569c44752ed6b2d6e58ceb3e4d4ce590))
+* **telegram:** resolve notification sidecar payloads ([bffd4f6](https://github.com/sase-org/sase-telegram/commit/bffd4f6cf02992125d0229c9c8cf7ee44bb15e07))
+* **telegram:** resolve sidecar commit messages in attachments ([4f2939f](https://github.com/sase-org/sase-telegram/commit/4f2939fc20ab5bccfc2a0cc361672b7b49fccebd))
+
 ## [0.4.29](https://github.com/sase-org/sase-telegram/compare/v0.4.28...v0.4.29) (2026-10-11)
 
 
