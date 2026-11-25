@@ -4,6 +4,8 @@ from collections.abc import Iterator
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 from sase.env_contracts import WORKSPACE_PIN_ENV_VARS
@@ -11,6 +13,54 @@ from sase.feature_flags import SASE_FEATURE_FLAGS_ENV
 
 
 SASE_MODEL_ALIAS_OVERRIDES_ENV = "SASE_MODEL_ALIAS_OVERRIDES"
+
+if TYPE_CHECKING:
+    from sase.project_tags.catalog import ProjectTagCatalog
+
+
+@pytest.fixture()
+def _fake_tag_catalog() -> "Iterator[ProjectTagCatalog]":
+    """Warm the tag-catalog seams with a fake single-project catalog.
+
+    Routes catalog loads at a fake ``sase`` target (real core bindings,
+    so tag grammar and casefold resolution are genuine), warms the peek
+    snapshot the display humanizer reads, and provides a non-empty display
+    map so the humanizer reaches tagify. Uses the ``git`` workflow because
+    that is the workspace provider sase core ships itself. Everything is
+    restored afterwards so the cold-catalog ``#`` assertions elsewhere keep
+    passing. The display-map seam lives in
+    ``sase._project_display_labels`` (not the public
+    ``sase.project_display_names`` facade) because the humanizers resolve
+    ``cached_project_display_snapshot`` from that module's namespace.
+    """
+    import sase._project_display_labels as display_names_module
+    import sase.project_tags.catalog as tag_catalog_module
+    from sase.project_tags.catalog import ProjectTagCatalog, ProjectTagTarget
+
+    fake = ProjectTagCatalog(
+        targets=(
+            ProjectTagTarget(
+                key="sase",
+                name="sase",
+                tag="+sase",
+                workflow_type="git",
+                vcs_ref="#git:sase",
+                provider_display="Git (bare)",
+                state="enabled",
+            ),
+        ),
+        accent_palette=(),
+    )
+    with (
+        patch.object(tag_catalog_module, "load_project_tag_catalog", return_value=fake),
+        patch.object(tag_catalog_module, "peek_project_tag_catalog", return_value=fake),
+        patch.object(
+            display_names_module,
+            "cached_project_display_snapshot",
+            return_value={"sase": "sase"},
+        ),
+    ):
+        yield fake
 
 
 @pytest.fixture(autouse=True)

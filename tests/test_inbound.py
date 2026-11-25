@@ -2840,48 +2840,6 @@ class TestBuildPhotoPrompt:
         assert "respond to the user's request" in result
 
 
-@pytest.fixture()
-def _fake_tag_catalog():
-    """Warm the tag-catalog seams with a fake single-project catalog.
-
-    Routes catalog loads at a fake ``sase`` target (real core bindings, so
-    tag grammar and casefold resolution are genuine), warms the peek
-    snapshot the display humanizer reads, and provides a non-empty display
-    map so the humanizer reaches tagify. Uses the ``git`` workflow because
-    that is the workspace provider sase core ships itself. Everything is
-    restored afterwards so the cold-catalog ``#`` assertions elsewhere keep
-    passing.
-    """
-    import sase.project_display_names as display_names_module
-    import sase.project_tags.catalog as tag_catalog_module
-    from sase.project_tags.catalog import ProjectTagCatalog, ProjectTagTarget
-
-    fake = ProjectTagCatalog(
-        targets=(
-            ProjectTagTarget(
-                key="sase",
-                name="sase",
-                tag="+sase",
-                workflow_type="git",
-                vcs_ref="#git:sase",
-                provider_display="Git (bare)",
-                state="enabled",
-            ),
-        ),
-        accent_palette=(),
-    )
-    with (
-        patch.object(tag_catalog_module, "load_project_tag_catalog", return_value=fake),
-        patch.object(tag_catalog_module, "peek_project_tag_catalog", return_value=fake),
-        patch.object(
-            display_names_module,
-            "_project_display_name_map_cached",
-            return_value={"sase": "sase"},
-        ),
-    ):
-        yield fake
-
-
 class TestBeadProjectContext:
     """Tests for resolving the project context used by /bead."""
 
