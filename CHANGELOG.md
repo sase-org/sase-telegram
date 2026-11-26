@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.31](https://github.com/sase-org/sase-telegram/compare/v0.4.30...v0.4.31) (2026-11-26)
+
+
+### Features
+
+* **questions:** add Telegram copy buttons ([c99da27](https://github.com/sase-org/sase-telegram/commit/c99da27247cf4d1625827f5e31f7978163d31bf3))
+
 ## [0.4.30](https://github.com/sase-org/sase-telegram/compare/v0.4.29...v0.4.30) (2026-11-25)
 
 
