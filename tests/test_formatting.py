@@ -1222,6 +1222,122 @@ class TestFormatUserQuestion:
 
 
 class TestQuestionRenderingHelpers:
+    @staticmethod
+    def _copy_display(items, unavailable=0):
+        return SimpleNamespace(items=items, unavailable=unavailable)
+
+    @staticmethod
+    def _copy_item(text, label=None):
+        return SimpleNamespace(text=text, label=label)
+
+    def test_copy_buttons_are_added_after_answer_controls_and_packed_by_label(self, monkeypatch):
+        items = [
+            self._copy_item("/tmp/a", "A"),
+            self._copy_item("/tmp/b", "B"),
+            self._copy_item("/tmp/long", "This label is over twenty"),
+        ]
+        monkeypatch.setattr(
+            formatting,
+            "import_module",
+            lambda name: SimpleNamespace(
+                display_question_copy_items=lambda _q: self._copy_display(items)
+            ),
+        )
+
+        _, keyboard = render_question_message(
+            {"question": "Pick?", "options": [{"label": "One"}, {"label": "Two"}]},
+            index=0,
+            total=1,
+            selected=None,
+            prefix="copy1234",
+        )
+
+        rows = keyboard.inline_keyboard
+        assert rows[0][0].text == "One"
+        assert rows[1][0].text == "Two"
+        assert rows[2][0].text == "💬 Custom"
+        assert [button.text for button in rows[3]] == ["📋 A", "📋 B"]
+        assert [button.text for button in rows[4]] == ["📋 This label is over twenty"]
+        assert rows[3][0].copy_text.text == "/tmp/a"
+
+    def test_copy_text_boundary_and_copyable_prose_section(self, monkeypatch):
+        items = [
+            self._copy_item("x" * 256, "short in prose"),
+            self._copy_item("y" * 257, "long"),
+            self._copy_item("/outside/path", "outside"),
+        ]
+        monkeypatch.setattr(
+            formatting,
+            "import_module",
+            lambda name: SimpleNamespace(
+                display_question_copy_items=lambda _q: self._copy_display(items)
+            ),
+        )
+
+        text, keyboard = render_question_message(
+            {"question": "The short value is " + "x" * 256 + "."},
+            index=0,
+            total=1,
+            selected=None,
+            prefix="copy1234",
+        )
+
+        assert len(keyboard.inline_keyboard[-1]) == 2
+        assert keyboard.inline_keyboard[-1][0].copy_text.text == "x" * 256
+        assert keyboard.inline_keyboard[-1][1].copy_text.text == "/outside/path"
+        assert all(
+            button.copy_text.text != "y" * 257
+            for row in keyboard.inline_keyboard
+            for button in row
+            if button.copy_text is not None
+        )
+        assert "*Copyable*" in text
+        assert "long" in text
+        assert "outside" in text
+        assert "y" * 257 in text
+        assert "/outside/path" in text
+
+    def test_copyable_code_entity_escapes_backticks_and_backslashes(self, monkeypatch):
+        item = self._copy_item(r"`echo \hello`", "shell `arg`")
+        monkeypatch.setattr(
+            formatting,
+            "import_module",
+            lambda name: SimpleNamespace(
+                display_question_copy_items=lambda _q: self._copy_display([item], unavailable=2)
+            ),
+        )
+
+        text, _ = render_question_message(
+            {"question": "Run the command"},
+            index=0,
+            total=1,
+            selected=None,
+            prefix="copy1234",
+        )
+
+        assert "shell \\`arg\\`" in text
+        assert "\\`echo \\\\hello\\`" in text
+        assert "_2 copyable item\\(s\\) unavailable\\._" in text
+
+    def test_copy_metadata_is_ignored_when_facade_is_unavailable(self, monkeypatch):
+        def missing_facade(_name):
+            raise ImportError("old sase")
+
+        monkeypatch.setattr(formatting, "import_module", missing_facade)
+        question = {"question": "Same output?", "copy": ["secret"]}
+
+        text, keyboard = render_question_message(
+            question,
+            index=0,
+            total=1,
+            selected=None,
+            prefix="copy1234",
+        )
+
+        assert text == "❓ *Question*\n\nSame output?"
+        assert len(keyboard.inline_keyboard) == 1
+        assert keyboard.inline_keyboard[0][0].text == "💬 Custom"
+
     def test_multi_select_buttons_include_checks_and_submit(self):
         text, keyboard = render_question_message(
             {

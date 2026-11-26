@@ -1748,6 +1748,71 @@ def _question_options(question: dict[str, Any]) -> list[Any]:
     return options if isinstance(options, list) else []
 
 
+def _display_question_copy(question: dict[str, Any]) -> Any | None:
+    """Read copy metadata when supported by the installed sase version."""
+    try:
+        facade = import_module("sase.core.question_copy_facade")
+        display_question_copy_items = facade.display_question_copy_items
+    except (ImportError, AttributeError):
+        return None
+    return display_question_copy_items(question)
+
+
+def _copy_button_label(item: Any) -> str:
+    label = item.label
+    value = label if isinstance(label, str) and label else item.text
+    if len(value) > 32:
+        value = f"{value[:29]}…"
+    return f"📋 {value}"
+
+
+def _copy_button_rows(items: list[Any]) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    pending: InlineKeyboardButton | None = None
+    pending_short = False
+
+    for item in items:
+        label = item.label if isinstance(item.label, str) and item.label else item.text
+        button = InlineKeyboardButton(
+            _copy_button_label(item),
+            copy_text=CopyTextButton(text=item.text),
+        )
+        short = len(label) <= 20
+        if pending is not None:
+            if pending_short and short:
+                rows.append([pending, button])
+                pending = None
+                continue
+            rows.append([pending])
+        pending = button
+        pending_short = short
+
+    if pending is not None:
+        rows.append([pending])
+    return rows
+
+
+def _question_copy_section(
+    question_text: str,
+    items: list[Any],
+    unavailable: int,
+) -> str | None:
+    lines: list[str] = []
+    for item in items:
+        if len(item.text) <= 256 and item.text in question_text:
+            continue
+        label = item.label if isinstance(item.label, str) and item.label else ""
+        prefix = f"• {escape_markdown_v2(label)}\n" if label else "• "
+        lines.append(f"{prefix}```\n{_escape_code_entity(item.text)}\n```")
+
+    if unavailable:
+        note = escape_markdown_v2(f"{unavailable} copyable item(s) unavailable.")
+        lines.append(f"_{note}_")
+    if not lines:
+        return None
+    return "*Copyable*\n" + "\n".join(lines)
+
+
 def render_question_message(
     question: dict[str, Any],
     *,
@@ -1762,7 +1827,18 @@ def render_question_message(
     header = _question_header_detail(question)
     if header:
         lines.extend([f"_{escape_markdown_v2(header)}_", ""])
-    lines.append(escape_markdown_v2(_question_text(question)))
+    question_text = _question_text(question)
+    lines.append(escape_markdown_v2(question_text))
+
+    display = _display_question_copy(question)
+    copy_items = list(display.items) if display is not None else []
+    copy_section = (
+        _question_copy_section(question_text, copy_items, display.unavailable)
+        if display is not None
+        else None
+    )
+    if copy_section:
+        lines.extend(["", copy_section])
     text = "\n".join(lines).rstrip()
 
     buttons: list[list[InlineKeyboardButton]] = []
@@ -1806,6 +1882,9 @@ def render_question_message(
                 )
             ]
         )
+
+    short_items = [item for item in copy_items if len(item.text) <= 256]
+    buttons.extend(_copy_button_rows(short_items))
 
     return text, InlineKeyboardMarkup(buttons)
 
